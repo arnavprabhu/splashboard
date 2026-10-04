@@ -109,8 +109,8 @@ describe('App shell', () => {
       '/models',
       '/models/downloader',
       '/models/:id/settings',
-      '/chat',
-      '/chat/:cid',
+      // /chat and /chat/:cid share one entry so the first send does not remount the page.
+      '/chat/:cid?',
       '/tools/playground',
       '/tools/tokenizer',
       '/tools/judgments',

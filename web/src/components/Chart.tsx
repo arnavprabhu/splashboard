@@ -8,6 +8,8 @@ export interface ChartSeries {
   primary?: boolean;
   /** Dashed ink line for secondary references such as p95 or a limit. */
   dashed?: boolean;
+  /** Overrides the colour: `mute` for "other" groups and flat limits (docs/ui/02 §7, §12). */
+  tone?: 'acc' | 'ink' | 'mute';
 }
 
 export interface ChartProps {
@@ -71,14 +73,17 @@ function buildOptions(el: HTMLElement, props: ChartProps, width: number): uPlot.
     axes: [axis(), axis(yFormat ? (_u, splits) => splits.map((v) => (v === null ? '' : yFormat(v))) : undefined)],
     series: [
       {},
-      ...props.series.map((s) => ({
+      ...props.series.map((s) => {
+        const colour = s.tone === 'mute' ? mute : s.tone === 'acc' || (s.primary && !s.tone) ? acc : ink;
+        return {
         label: s.label,
-        stroke: s.primary ? acc : ink,
+        stroke: colour,
         width: s.primary ? 2 : 1,
         ...(s.dashed ? { dash: [4, 4] } : {}),
-        ...(props.bars ? { paths: barsPath(), fill: s.primary ? acc : ink } : {}),
+        ...(props.bars ? { paths: barsPath(), fill: colour } : {}),
         points: { show: false },
-      })),
+        };
+      }),
     ],
   };
 }
@@ -89,7 +94,7 @@ export function Chart(props: ChartProps) {
   const plot = useRef<uPlot | null>(null);
   const [failed, setFailed] = useState(false);
   const theme = effectiveTheme.value;
-  const seriesKey = props.series.map((s) => `${s.label}:${s.primary ? 1 : 0}:${s.dashed ? 1 : 0}`).join('|');
+  const seriesKey = props.series.map((s) => `${s.label}:${s.primary ? 1 : 0}:${s.dashed ? 1 : 0}:${s.tone ?? ''}`).join('|');
 
   useEffect(() => {
     const el = host.current;

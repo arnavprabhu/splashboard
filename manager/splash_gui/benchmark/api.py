@@ -17,6 +17,7 @@ from ..schemas import (
     CancelResult,
 )
 from ..state import ManagerState, get_state
+from .service import headline
 
 router = APIRouter()
 State = Annotated[ManagerState, Depends(get_state)]
@@ -46,7 +47,10 @@ async def cancel(state: State) -> CancelResult:
 @router.get("/benchmark/runs", response_model=BenchmarkRuns, responses=_ERR)
 def runs(state: State) -> BenchmarkRuns:
     return BenchmarkRuns(
-        runs=[BenchmarkRunSummary.model_validate(r) for r in state.usage.benchmarks()]
+        runs=[
+            BenchmarkRunSummary.model_validate({**r, "headline": headline(r["results"])})
+            for r in state.usage.benchmarks()
+        ]
     )
 
 

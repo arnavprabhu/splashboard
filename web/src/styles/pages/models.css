@@ -20,3 +20,13 @@
 .md-pre { overflow: auto; max-width: 100%; padding: 16px; border: 1px solid var(--rule); }
 .md-quote { border-left: 2px solid var(--rule); padding-left: 16px; }
 .md-link { overflow-wrap: anywhere; }
+/* downloader (docs/ui/03 §3) */
+.dlr-meta { gap: 4px 16px; }
+.dlr-entries { list-style: none; margin: 0; padding: 0; }
+.dlr-entry { border-bottom: var(--rule-minor) solid var(--rule); padding: 16px 0; display: grid; gap: 6px; }
+.dlr-entry-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 16px; }
+.dlr-entry-name { margin: 0; overflow-wrap: anywhere; }
+.dlr-entry-tags { gap: 6px 10px; align-items: center; }
+.dlr-entry-meta { overflow-wrap: anywhere; margin: 0; }
+.dlr-id { flex: 1 1 320px; min-width: 0; }
+.dlr-result { border-top: var(--rule-minor) solid var(--rule); padding-top: 12px; }

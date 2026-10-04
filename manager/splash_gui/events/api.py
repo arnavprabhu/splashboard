@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
 from ..errors import SSE_RESPONSES, ApiError, error_responses
-from ..schemas import AlertList, HelloEvent, OkResponse
+from ..schemas import AlertList, HelloEvent, JobList, JobView, OkResponse
 from ..sse import sse_response
 from ..state import ManagerState, get_state
 from .bus import stream
@@ -54,3 +54,18 @@ def dismiss(state: State, alert_id: str) -> OkResponse:
     if outcome == "not_dismissible":
         raise ApiError(409, "This alert can't be dismissed; resolve it instead", "not_dismissible")
     return OkResponse()
+
+
+@router.get("/jobs", response_model=JobList)
+def jobs(state: State) -> JobList:
+    """Background jobs since the manager started (verify, storage moves, imports,
+    engine install/upgrade), oldest first. Progress also streams as `job` events."""
+    return JobList(jobs=[job.view() for job in state.jobs.all()])
+
+
+@router.get("/jobs/{job_id}", response_model=JobView, responses=error_responses(404))
+def job(state: State, job_id: str) -> JobView:
+    found = state.jobs.get(job_id)
+    if found is None:
+        raise ApiError(404, f"no job {job_id}", "job_not_found")
+    return found.view()

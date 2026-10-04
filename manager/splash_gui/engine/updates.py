@@ -68,6 +68,9 @@ class UpdateService:
         self.engine_update = UpdateInfo()
         self._task: asyncio.Task[None] | None = None
         self._upgrading = False
+        # Seams for tests: the GitHub transport and the brew lookup.
+        self.transport: httpx.AsyncBaseTransport | None = None
+        self.find_brew = find_brew
 
     async def start(self) -> None:
         self.state.updates = self
@@ -91,7 +94,7 @@ class UpdateService:
         engine = await asyncio.to_thread(self.state.engine)
         installed = version_tuple(engine.version)
         latest: str | None = None
-        brew = find_brew()
+        brew = self.find_brew()
         if brew is not None and engine.source == "brew":
             with contextlib.suppress(Exception):
                 proc = await asyncio.create_subprocess_exec(
@@ -108,7 +111,7 @@ class UpdateService:
         url: str | None = None
         release: dict[str, Any] = {}
         with contextlib.suppress(Exception):
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=10, transport=self.transport) as client:
                 response = await client.get(
                     RELEASES_URL, headers={"Accept": "application/vnd.github+json"}
                 )
@@ -173,7 +176,7 @@ class UpdateService:
             raise ApiError(409, "An engine upgrade is already running", "job_running")
 
         async def body(job: Job) -> None:
-            brew = find_brew()
+            brew = self.find_brew()
             if brew is None:
                 self._event("failed", "Homebrew is not installed", False)
                 raise JobFailed("Homebrew is not installed")
@@ -214,7 +217,7 @@ class UpdateService:
             raise ApiError(409, "Splash is already being installed", "job_running")
 
         async def body(job: Job) -> None:
-            brew = find_brew()
+            brew = self.find_brew()
             if brew is None:
                 raise JobFailed("Homebrew is not installed; install it from https://brew.sh first")
             job.update(progress=0.05, message=f"brew install {FORMULA}")

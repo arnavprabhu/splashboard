@@ -1,886 +1,1238 @@
-import { useEffect, useRef, useState } from "preact/hooks";
-import { api, request } from "../api/client";
+import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { Link, useLocation } from "wouter-preact";
+import { ApiError, api, request } from "../api/client";
 import { postStream } from "../api/stream";
-import type {
-  AttachmentUpload,
-  Chat,
-  ChatList,
-  ChatMessage,
-  McpToolList,
-  McpCallResult,
-} from "../api/models";
-import {
-  Button,
-  ConfirmSheet,
-  CopyButton,
-  LoadError,
-  PageHeader,
-  ProgressBar,
-} from "../components";
+import type { AttachmentUpload, ChatList, McpCallResult, McpServers, McpToolList, ProfilesView } from "../api/models";
+import { Banner } from "../components/Banner";
+import { Button } from "../components/Button";
+import { CodeBlock } from "../components/CodeBlock";
+import { ConfirmSheet } from "../components/ConfirmSheet";
+import { PageHeader } from "../components/Section";
+import { ProgressBar } from "../components/ProgressBar";
+import { Sheet } from "../components/Sheet";
+import { Empty, LoadError } from "../components/States";
+import { toast, toastError } from "../components/Toast";
+import { formatCount } from "../lib/format";
 import { useApi } from "../lib/use-api";
-import { engine } from "../store";
-import { branchInfo, newId, pathTo, switchBranch } from "./chat/tree";
-import { StreamAccumulator, ensureCallIds } from "./chat/accumulator";
-import { Markdown } from "./chat/Markdown";
+import { useTitle } from "../lib/title";
+import { engine, settings } from "../store";
+import { t } from "../strings/chat";
+import "../styles/pages/chat.css";
+import { StreamAccumulator, ensureCallIds, estimateTokens } from "./chat/accumulator";
+import { Composer } from "./chat/Composer";
+import { ConversationList } from "./chat/ConversationList";
 import {
-  metaOf,
-  textOf,
-  toolCallsOf,
-  type ModelEntry,
-  type ToolCall,
-} from "./chat/types";
+  MAX_AUTO_RETRIES,
+  attachmentError,
+  autoRetry,
+  autoTitle,
+  checkTools,
+  classifyError,
+  emptySampling,
+  hasSamplingErrors,
+  modelRows,
+  outputBody,
+  outputError,
+  outputForm,
+  requestModel,
+  samplingBody,
+  samplingErrors,
+  samplingForm,
+  shortModel,
+  toolChoiceBody,
+  toolChoiceError,
+  type ChatError,
+  type OutputForm,
+  type SamplingForm,
+  type ToolChoiceKind,
+} from "./chat/logic";
+import { MessageView, type ToolContext, type ToolDraft } from "./chat/MessageView";
+import { ModelSelector } from "./chat/ModelSelector";
+import { PANEL_TABS, SidePanel, type PanelTab } from "./chat/SidePanel";
+import { branchInfo, defaultLeaf, newId, pathTo, rememberLeaf, removeBranch, replyCount, switchBranch, type LeafMemory } from "./chat/tree";
+import { metaOf, textOf, toolCallsOf, type Chat, type ChatMessage, type ChatSummary, type DraftAttachment, type ModelEntry, type ToolCall } from "./chat/types";
 
+const PANEL_KEY = "chat.panel.open";
+const LAST_KEY = "chat.panel.last";
 const now = () => new Date().toISOString();
-async function dataUrl(blob: Blob): Promise<string> {
+
+function readLocal<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw === null ? fallback : (JSON.parse(raw) as T);
+  } catch {
+    return fallback;
+  }
+}
+function writeLocal(key: string, value: unknown): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* per-browser convenience only */
+  }
+}
+
+interface PanelLast {
+  sampling?: Record<string, unknown>;
+  mode?: "manual" | "mcp";
+  servers?: Record<string, boolean>;
+}
+
+function blankChat(model: string | null): Chat {
+  return { id: "", title: t("chat.default_title"), created_at: now(), updated_at: now(), model, profile: "default", system: "", sampling: {}, tools: [], tool_choice: "auto", response_format: null, messages: [], active_leaf: null };
+}
+
+function fileName(file: string): string {
+  return file.split("/").pop() ?? file;
+}
+
+async function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(blob);
   });
 }
 
-export default function ChatPage() {
-  const [search, setSearch] = useState("");
-  const list = useApi(
-    (s) => api.get<ChatList>("/chats", { q: search }, s),
-    [search],
-  );
-  const models = useApi((s) =>
-    request<{ data: ModelEntry[] }>("/v1/models", { signal: s }),
-  );
+type Width = "wide" | "mid" | "narrow";
+
+function useWidth(ref: { current: HTMLElement | null }): Width {
+  const [w, setW] = useState<Width>("wide");
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(([entry]) => {
+      const x = entry?.contentRect.width ?? 1200;
+      setW(x >= 1100 ? "wide" : x >= 900 ? "mid" : "narrow");
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return w;
+}
+
+export default function ChatPage({ params }: { params?: { cid?: string } }) {
+  const cid = params?.cid ? decodeURIComponent(params.cid) : null;
+  const [, navigate] = useLocation();
+  const e = engine.value;
+  const active = e?.model ?? null;
+  const autoLoad = (settings.value?.settings?.global?.routing as { auto_load?: boolean } | undefined)?.auto_load !== false;
+
+  // ---------- list ----------
+  const [query, setQuery] = useState("");
+  const [q, setQ] = useState("");
+  useEffect(() => {
+    const id = setTimeout(() => setQ(query.trim()), 200);
+    return () => clearTimeout(id);
+  }, [query]);
+  const list = useApi((s) => api.get<ChatList>("/chats", q ? { q } : undefined, s), [q]);
+
+  // ---------- models ----------
+  const models = useApi((s) => request<{ data: ModelEntry[] }>("/v1/models", { signal: s }), [active]);
+  const rows = useMemo(() => modelRows(models.data?.data ?? []), [models.data]);
+
+  // ---------- the open conversation ----------
   const [chat, setChat] = useState<Chat | null>(null);
-  const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<unknown>(null);
-  const [editing, setEditing] = useState<ChatMessage | null>(null);
-  const [deleting, setDeleting] = useState(false);
-  const [files, setFiles] = useState<File[]>([]);
-  const [progress, setProgress] = useState<{
-    total: number;
-    processed: number;
-    cache: number;
-  } | null>(null);
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const [notFound, setNotFound] = useState(false);
+  const chatRef = useRef<Chat | null>(null);
+  chatRef.current = chat;
+  /** A conversation this page just created: its URL changes, but it must not be re-fetched. */
+  const createdId = useRef<string | null>(null);
+  const memory = useRef<LeafMemory>(new Map());
+  const dataUrls = useRef(new Map<string, string>());
+
+  // panel state
+  const last = useMemo(() => readLocal<PanelLast>(LAST_KEY, {}), []);
+  const [sampling, setSampling] = useState<SamplingForm>(() => samplingForm(last.sampling));
+  const [undo, setUndo] = useState<{ form: SamplingForm; profile: string } | null>(null);
   const [toolsText, setToolsText] = useState("[]");
-  const [samplingText, setSamplingText] = useState("{}");
-  const [formatText, setFormatText] = useState("null");
-  const [toolResults, setToolResults] = useState<Record<string, string>>({});
-  const [mcp, setMcp] = useState<McpToolList | null>(null);
-  const [toolApproval, setToolApproval] = useState<ToolCall | null>(null);
+  const [choice, setChoice] = useState<ToolChoiceKind>("auto");
+  const [named, setNamed] = useState("");
+  const [parallel, setParallel] = useState(true);
+  const [mode, setMode] = useState<"manual" | "mcp">(last.mode ?? "manual");
+  const [serverOn, setServerOn] = useState<Record<string, boolean>>(last.servers ?? {});
+  const [output, setOutput] = useState<OutputForm>(() => outputForm(null));
+  const [tab, setTab] = useState<PanelTab>("sampling");
+  const layout = useRef<HTMLDivElement>(null);
+  const width = useWidth(layout);
+  const [panelOpen, setPanelOpen] = useState(() => readLocal(PANEL_KEY, true));
+  const [listSheet, setListSheet] = useState(false);
+  const [panelSheet, setPanelSheet] = useState(false);
+
+  const adopt = useCallback((doc: Chat) => {
+    setChat(doc);
+    setSampling(samplingForm(doc.sampling as Record<string, unknown>));
+    setToolsText(JSON.stringify(doc.tools ?? [], null, 2));
+    const tc = doc.tool_choice;
+    if (tc && typeof tc === "object") {
+      setChoice("named");
+      setNamed(String(((tc as { function?: { name?: string } }).function?.name) ?? ""));
+    } else setChoice(tc === "none" || tc === "required" ? tc : "auto");
+    setParallel((doc.sampling as Record<string, unknown> | undefined)?.parallel_tool_calls !== false);
+    setOutput(outputForm(doc.response_format as Record<string, unknown> | null));
+    if (!doc.active_leaf && doc.messages?.length) setChat({ ...doc, active_leaf: defaultLeaf(doc.messages) });
+  }, []);
+
+  useEffect(() => {
+    setNotFound(false);
+    setLoadError(null);
+    setDrafts({});
+    setError(null);
+    if (!cid) {
+      if (!chatRef.current || chatRef.current.id) {
+        const fresh = blankChat(active ?? rows[0]?.id ?? null);
+        setChat({ ...fresh, sampling: last.sampling ?? {} });
+        setSampling(samplingForm(last.sampling));
+        setToolsText("[]");
+        setChoice("auto");
+        setOutput(outputForm(null));
+      }
+      return;
+    }
+    if (chatRef.current?.id === cid || createdId.current === cid) return;
+    const ctrl = new AbortController();
+    api
+      .get<Chat>(`/chats/${encodeURIComponent(cid)}`, undefined, ctrl.signal)
+      .then((doc) => adopt(doc))
+      .catch((err) => {
+        if (ctrl.signal.aborted) return;
+        if (err instanceof ApiError && err.status === 404) setNotFound(true);
+        else setLoadError(err);
+      });
+    return () => ctrl.abort();
+  }, [cid]);
+
+  // A new chat picks the active model once the list arrives.
+  useEffect(() => {
+    if (chat && !chat.id && !chat.model && (active || rows[0])) setChat({ ...chat, model: active ?? rows[0]!.id });
+  }, [active, rows.length]);
+
+  const model = chat?.model ?? null;
+  const profile = chat?.profile ?? "default";
+  const profiles = useApi((s) => api.get<ProfilesView>(`/models/${model}/profiles`, undefined, s), [model], !!model);
+  const profileNames = useMemo(() => {
+    const names = (profiles.data?.profiles ?? []).map((p) => p.name);
+    return names.length ? names : ["default"];
+  }, [profiles.data]);
+  const overlay = (profiles.data?.profiles.find((p) => p.name === profile)?.overlay ?? {}) as Record<string, unknown>;
+  const modelDefaults = (profiles.data?.sampling_defaults ?? {}) as Record<string, unknown>;
+  const row = rows.find((r) => r.id === model);
+  const context = row?.context ?? null;
+
+  // later system messages (docs/ui/07 §9.2) from the raw /status of the active model
+  const raw = useApi((s) => api.get<Record<string, unknown>>("/engine/status", undefined, s), [active, model], !!active && model === active);
+  const laterSystem = useMemo(() => {
+    const ct = (raw.data?.chat_template ?? null) as { later_system?: unknown } | null;
+    const v = ct?.later_system;
+    if (typeof v === "string") return v as "native" | "patched" | "unsupported";
+    if (v && typeof v === "object") {
+      const map = v as Record<string, string>;
+      return (map[toolsCount() > 0 ? "tool_use" : "default"] ?? map.default ?? null) as "native" | "patched" | "unsupported" | null;
+    }
+    return null;
+  }, [raw.data]);
+
+  // MCP
+  const mcpServers = useApi((s) => api.get<McpServers>("/mcp/servers", undefined, s), [], mode === "mcp");
+  const mcpTools = useApi((s) => api.get<McpToolList>("/mcp/tools", undefined, s), [], mode === "mcp");
+
+  // ---------- derived validation ----------
+  const toolCheck = useMemo(() => checkTools(toolsText), [toolsText]);
+  function toolsCount() {
+    return toolCheck.tools.length;
+  }
+  const enabledMcp = useMemo(() => {
+    if (mode !== "mcp") return [];
+    const servers = mcpServers.data?.servers ?? {};
+    return (mcpTools.data?.tools ?? []).filter((tl) => servers[tl.server]?.enabled !== false && serverOn[tl.server] !== false);
+  }, [mode, mcpServers.data, mcpTools.data, serverOn]);
+  const collisions = enabledMcp.filter((tl) => toolCheck.names.includes(tl.name)).map((tl) => ({ name: tl.name, server: tl.server }));
+  const allTools = useMemo(() => {
+    const mcpNames = new Set(enabledMcp.map((x) => x.name));
+    const own = toolCheck.tools.filter((x) => !mcpNames.has(String((x.function as { name?: string } | undefined)?.name)));
+    return [
+      ...own,
+      ...enabledMcp.map((x) => ({ type: "function", function: { name: x.name, description: x.description ?? "", parameters: x.input_schema ?? { type: "object", properties: {} } } })),
+    ];
+  }, [toolCheck, enabledMcp]);
+  const constrained = allTools.length > 0 || output.kind !== "text";
+  const sErrors = samplingErrors(sampling, context);
+  const cErr = toolChoiceError(choice, allTools.length);
+  const oErr = outputError(output);
+
+  // Persist panel values into the chat doc and remember them for new chats.
+  const panelDoc = useMemo(() => {
+    const body = samplingBody(sampling, { allowIgnoreEos: true });
+    if (!parallel) body.parallel_tool_calls = false;
+    return {
+      sampling: body,
+      tools: toolCheck.error ? undefined : toolCheck.tools,
+      tool_choice: choice === "named" ? toolChoiceBody("named", named) : choice,
+      response_format: outputBody(output),
+    };
+  }, [sampling, parallel, toolCheck, choice, named, output]);
+  useEffect(() => {
+    if (!chat) return;
+    writeLocal(LAST_KEY, { sampling: panelDoc.sampling, mode, servers: serverOn } satisfies PanelLast);
+    const next = { ...chat, sampling: panelDoc.sampling, tool_choice: panelDoc.tool_choice, response_format: panelDoc.response_format, ...(panelDoc.tools ? { tools: panelDoc.tools } : {}) };
+    if (JSON.stringify([next.sampling, next.tools, next.tool_choice, next.response_format]) !== JSON.stringify([chat.sampling, chat.tools, chat.tool_choice, chat.response_format])) {
+      setChat(next);
+      if (next.id) saveSoon(next, 800);
+    }
+  }, [panelDoc, mode, serverOn]);
+
+  // ---------- persistence: coalesced PUTs, latest wins (§8.4) ----------
+  const saving = useRef<{ inFlight: boolean; next: Chat | null; timer: ReturnType<typeof setTimeout> | undefined }>({ inFlight: false, next: null, timer: undefined });
+  const flush = useCallback(async () => {
+    const s = saving.current;
+    if (s.inFlight || !s.next) return;
+    const doc = s.next;
+    s.next = null;
+    s.inFlight = true;
+    try {
+      await api.put<Chat>(`/chats/${encodeURIComponent(doc.id)}`, { ...doc, updated_at: now() });
+      void list.reload();
+    } catch (err) {
+      toastError(t("chat.list.couldnt_save"), err);
+    } finally {
+      s.inFlight = false;
+      if (s.next) void flush();
+    }
+  }, []);
+  const saveSoon = useCallback(
+    (doc: Chat, delay = 0) => {
+      if (!doc.id) return;
+      const s = saving.current;
+      s.next = doc;
+      clearTimeout(s.timer);
+      s.timer = setTimeout(() => void flush(), delay);
+    },
+    [flush],
+  );
+
+  // ---------- streaming ----------
+  const [busy, setBusy] = useState(false);
+  const [streamingId, setStreamingId] = useState<string | null>(null);
+  const [progress, setProgress] = useState<{ total: number; processed: number; cache: number } | null>(null);
+  const [waiting, setWaiting] = useState(false);
+  const [thinking, setThinking] = useState<{ active: boolean; ms: number | null } | null>(null);
+  const [error, setError] = useState<(ChatError & { request?: unknown; retries: number; retryIn: number | null }) | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const abort = useRef<AbortController | null>(null);
   useEffect(() => () => abort.current?.abort(), []);
-  async function select(next: Chat) {
-    setChat(next);
-    setError(null);
-    setEditing(null);
-    setFiles([]);
-    setDraft("");
-    setToolsText(JSON.stringify(next.tools ?? [], null, 2));
-    setSamplingText(JSON.stringify(next.sampling ?? {}, null, 2));
-    setFormatText(JSON.stringify(next.response_format ?? null, null, 2));
-  }
-  async function fresh() {
-    try {
-      await select(
-        await api.post<Chat>("/chats", { model: engine.value?.model }),
-      );
-      await list.reload();
-    } catch (e) {
-      setError(e);
-    }
-  }
-  async function save(next: Chat) {
-    setChat(next);
-    const result = await api.put<Chat>(`/chats/${next.id}`, next);
-    setChat(result);
-    await list.reload();
-    return result;
-  }
-  function configure(): Chat {
-    if (!chat) throw new Error("Create or select a conversation.");
-    const tools: unknown = JSON.parse(toolsText);
-    const sampling: unknown = JSON.parse(samplingText);
-    const format: unknown = JSON.parse(formatText);
-    if (
-      !Array.isArray(tools) ||
-      !sampling ||
-      typeof sampling !== "object" ||
-      Array.isArray(sampling) ||
-      (format !== null && (typeof format !== "object" || Array.isArray(format)))
-    )
-      throw new Error(
-        "Tools must be an array; sampling and output format must be objects.",
-      );
-    return { ...chat, tools, sampling, response_format: format } as Chat;
-  }
-  async function wireMessages(current: Chat) {
-    const messages: Record<string, unknown>[] = current.system
-      ? [{ role: "system", content: current.system }]
+
+  // composer
+  const [draft, setDraft] = useState("");
+  const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
+  const [editing, setEditing] = useState<ChatMessage | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, ToolDraft>>({});
+  const [running, setRunning] = useState<Set<string>>(new Set());
+  const [showRequest, setShowRequest] = useState(false);
+
+  useEffect(() => {
+    if (!notice) return;
+    const id = setTimeout(() => setNotice(null), 2000);
+    return () => clearTimeout(id);
+  }, [notice]);
+
+  useTitle(chat?.id ? t("chat.doc_title", { title: chat.title }) : t("chat.page_title"));
+  const thread = useMemo(() => pathTo(chat?.messages ?? [], chat?.active_leaf), [chat]);
+  const visible = thread.filter((m) => m.role !== "tool");
+  const results = useMemo(() => new Map(thread.filter((m) => m.role === "tool" && m.tool_call_id).map((m) => [m.tool_call_id!, m])), [thread]);
+  const lastAssistant = [...thread].reverse().find((m) => m.role === "assistant");
+  const lastNode = thread[thread.length - 1];
+  const pendingCalls: ToolCall[] =
+    !busy && lastAssistant && lastNode?.id === lastAssistant.id && metaOf(lastAssistant).finish_reason === "tool_calls"
+      ? toolCallsOf(lastAssistant).filter((c) => !results.has(c.id))
       : [];
-    for (const m of pathTo(current.messages ?? [], current.active_leaf)) {
-      const parts: Record<string, unknown>[] =
-        typeof m.content === "string"
-          ? [{ type: "text", text: m.content }]
-          : [...m.content];
-      for (const attachment of m.attachments ?? []) {
-        const blob = await request<Response>(
-          `/api/admin/chats/${current.id}/${attachment.file}`,
-          { raw: true },
-        );
-        const url = await dataUrl(await blob.blob());
-        parts.push(
-          attachment.kind === "image"
-            ? { type: "image_url", image_url: { url } }
-            : {
-                type: "file",
-                file: {
-                  filename: attachment.name ?? "document.pdf",
-                  file_data: url,
-                },
-              },
-        );
+  const waitingFor = pendingCalls.filter((c) => !drafts[c.id]).length;
+
+  async function wireMessages(doc: Chat, path: ChatMessage[]): Promise<Record<string, unknown>[]> {
+    const out: Record<string, unknown>[] = doc.system?.trim() ? [{ role: "system", content: doc.system }] : [];
+    for (const m of path) {
+      const atts = m.attachments ?? [];
+      if (atts.length === 0) {
+        out.push({
+          role: m.role,
+          content: m.content,
+          ...(m.tool_calls?.length ? { tool_calls: m.tool_calls } : {}),
+          ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
+        });
+        continue;
       }
-      messages.push({
-        role: m.role,
-        content: (m.attachments?.length ?? 0) ? parts : m.content,
-        ...(m.tool_calls?.length ? { tool_calls: m.tool_calls } : {}),
-        ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
-      });
+      const parts: Record<string, unknown>[] = typeof m.content === "string" ? (m.content ? [{ type: "text", text: m.content }] : []) : [...m.content];
+      for (const a of atts) {
+        let url = dataUrls.current.get(a.file);
+        if (!url) {
+          const res = await request<Response>(`/api/admin/chats/attachments/${encodeURIComponent(fileName(a.file))}`, { raw: true });
+          url = await blobToDataUrl(await res.blob());
+          dataUrls.current.set(a.file, url);
+        }
+        parts.push(a.kind === "image" ? { type: "image_url", image_url: { url } } : { type: "file", file: { filename: a.name ?? "document.pdf", file_data: url } });
+      }
+      out.push({ role: m.role, content: parts });
     }
-    return messages;
+    return out;
   }
-  async function generate(current: Chat) {
+
+  function requestBody(doc: Chat, messages: Record<string, unknown>[]): Record<string, unknown> {
+    const body: Record<string, unknown> = {
+      ...samplingBody(sampling, { allowIgnoreEos: !constrained }),
+      model: requestModel(doc.model ?? "", doc.profile),
+      messages,
+      stream: true,
+      stream_options: { include_usage: true },
+      return_progress: true,
+    };
+    // Splash refuses stop with tools or structured output (server/frontend.py).
+    if (constrained) delete body.stop;
+    if (allTools.length) {
+      body.tools = allTools;
+      body.tool_choice = choice === "named" ? toolChoiceBody("named", named) : choice;
+      if (!parallel) body.parallel_tool_calls = false;
+    }
+    const fmt = outputBody(output);
+    if (fmt) body.response_format = fmt;
+    return body;
+  }
+
+  /** Streams one assistant reply under `doc.active_leaf`. Returns false when it failed before any output. */
+  async function generate(doc: Chat, retries = 0, waitForIdle = false): Promise<boolean> {
     const ctrl = new AbortController();
     abort.current = ctrl;
     setBusy(true);
     setError(null);
+    setWaiting(true);
     const acc = new StreamAccumulator();
     const id = newId();
-    const reply: ChatMessage = {
-      id,
-      parent: current.active_leaf,
-      role: "assistant",
-      content: "",
-      created_at: now(),
-    };
-    let next = {
-      ...current,
-      messages: [...(current.messages ?? []), reply],
-      active_leaf: id,
-    };
-    try {
-      const messages = await wireMessages(current);
-      const model =
-        current.profile && current.profile !== "default"
-          ? `${current.model}:${current.profile}`
-          : current.model;
-      for await (const event of postStream(
-        "/v1/chat/completions",
-        {
-          ...current.sampling,
-          model,
-          messages,
-          ...(current.tools?.length
-            ? {
-                tools: current.tools,
-                tool_choice: current.tool_choice ?? "auto",
-              }
-            : {}),
-          ...(current.response_format
-            ? { response_format: current.response_format }
-            : {}),
-          stream: true,
-          stream_options: { include_usage: true },
-          return_progress: true,
+    const reply: ChatMessage = { id, parent: doc.active_leaf ?? null, role: "assistant", content: "", created_at: now(), meta: { model: doc.model, profile: doc.profile, response_format: outputBody(output) } };
+    let next: Chat = { ...doc, messages: [...(doc.messages ?? []), reply], active_leaf: id };
+    setChat(next);
+    setStreamingId(doc.id || null);
+    rememberLeaf(memory.current, next.messages ?? [], id);
+    let body: Record<string, unknown> | null = null;
+    let lastSave = Date.now();
+    // Reduced motion: no ticking; the time appears when the block closes (07 §5.4).
+    const still = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const tick = setInterval(() => {
+      const snap = acc.snapshot();
+      if (snap.reasoningStartedAt !== null) setThinking({ active: snap.thinking, ms: still && snap.thinking ? null : snap.thinkingMs });
+    }, 100);
+    const apply = () => {
+      const calls = ensureCallIds(acc.toolCalls, id.slice(0, 8));
+      const updated: ChatMessage = {
+        ...reply,
+        content: acc.content,
+        reasoning: acc.reasoning || null,
+        tool_calls: calls.length ? (calls as unknown as Record<string, unknown>[]) : null,
+        meta: {
+          ...reply.meta,
+          usage: acc.usage as Record<string, unknown> | null,
+          timings: acc.timings as Record<string, unknown> | null,
+          finish_reason: acc.finishReason,
+          ttft_ms: acc.ttftMs,
+          thinking_ms: acc.thinkingMs(),
+          segments: acc.segments.map((s) => ({ ...s })),
         },
-        { signal: ctrl.signal },
-      )) {
-        acc.push(event.data);
-        const calls = ensureCallIds(acc.toolCalls, id);
-        Object.assign(reply, {
-          content: acc.content,
-          reasoning: acc.reasoning,
-          tool_calls: calls,
-          meta: {
-            usage: acc.usage,
-            timings: acc.timings,
-            finish_reason: acc.finishReason,
-            ttft_ms:
-              acc.firstOutputAt === null
-                ? null
-                : acc.firstOutputAt - acc.startedAt,
-            segments: acc.segments,
-            profile: current.profile,
-          },
-        });
-        next = {
-          ...next,
-          messages: next.messages.map((m) => (m.id === id ? { ...reply } : m)),
-        };
+      };
+      next = { ...next, messages: (next.messages ?? []).map((m) => (m.id === id ? updated : m)) };
+      setChat(next);
+      return updated;
+    };
+    try {
+      const messages = await wireMessages(doc, pathTo(doc.messages ?? [], doc.active_leaf));
+      body = requestBody(doc, messages);
+      let requestId: string | null = null;
+      for await (const evt of postStream("/v1/chat/completions", body, {
+        signal: ctrl.signal,
+        onHeaders: (h) => (requestId = h.get("x-splash-request-id")),
+        ...(waitForIdle ? { headers: { "X-Splash-Switch": "wait" } } : {}),
+      })) {
+        acc.push(evt.data);
+        setWaiting(false);
+        setProgress(acc.outputStarted ? null : acc.progress);
+        apply();
+        if (Date.now() - lastSave > 2000) {
+          lastSave = Date.now();
+          saveSoon(next);
+        }
+      }
+      const done = apply();
+      if (!done.meta?.finish_reason) {
+        done.meta = { ...done.meta, finish_reason: "disconnected", est_out: estimateTokens(acc.content) };
+        next = { ...next, messages: (next.messages ?? []).map((m) => (m.id === id ? done : m)) };
         setChat(next);
-        setProgress(acc.firstOutputAt ? null : acc.progress);
+        setError({ ...classifyError(new Error("disconnected")), kind: "generic", title: t("chat.error.disconnected"), body: null, retries: 0, retryIn: null });
       }
-    } catch (e) {
-      reply.meta = {
-        ...reply.meta,
-        finish_reason: ctrl.signal.aborted ? "stopped" : "error",
-      };
-      if (!ctrl.signal.aborted) setError(e);
+      saveSoon(next);
+      if (requestId) void attachInjected(id, requestId);
+      return true;
+    } catch (err) {
+      const aborted = ctrl.signal.aborted;
+      if (aborted || acc.outputStarted) {
+        const done = apply();
+        done.meta = { ...done.meta, finish_reason: aborted ? "stopped" : "disconnected", est_out: estimateTokens(acc.content) };
+        next = { ...next, messages: (next.messages ?? []).map((m) => (m.id === id ? done : m)) };
+        setChat(next);
+        saveSoon(next);
+        if (!aborted) setError({ ...classifyError(err, { model: doc.model, active }), title: t("chat.error.disconnected"), retries: 0, retryIn: null, request: body });
+        return true;
+      }
+      // Nothing streamed: drop the placeholder and report (§10).
+      next = { ...doc };
+      setChat(next);
+      const ce = classifyError(err, { model: doc.model, active });
+      const auto = autoRetry(ce.kind) && retries < MAX_AUTO_RETRIES;
+      setError({ ...ce, request: body, retries, retryIn: auto ? (ce.retryAfter ?? (ce.kind === "queue_full" ? 1 : ce.kind === "busy" ? 10 : 5)) : null });
+      return false;
     } finally {
-      next = {
-        ...next,
-        messages: next.messages.map((m) => (m.id === id ? { ...reply } : m)),
-      };
-      try {
-        await save(next);
-      } catch (e) {
-        setError(e);
-      }
+      clearInterval(tick);
+      setThinking(null);
       setBusy(false);
+      setWaiting(false);
       setProgress(null);
-      abort.current = null;
+      setStreamingId(null);
+      if (abort.current === ctrl) abort.current = null;
     }
   }
-  async function send() {
-    if (!draft.trim() && !files.length) return;
+
+  /** The fields the proxy injected for this turn (G4: `x-splash-request-id` → its usage row). */
+  async function attachInjected(messageId: string, requestId: string) {
     try {
-      let current = configure();
-      const attachments = [];
-      for (const file of files) {
-        const uploaded = await request<AttachmentUpload>(
-          `/api/admin/chats/${current.id}/attachments`,
-          {
-            method: "POST",
-            body: file,
-            headers: { "Content-Type": file.type },
-          },
-        );
-        attachments.push({
-          kind: uploaded.kind,
-          file: uploaded.file,
-          name: file.name,
-          bytes: file.size,
-        });
+      const rows = await api.get<{ rows: Array<{ injected?: Record<string, unknown> | null }> }>("/usage/requests", { request_id: requestId, limit: 1 });
+      const injected = rows.rows[0]?.injected;
+      if (!injected || !Object.keys(injected).length) return;
+      setChat((cur) => {
+        if (!cur) return cur;
+        const next = { ...cur, messages: (cur.messages ?? []).map((m) => (m.id === messageId ? { ...m, meta: { ...m.meta, injected } } : m)) };
+        saveSoon(next);
+        return next;
+      });
+    } catch {
+      /* the meta item is optional */
+    }
+  }
+
+  // Retry-After countdowns (D-07-11).
+  const retryRef = useRef<() => void>(() => undefined);
+  useEffect(() => {
+    if (!error || error.retryIn === null) return;
+    if (error.retryIn <= 0) {
+      retryRef.current();
+      return;
+    }
+    const id = setTimeout(() => setError((prev) => (prev && prev.retryIn !== null ? { ...prev, retryIn: prev.retryIn - 1 } : prev)), 1000);
+    return () => clearTimeout(id);
+  }, [error?.retryIn]);
+
+  const pendingSend = useRef<{ text: string; attachments: DraftAttachment[]; editing: ChatMessage | null } | null>(null);
+
+  async function ensureSaved(doc: Chat): Promise<Chat> {
+    if (doc.id) return doc;
+    const created = await api.post<Chat>("/chats", { model: doc.model, profile: doc.profile, title: doc.title });
+    const merged: Chat = { ...doc, id: created.id, created_at: created.created_at, updated_at: created.updated_at };
+    chatRef.current = merged;
+    createdId.current = created.id;
+    setChat(merged);
+    navigate(`/chat/${encodeURIComponent(created.id)}`, { replace: true });
+    void list.reload();
+    return merged;
+  }
+
+  async function send(retries = 0, waitForIdle = false) {
+    const doc = chatRef.current;
+    if (!doc || busy) return;
+    const text = pendingSend.current?.text ?? draft;
+    const atts = pendingSend.current?.attachments ?? attachments;
+    const edit = pendingSend.current?.editing ?? editing;
+    if (!text.trim() && atts.length === 0) return;
+    pendingSend.current = { text, attachments: atts, editing: edit };
+    setDraft("");
+    setAttachments([]);
+    setEditing(null);
+    try {
+      let saved = await ensureSaved(doc);
+      const stored = [];
+      for (const a of atts) {
+        if (a.file) {
+          stored.push({ kind: a.kind, file: a.file, name: a.name, bytes: a.bytes });
+          continue;
+        }
+        const blob = await (await fetch(a.dataUrl)).blob();
+        const up = await request<AttachmentUpload>(`/api/admin/chats/${encodeURIComponent(saved.id)}/attachments`, { method: "POST", body: blob, headers: { "Content-Type": a.mime } });
+        dataUrls.current.set(up.file, a.dataUrl);
+        a.file = up.file;
+        stored.push({ kind: up.kind, file: up.file, name: a.name, bytes: up.bytes });
       }
       const message: ChatMessage = {
         id: newId(),
-        parent: editing ? editing.parent : current.active_leaf,
+        parent: edit ? (edit.parent ?? null) : (saved.active_leaf ?? null),
         role: "user",
-        content: draft,
+        content: text,
         created_at: now(),
-        attachments,
+        attachments: stored,
+        meta: { attachment_pages: atts.map((a) => a.pages) },
       };
-      current = {
-        ...current,
-        title: current.messages?.length
-          ? current.title
-          : draft.trim().slice(0, 80) || "Attachment",
-        messages: [...(current.messages ?? []), message],
-        active_leaf: message.id,
-      };
-      setBusy(true);
-      current = await save(current);
-      setDraft("");
-      setFiles([]);
-      setEditing(null);
-      await generate(current);
-    } catch (e) {
-      setError(e);
-      setBusy(false);
+      const title = saved.title === t("chat.default_title") && !(saved.messages ?? []).some((m) => m.role === "user") ? autoTitle(text) || saved.title : saved.title;
+      saved = { ...saved, title, messages: [...(saved.messages ?? []), message], active_leaf: message.id };
+      setChat(saved);
+      saveSoon(saved);
+      const ok = await generate(saved, retries, waitForIdle);
+      if (ok) pendingSend.current = null;
+      else {
+        // Keep the text in the composer; the message never reached the model (§10).
+        const reverted = { ...saved, messages: (saved.messages ?? []).filter((m) => m.id !== message.id), active_leaf: message.parent ?? null, title: doc.title };
+        setChat(reverted);
+        saveSoon(reverted);
+        setDraft(text);
+        setAttachments(atts);
+        if (edit) setEditing(edit);
+      }
+    } catch (err) {
+      setDraft(text);
+      setAttachments(atts);
+      setError({ ...classifyError(err, { model: doc.model, active }), retries: 0, retryIn: null });
+      pendingSend.current = null;
     }
   }
-  function attach(incoming: File[]) {
-    const next = [...files, ...incoming];
-    if (
-      next.some(
-        (f) => !f.type.startsWith("image/") && f.type !== "application/pdf",
-      )
-    ) {
-      setError(new Error("Attach images or PDFs."));
-      return;
-    }
-    if (next.reduce((n, f) => n + f.size, 0) > 64 * 1024 ** 2) {
-      setError(new Error("Attachments are limited to 64 MiB per turn."));
-      return;
-    }
-    setFiles(next);
+
+  async function regenerate(m: ChatMessage) {
+    const doc = chatRef.current;
+    if (!doc || busy) return;
+    await generate({ ...doc, active_leaf: m.parent ?? null });
   }
-  async function toolResult(call: ToolCall, value: string) {
-    if (!chat) return;
-    try {
-      const message: ChatMessage = {
+
+  async function continueWithTools() {
+    const doc = chatRef.current;
+    if (!doc || !lastAssistant) return;
+    let parent = lastAssistant.id;
+    const added: ChatMessage[] = [];
+    for (const c of toolCallsOf(lastAssistant)) {
+      if (results.has(c.id)) continue;
+      const d = drafts[c.id];
+      if (!d) return;
+      const msg: ChatMessage = {
         id: newId(),
-        parent: chat.active_leaf,
+        parent,
         role: "tool",
-        content: value,
-        tool_call_id: call.id,
+        content: d.text,
+        tool_call_id: c.id,
         created_at: now(),
+        meta: { tool: { source: d.source, server: d.server ?? null, duration_ms: d.duration_ms ?? null, is_error: d.is_error ?? false, auto: d.auto ?? false, name: c.function.name } },
       };
-      await save({
-        ...chat,
-        messages: [...(chat.messages ?? []), message],
-        active_leaf: message.id,
-      });
-    } catch (e) {
-      setError(e);
+      added.push(msg);
+      parent = msg.id;
     }
+    const next = { ...doc, messages: [...(doc.messages ?? []), ...added], active_leaf: parent };
+    setChat(next);
+    setDrafts({});
+    saveSoon(next);
+    await generate(next);
   }
-  async function runMcp(call: ToolCall) {
-    const tool = mcp?.tools.find(
-      (t) => `${t.server}__${t.name}` === call.function.name,
-    );
-    if (!tool) return;
-    setBusy(true);
+
+  async function runMcp(call: ToolCall, server: string, always: boolean) {
+    setRunning((s) => new Set(s).add(call.id));
     try {
-      const result = await api.post<McpCallResult>("/mcp/call", {
-        server: tool.server,
-        tool: tool.name,
-        arguments: JSON.parse(call.function.arguments),
-        confirmed: true,
-      });
-      await toolResult(call, JSON.stringify(result));
-      setToolApproval(null);
-    } catch (e) {
-      setError(e);
+      if (always) {
+        try {
+          const cur = mcpServers.data?.servers ?? {};
+          const entry = cur[server];
+          if (entry) {
+            await api.put("/mcp/servers", { servers: { ...cur, [server]: { ...entry, always_allow: true } } });
+            void mcpServers.reload();
+          }
+        } catch (err) {
+          toastError(t("chat.tool.allow_failed", { server }), err);
+        }
+      }
+      let args: unknown = {};
+      try {
+        args = JSON.parse(call.function.arguments || "{}");
+      } catch {
+        args = {};
+      }
+      const started = Date.now();
+      const res = await api.post<McpCallResult>("/mcp/call", { server, tool: call.function.name, arguments: args, confirmed: true });
+      const text = res.content.map((c) => (typeof (c as { text?: unknown }).text === "string" ? (c as { text: string }).text : JSON.stringify(c))).join("\n");
+      setDrafts((d) => ({ ...d, [call.id]: { text, source: "mcp", server, duration_ms: res.duration_ms ?? Date.now() - started, is_error: res.is_error, auto: always } }));
+    } catch (err) {
+      toastError(t("chat.tool.mcp_failed"), err);
     } finally {
-      setBusy(false);
+      setRunning((s) => {
+        const n = new Set(s);
+        n.delete(call.id);
+        return n;
+      });
     }
   }
-  const thread = pathTo(chat?.messages ?? [], chat?.active_leaf);
-  const answered = new Set(
-    thread.filter((m) => m.role === "tool").map((m) => m.tool_call_id),
+
+  // MCP: auto-run calls to always-allowed servers; continue when every call has a result.
+  useEffect(() => {
+    if (mode !== "mcp" || pendingCalls.length === 0) return;
+    for (const c of pendingCalls) {
+      const srv = enabledMcp.find((x) => x.name === c.function.name);
+      if (srv && srv.always_allow && !drafts[c.id] && !running.has(c.id)) void runMcp(c, srv.server, false);
+    }
+    if (pendingCalls.every((c) => drafts[c.id]) && pendingCalls.some((c) => drafts[c.id]?.source === "mcp")) void continueWithTools();
+  }, [drafts, pendingCalls.length, mode]);
+
+  function stop() {
+    abort.current?.abort();
+  }
+
+  function startEdit(m: ChatMessage) {
+    if (m.role === "system") {
+      setTab("system");
+      return;
+    }
+    setEditing(m);
+    setDraft(textOf(m));
+    setAttachments([]);
+  }
+
+  function deleteBranch(m: ChatMessage) {
+    const doc = chatRef.current;
+    if (!doc) return;
+    const out = removeBranch(doc.messages ?? [], doc.active_leaf, m.id, memory.current);
+    const next = { ...doc, messages: out.messages, active_leaf: out.activeLeaf };
+    setChat(next);
+    saveSoon(next);
+  }
+
+  function moveBranch(m: ChatMessage, dir: -1 | 1) {
+    const doc = chatRef.current;
+    if (!doc) return;
+    rememberLeaf(memory.current, doc.messages ?? [], doc.active_leaf);
+    const leaf = switchBranch(doc.messages ?? [], m, dir, memory.current);
+    if (!leaf) return;
+    const next = { ...doc, active_leaf: leaf };
+    setChat(next);
+    saveSoon(next);
+  }
+
+  function insertSystem() {
+    const doc = chatRef.current;
+    if (!doc) return;
+    const msg: ChatMessage = { id: newId(), parent: doc.active_leaf ?? null, role: "system", content: "", created_at: now() };
+    const next = { ...doc, messages: [...(doc.messages ?? []), msg], active_leaf: msg.id };
+    setChat(next);
+    saveSoon(next);
+  }
+
+  function pick(m: string, p: string) {
+    const doc = chatRef.current;
+    if (!doc) return;
+    const next = { ...doc, model: m, profile: p };
+    setChat(next);
+    saveSoon(next);
+  }
+
+  // ---------- list actions ----------
+  const [deleting, setDeleting] = useState<ChatSummary | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  async function rename(id: string, title: string) {
+    try {
+      const doc = id === chatRef.current?.id ? chatRef.current : await api.get<Chat>(`/chats/${encodeURIComponent(id)}`);
+      if (!doc) return;
+      const next = { ...doc, title };
+      if (id === chatRef.current?.id) setChat(next);
+      await api.put(`/chats/${encodeURIComponent(id)}`, next);
+      void list.reload();
+    } catch (err) {
+      toastError(t("chat.rename.failed"), err);
+    }
+  }
+  async function confirmDelete() {
+    if (!deleting) return;
+    setDeleteBusy(true);
+    try {
+      if (deleting.id === chatRef.current?.id) abort.current?.abort();
+      await api.del(`/chats/${encodeURIComponent(deleting.id)}`);
+      toast(t("chat.delete.done", { title: deleting.title }));
+      const wasOpen = deleting.id === chatRef.current?.id;
+      setDeleting(null);
+      await list.reload();
+      if (wasOpen) {
+        const rest = (list.data?.chats ?? []).filter((c) => c.id !== deleting.id);
+        navigate(rest[0] ? `/chat/${encodeURIComponent(rest[0].id)}` : "/chat");
+        if (!rest[0]) setChat(blankChat(active));
+      }
+    } catch (err) {
+      toastError(t("chat.delete.failed"), err);
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
+  function newChat() {
+    abort.current?.abort();
+    setChat(blankChat(active ?? rows[0]?.id ?? null));
+    setDraft("");
+    setAttachments([]);
+    setEditing(null);
+    setDrafts({});
+    setError(null);
+    navigate("/chat");
+    setListSheet(false);
+  }
+
+  // ---------- keyboard (§12) ----------
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape" && abort.current) {
+        stop();
+        return;
+      }
+      const el = ev.target as HTMLElement | null;
+      if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+      if (el && (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName))) return;
+      const k = ev.key;
+      if (k === "n") newChat();
+      else if (k === "p") togglePanel();
+      else if (k === "l") setListSheet((v) => !v);
+      else if (k === "m") document.querySelector<HTMLButtonElement>('[data-testid="chat-model"]')?.click();
+      else if (["1", "2", "3", "4"].includes(k)) {
+        setTab(PANEL_TABS[Number(k) - 1]!);
+        if (width === "wide") setPanelOpen(true);
+        else setPanelSheet(true);
+      } else if (k === "e") {
+        const lastUser = [...visible].reverse().find((m) => m.role === "user");
+        if (lastUser) startEdit(lastUser);
+      } else if (k === "r") {
+        if (lastAssistant) void regenerate(lastAssistant);
+      } else if (k === "[" || k === "]") {
+        const el = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>(".chat-message");
+        const id = el?.dataset.message ?? lastAssistant?.id;
+        const m = visible.find((x) => x.id === id);
+        if (m) moveBranch(m, k === "[" ? -1 : 1);
+      } else if (k === "j" || k === "k") {
+        const items = Array.from(document.querySelectorAll<HTMLElement>(".chat-message"));
+        const i = items.indexOf(document.activeElement as HTMLElement);
+        items[Math.min(items.length - 1, Math.max(0, i + (k === "j" ? 1 : -1)))]?.focus();
+      } else return;
+      ev.preventDefault();
+    };
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  });
+
+  function togglePanel() {
+    if (width === "wide") {
+      const next = !panelOpen;
+      setPanelOpen(next);
+      writeLocal(PANEL_KEY, next);
+    } else setPanelSheet((v) => !v);
+  }
+
+  // ---------- render ----------
+  const noModels = !models.loading && rows.length === 0 && !active;
+  const blocked = !model
+    ? t("chat.composer.disabled_no_model")
+    : hasSamplingErrors(sErrors)
+      ? t("chat.composer.fix_panel")
+      : toolCheck.error || cErr
+        ? t("chat.composer.fix_tools")
+        : oErr
+          ? t("chat.composer.fix_output")
+          : attachmentError(attachments)
+            ? t("chat.composer.fix_attachments")
+            : !autoLoad && model !== active
+              ? t("chat.composer.disabled_load")
+              : null;
+  retryRef.current = () => {
+    if (!error) return;
+    const n = error.retries + 1;
+    setError(null);
+    if (pendingSend.current) void send(n);
+    else if (chatRef.current) void generate(chatRef.current, n);
+  };
+
+  const [loadingModel, setLoadingModel] = useState(false);
+  const loadNow = async () => {
+    if (!model) return;
+    setLoadingModel(true);
+    try {
+      await api.post("/engine/load", { model });
+    } catch (err) {
+      toastError(t("chat.model.loading_failed"), err);
+    } finally {
+      setLoadingModel(false);
+    }
+  };
+
+  const toolCtx: ToolContext = {
+    results,
+    drafts,
+    mode,
+    mcpServer: (name) => {
+      const x = enabledMcp.find((tl) => tl.name === name);
+      return x ? { server: x.server, alwaysAllow: x.always_allow } : null;
+    },
+    defined: new Set([...toolCheck.names, ...enabledMcp.map((x) => x.name)]),
+    pending: pendingCalls.length > 0,
+    onDraft: (callId, d) =>
+      setDrafts((prev) => {
+        const n = { ...prev };
+        if (d) n[callId] = d;
+        else delete n[callId];
+        return n;
+      }),
+    onRunMcp: (call, server, always) => void runMcp(call, server, always),
+    running,
+  };
+
+  const panel = chat && (
+    <SidePanel
+      tab={tab}
+      onTab={setTab}
+      sampling={sampling}
+      onSampling={setSampling}
+      errors={sErrors}
+      profile={profile}
+      profiles={profileNames}
+      onProfile={(p) => model && pick(model, p)}
+      profileOverlay={overlay}
+      modelDefaults={modelDefaults}
+      model={model}
+      constrained={constrained}
+      onReset={() => {
+        setUndo({ form: sampling, profile });
+        setSampling(emptySampling());
+        if (model) pick(model, "default");
+        setTimeout(() => setUndo(null), 10_000);
+      }}
+      undo={undo ? () => (setSampling(undo.form), model && pick(model, undo.profile), setUndo(null)) : null}
+      system={chat.system ?? ""}
+      onSystem={(s) => {
+        const next = { ...chat, system: s };
+        setChat(next);
+        saveSoon(next, 800);
+      }}
+      laterSystem={laterSystem}
+      onInsertSystem={insertSystem}
+      toolsText={toolsText}
+      onToolsText={setToolsText}
+      toolsError={toolCheck.error}
+      toolNames={toolCheck.names}
+      choice={choice}
+      onChoice={setChoice}
+      named={named || toolCheck.names[0] || ""}
+      onNamed={setNamed}
+      choiceError={cErr}
+      parallel={parallel}
+      onParallel={setParallel}
+      mode={mode}
+      onMode={setMode}
+      servers={Object.entries(mcpServers.data?.servers ?? {}).map(([name, s]) => ({
+        name,
+        tools: (mcpTools.data?.tools ?? []).filter((x) => x.server === name).length,
+        enabled: s.enabled,
+        alwaysAllow: s.always_allow,
+        on: serverOn[name] !== false && s.enabled,
+        error: (mcpTools.data?.errors ?? []).find((x) => x.server === name)?.message ?? null,
+      }))}
+      onServerOn={(name, on) => setServerOn({ ...serverOn, [name]: on })}
+      onAlwaysAllow={(name, on) => {
+        const cur = mcpServers.data?.servers ?? {};
+        const entry = cur[name];
+        if (!entry) return;
+        void api
+          .put("/mcp/servers", { servers: { ...cur, [name]: { ...entry, always_allow: on } } })
+          .then(() => mcpServers.reload())
+          .catch((err) => toastError(t("chat.tool.allow_failed", { server: name }), err));
+      }}
+      collisions={collisions}
+      toolsPending={pendingCalls.length > 0}
+      output={output}
+      onOutput={setOutput}
+      outputError={oErr}
+    />
   );
-  const pending = thread
-    .flatMap((m) => toolCallsOf(m))
-    .filter((c) => !answered.has(c.id));
-  const selectedModel = models.data?.data.find((m) => m.id === chat?.model);
-  return (
-    <>
-      <PageHeader title="Chat." />
-      <div class="chat-layout">
-        <aside class="chat-sidebar stack">
-          <Button disabled={busy} onClick={() => void fresh()}>
-            New conversation
-          </Button>
-          <label>
-            Search conversations
-            <input
-              value={search}
-              onInput={(e) => setSearch(e.currentTarget.value)}
-            />
-          </label>
-          {!!list.error && (
-            <LoadError
-              thing="conversations"
-              error={list.error}
-              onRetry={list.reload}
-            />
-          )}
-          <nav aria-label="Conversations">
-            {list.data?.chats.map((c) => (
-              <button
-                class="chat-list-item"
-                aria-current={c.id === chat?.id ? "page" : undefined}
-                disabled={busy}
-                key={c.id}
-                onClick={() =>
-                  void api
-                    .get<Chat>(`/chats/${c.id}`)
-                    .then(select)
-                    .catch(setError)
-                }
-              >
-                <strong>{c.title}</strong>
-                <small>
-                  {new Date(c.updated_at).toLocaleDateString()} · {c.snippet}
-                </small>
-              </button>
-            ))}
-          </nav>
-        </aside>
-        <section class="chat-thread stack" aria-label="Conversation">
-          {!chat ? (
-            <p>Create or select a conversation.</p>
+
+  const listEl = (
+    <ConversationList
+      chats={list.data?.chats ?? null}
+      error={list.error}
+      onRetry={list.reload}
+      query={query}
+      onQuery={setQuery}
+      activeId={chat?.id || null}
+      streamingId={streamingId}
+      onNew={newChat}
+      onRename={(id, title) => void rename(id, title)}
+      onDelete={setDeleting}
+      onOpen={() => setListSheet(false)}
+    />
+  );
+
+  const errorBanner = error && (
+    <Banner
+      tone={error.kind === "failed" ? "critical" : "warn"}
+      title={error.title}
+      actions={
+        <span class="cluster">
+          {error.retryIn !== null ? (
+            <Button size="s" onClick={() => retryRef.current()}>
+              {t("chat.action.retry_in", { s: error.retryIn })}
+            </Button>
           ) : (
-            <>
-              <label>
-                Conversation title
-                <input
-                  disabled={busy}
-                  value={chat.title}
-                  onInput={(e) =>
-                    setChat({ ...chat, title: e.currentTarget.value })
-                  }
-                  onBlur={() => void save(chat).catch(setError)}
-                />
-              </label>
-              <div class="cluster">
-                <label>
-                  Model
-                  <select
-                    disabled={busy}
-                    value={chat.model ?? ""}
-                    onChange={(e) =>
-                      setChat({ ...chat, model: e.currentTarget.value })
-                    }
-                  >
-                    <option value="">Choose a model</option>
-                    {models.data?.data.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.id}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <a href={`/api/admin/chats/${chat.id}/export?format=json`}>
-                  Export JSON
-                </a>
-                <a href={`/api/admin/chats/${chat.id}/export?format=md`}>
-                  Export Markdown
-                </a>
-                <Button disabled={busy} onClick={() => setDeleting(true)}>
-                  Delete
-                </Button>
-              </div>
-              {engine.value?.model && chat.model !== engine.value.model && (
-                <p class="meta">
-                  Will switch from {engine.value.model} when sent.
-                </p>
-              )}
-              {thread.map((m) => {
-                const branch = branchInfo(chat.messages ?? [], m);
-                const meta = metaOf(m);
-                return (
-                  <article class="chat-message" key={m.id}>
-                    <div class="cluster">
-                      <span class="label">{m.role}</span>
-                      <CopyButton text={textOf(m)} />
-                      {branch.count > 1 && (
-                        <>
-                          <Button
-                            disabled={busy || branch.index === 1}
-                            aria-label="Previous branch"
-                            onClick={() =>
-                              void save({
-                                ...chat,
-                                active_leaf: switchBranch(
-                                  chat.messages ?? [],
-                                  m,
-                                  -1,
-                                ),
-                              }).catch(setError)
-                            }
-                          >
-                            ‹
-                          </Button>
-                          <span class="meta">
-                            {branch.index} / {branch.count}
-                          </span>
-                          <Button
-                            disabled={busy || branch.index === branch.count}
-                            aria-label="Next branch"
-                            onClick={() =>
-                              void save({
-                                ...chat,
-                                active_leaf: switchBranch(
-                                  chat.messages ?? [],
-                                  m,
-                                  1,
-                                ),
-                              }).catch(setError)
-                            }
-                          >
-                            ›
-                          </Button>
-                        </>
-                      )}
-                    </div>
-                    {m.reasoning && (
-                      <details>
-                        <summary>
-                          Thinking ·{" "}
-                          {meta.usage?.completion_tokens_details
-                            ?.reasoning_tokens ?? "—"}{" "}
-                          tokens
-                        </summary>
-                        <Markdown text={m.reasoning} />
-                      </details>
-                    )}
-                    {meta.segments?.length ? (
-                      meta.segments.map((seg, i) =>
-                        seg.kind === "text" ? (
-                          <Markdown key={i} text={seg.text} />
-                        ) : (
-                          <pre key={i}>
-                            {JSON.stringify(toolCallsOf(m)[seg.index], null, 2)}
-                          </pre>
-                        ),
-                      )
-                    ) : (
-                      <>
-                        <Markdown text={textOf(m)} />
-                        {toolCallsOf(m).map((c) => (
-                          <pre key={c.id}>
-                            {c.function.name}({c.function.arguments})
-                          </pre>
-                        ))}
-                      </>
-                    )}
-                    {m.attachments?.map((a) => (
-                      <a
-                        key={a.file}
-                        href={`/api/admin/chats/${chat.id}/${a.file}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        {a.name ?? a.file}
-                      </a>
-                    ))}
-                    {m.role === "assistant" && (
-                      <p class="meta">
-                        {meta.usage?.prompt_tokens ?? "—"} in /{" "}
-                        {meta.usage?.completion_tokens ?? "—"} out ·{" "}
-                        {meta.usage?.prompt_tokens_details?.cached_tokens ?? 0}{" "}
-                        cached · TTFT {Math.round(meta.ttft_ms ?? 0)} ms ·{" "}
-                        {meta.timings?.predicted_per_second?.toFixed(1) ?? "—"}{" "}
-                        tok/s · {meta.finish_reason}
-                      </p>
-                    )}
-                    {m.role === "user" && (
-                      <Button
-                        disabled={busy}
-                        onClick={() => {
-                          setEditing(m);
-                          setDraft(textOf(m));
-                        }}
-                      >
-                        Edit & resend
-                      </Button>
-                    )}
-                    {m.role === "assistant" && (
-                      <Button
-                        disabled={busy}
-                        onClick={() => {
-                          try {
-                            void generate({
-                              ...configure(),
-                              active_leaf: m.parent,
-                            });
-                          } catch (e) {
-                            setError(e);
-                          }
-                        }}
-                      >
-                        Regenerate
-                      </Button>
-                    )}
-                  </article>
-                );
-              })}
-              {pending.map((call) => (
-                <div class="stack" key={call.id}>
-                  <label>
-                    Result for {call.function.name}
-                    <textarea
-                      value={toolResults[call.id] ?? ""}
-                      onInput={(e) =>
-                        setToolResults({
-                          ...toolResults,
-                          [call.id]: e.currentTarget.value,
-                        })
-                      }
-                    />
-                  </label>
-                  <Button
-                    disabled={busy}
-                    onClick={() =>
-                      void toolResult(call, toolResults[call.id] ?? "")
-                    }
-                  >
-                    Submit result
-                  </Button>
-                  {mcp?.tools.some(
-                    (t) => `${t.server}__${t.name}` === call.function.name,
-                  ) && (
-                    <Button
-                      disabled={busy}
-                      onClick={() => setToolApproval(call)}
-                    >
-                      Run MCP tool
-                    </Button>
-                  )}
-                </div>
-              ))}
-              {!pending.length && thread.at(-1)?.role === "tool" && (
-                <Button
-                  disabled={busy}
-                  onClick={() => void generate(configure())}
-                >
-                  Send tool results
-                </Button>
-              )}
-              {progress && (
-                <>
-                  <ProgressBar
-                    label="Reading prompt"
-                    value={
-                      progress.total ? progress.processed / progress.total : 0
-                    }
-                  />
-                  <p role="status">
-                    Reading prompt {progress.processed} / {progress.total} (
-                    {progress.cache} cached)
-                  </p>
-                </>
-              )}
-              {!!error && <LoadError thing="chat" error={error} />}
-              <form
-                class="stack chat-composer"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void send();
-                }}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  if (selectedModel?.vision !== false)
-                    attach(Array.from(e.dataTransfer?.files ?? []));
-                }}
-              >
-                {editing && (
-                  <p>
-                    Editing creates a new branch.{" "}
-                    <Button
-                      onClick={() => {
-                        setEditing(null);
-                        setDraft("");
-                      }}
-                    >
-                      Cancel edit
-                    </Button>
-                  </p>
-                )}
-                <label>
-                  Message
-                  <textarea
-                    rows={4}
-                    disabled={busy || pending.length > 0}
-                    value={draft}
-                    onInput={(e) => setDraft(e.currentTarget.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
-                        e.preventDefault();
-                        void send();
-                      }
-                    }}
-                    onPaste={(e) => {
-                      if (
-                        e.clipboardData?.files.length &&
-                        selectedModel?.vision !== false
-                      )
-                        attach(Array.from(e.clipboardData.files));
-                    }}
-                  />
-                </label>
-                <div class="cluster">
-                  <label
-                    title={
-                      selectedModel?.vision === false
-                        ? "Model loaded with language-only"
-                        : undefined
-                    }
-                  >
-                    Attach images or PDFs
-                    <input
-                      type="file"
-                      multiple
-                      accept="image/*,application/pdf"
-                      disabled={busy || selectedModel?.vision === false}
-                      onChange={(e) => {
-                        attach(Array.from(e.currentTarget.files ?? []));
-                        e.currentTarget.value = "";
-                      }}
-                    />
-                  </label>
-                  {busy ? (
-                    <Button onClick={() => abort.current?.abort()}>Stop</Button>
-                  ) : (
-                    <Button
-                      type="submit"
-                      variant="accent"
-                      disabled={!chat.model || pending.length > 0}
-                    >
-                      Send
-                    </Button>
-                  )}
-                </div>
-                {files.map((file, i) => (
-                  <p key={i}>
-                    {file.name}{" "}
-                    <Button
-                      onClick={() => setFiles(files.filter((_, j) => i !== j))}
-                    >
-                      Remove
-                    </Button>
-                  </p>
-                ))}
-              </form>
-            </>
+            ["unreachable", "recovering", "busy", "queue_full", "resource_timeout", "request_timeout", "mask_timeout", "generic", "capacity"].includes(error.kind) && (
+              <Button size="s" onClick={() => retryRef.current()}>
+                {t("chat.action.retry")}
+              </Button>
+            )
           )}
-        </section>
-        {chat && (
-          <aside class="chat-options stack">
-            <details open>
-              <summary>System</summary>
-              <label>
-                System prompt
-                <textarea
-                  disabled={busy}
-                  rows={6}
-                  value={chat.system ?? ""}
-                  onInput={(e) =>
-                    setChat({ ...chat, system: e.currentTarget.value })
-                  }
-                />
-              </label>
-            </details>
-            <details>
-              <summary>Sampling</summary>
-              <p>
-                Omitted fields use model defaults. Explicit values override the
-                selected profile.
-              </p>
-              <label>
-                Sampling JSON
-                <textarea
-                  class="mono"
-                  disabled={busy}
-                  rows={10}
-                  value={samplingText}
-                  onInput={(e) => setSamplingText(e.currentTarget.value)}
-                />
-              </label>
-              <Button onClick={() => setSamplingText("{}")}>
-                Reset to model defaults
-              </Button>
-            </details>
-            <details>
-              <summary>Tools</summary>
-              <label>
-                Tool definitions JSON
-                <textarea
-                  class="mono"
-                  disabled={busy}
-                  rows={10}
-                  value={toolsText}
-                  onInput={(e) => setToolsText(e.currentTarget.value)}
-                />
-              </label>
-              <label>
-                Tool choice
-                <select
-                  value={String(chat.tool_choice ?? "auto")}
-                  onChange={(e) =>
-                    setChat({ ...chat, tool_choice: e.currentTarget.value })
-                  }
-                >
-                  <option>auto</option>
-                  <option>none</option>
-                  <option>required</option>
-                </select>
-              </label>
-              <Button
-                disabled={busy}
-                onClick={() =>
-                  void api
-                    .get<McpToolList>("/mcp/tools")
-                    .then((result) => {
-                      setMcp(result);
-                      setToolsText(
-                        JSON.stringify(
-                          result.tools.map((t) => ({
-                            type: "function",
-                            function: {
-                              name: `${t.server}__${t.name}`,
-                              description: t.description,
-                              parameters: t.input_schema,
-                            },
-                          })),
-                          null,
-                          2,
-                        ),
-                      );
-                    })
-                    .catch(setError)
-                }
-              >
-                Add MCP tools
-              </Button>
-              <p>MCP calls ask for confirmation before execution.</p>
-            </details>
-            <details>
-              <summary>Output</summary>
-              <label>
-                Response format JSON
-                <textarea
-                  class="mono"
-                  disabled={busy}
-                  rows={8}
-                  value={formatText}
-                  onInput={(e) => setFormatText(e.currentTarget.value)}
-                />
-              </label>
-              <p>
-                Use null for text, or an object with type json_object or
-                json_schema.
-              </p>
-            </details>
+          {error.kind === "busy" && (
             <Button
-              disabled={busy}
+              size="s"
+              variant="text"
               onClick={() => {
-                try {
-                  void save(configure()).catch(setError);
-                } catch (e) {
-                  setError(e);
-                }
+                setError(null);
+                if (pendingSend.current) void send(0, true);
+                else if (chatRef.current) void generate(chatRef.current, 0, true);
               }}
             >
-              Save conversation settings
+              {t("chat.action.switch_idle")}
             </Button>
-          </aside>
-        )}
+          )}
+          {error.kind === "failed" && (
+            <Button size="s" variant="solid" onClick={() => void api.post("/engine/restart").catch((err) => toastError(t("chat.restart_failed"), err))}>
+              {t("chat.action.restart")}
+            </Button>
+          )}
+          {(error.kind === "failed" || error.kind === "generic") && (
+            <Link href="/logs" class="btn" data-variant="text" data-size="s">
+              {t("chat.action.logs")}
+            </Link>
+          )}
+          {(error.kind === "capacity" || error.kind === "resource_timeout") && (
+            <Link href="/settings/memory" class="btn" data-variant="text" data-size="s">
+              {t("chat.action.memory")}
+            </Link>
+          )}
+          {error.kind === "queue_full" && (
+            <Link href="/settings/requests" class="btn" data-variant="text" data-size="s">
+              {t("chat.action.requests")}
+            </Link>
+          )}
+          {error.kind === "mask_timeout" && (
+            <Button size="s" variant="text" onClick={() => (setTab("output"), width === "wide" ? setPanelOpen(true) : setPanelSheet(true))}>
+              {t("chat.action.output")}
+            </Button>
+          )}
+          {error.kind === "later_system" && (
+            <Button size="s" variant="text" onClick={() => (setTab("system"), width === "wide" ? setPanelOpen(true) : setPanelSheet(true))}>
+              {t("chat.action.system")}
+            </Button>
+          )}
+          {error.kind === "ignore_eos" && (
+            <Button size="s" variant="text" onClick={() => setSampling({ ...sampling, ignore_eos: false })}>
+              {t("chat.action.turn_off_eos")}
+            </Button>
+          )}
+          {error.kind === "attachment" && (
+            <Button size="s" variant="text" onClick={() => setAttachments([])}>
+              {t("chat.action.remove_attachments")}
+            </Button>
+          )}
+          {error.kind === "rejected" && error.request != null && (
+            <Button size="s" variant="text" onClick={() => setShowRequest(true)}>
+              {t("chat.action.show_request")}
+            </Button>
+          )}
+          <Button size="s" variant="text" onClick={() => setError(null)}>
+            {error.retryIn !== null ? t("chat.action.cancel") : t("chat.action.dismiss")}
+          </Button>
+        </span>
+      }
+    >
+      {error.body && <span>{error.body} </span>}
+      {error.detail && <code class="mono">{error.detail}</code>}
+    </Banner>
+  );
+
+  const threadEl = (
+    <section class="chat-thread" aria-label={t("chat.thread_label")}>
+      {width !== "wide" && (
+        <div class="cluster chat-thread-head">
+          {width === "narrow" && (
+            <Button size="s" variant="text" onClick={() => setListSheet(true)}>
+              {t("chat.list_toggle")} ▸
+            </Button>
+          )}
+          <span class="label chat-thread-title">{chat?.title}</span>
+        </div>
+      )}
+      {notFound ? (
+        <Empty title={t("chat.not_found")} action={<Button onClick={newChat}>{t("chat.list.new")}</Button>} />
+      ) : loadError ? (
+        <LoadError thing={t("chat.load_chat")} error={loadError} />
+      ) : (
+        <>
+          {noModels && (
+            <Banner
+              tone="info"
+              actions={
+                <Link href="/models/downloader" class="btn" data-size="s">
+                  {t("chat.empty.open_downloader")}
+                </Link>
+              }
+            >
+              {t("chat.empty.no_models")}
+            </Banner>
+          )}
+          <div class="chat-messages">
+            {visible.length === 0 ? (
+              <Empty size="l" title={t("chat.empty.statement")}>
+                {t("chat.empty.line")}
+              </Empty>
+            ) : (
+              visible.map((m, i) => {
+                const isStreaming = busy && i === visible.length - 1 && m.role === "assistant";
+                return (
+                  <MessageView
+                    key={m.id}
+                    message={m}
+                    streaming={isStreaming}
+                    thinkingLive={isStreaming ? thinking : null}
+                    branch={branchInfo(chat?.messages ?? [], m)}
+                    replies={replyCount(chat?.messages ?? [], m.id)}
+                    busy={busy}
+                    tools={{ ...toolCtx, pending: toolCtx.pending && m.id === lastAssistant?.id }}
+                    onRegenerate={m.role === "assistant" ? () => void regenerate(m) : undefined}
+                    onEdit={m.role === "user" || m.role === "system" ? () => startEdit(m) : undefined}
+                    onDelete={() => deleteBranch(m)}
+                    onBranch={(dir) => moveBranch(m, dir)}
+                  />
+                );
+              })
+            )}
+          </div>
+          <div class="chat-bottom">
+            {(waiting || progress) && (
+              <div class="chat-progress stack" role="status">
+                {progress ? (
+                  <>
+                    <span class="meta tnum">
+                      {progress.cache
+                        ? t("chat.progress.reading_cached", { p: formatCount(progress.processed), t: formatCount(progress.total), c: formatCount(progress.cache) })
+                        : t("chat.progress.reading", { p: formatCount(progress.processed), t: formatCount(progress.total) })}
+                    </span>
+                    <ProgressBar
+                      live
+                      label={t("chat.progress.label")}
+                      value={progress.total ? progress.processed / progress.total : 0}
+                      valueText={t("chat.progress.reading", { p: formatCount(progress.processed), t: formatCount(progress.total) })}
+                    />
+                  </>
+                ) : (
+                  <span class="meta loading-dots">
+                    {e?.state?.startsWith("starting") ? t("chat.progress.loading") : (e?.queued ?? 0) > 0 ? t("chat.progress.queued") : t("chat.progress.waiting")}
+                  </span>
+                )}
+              </div>
+            )}
+            {errorBanner}
+            {notice && <p class="meta" role="status">{notice}</p>}
+            {pendingCalls.length > 0 ? (
+              <div class="cluster chat-waiting">
+                <span class="label">{t("chat.tool.waiting", { n: waitingFor || pendingCalls.length })}</span>
+                <Button variant={waitingFor === 0 ? "accent" : "outline"} disabled={waitingFor > 0} onClick={() => void continueWithTools()}>
+                  {t("chat.tool.send_all")}
+                </Button>
+              </div>
+            ) : (
+              <Composer
+                value={draft}
+                onChange={setDraft}
+                attachments={attachments}
+                onAttachments={setAttachments}
+                placeholder={model ? t("chat.composer.placeholder", { name: shortModel(model) }) : t("chat.composer.placeholder_plain")}
+                streaming={busy}
+                blocked={blocked}
+                vision={row?.vision ?? null}
+                editing={!!editing}
+                disabled={noModels}
+                onSend={() => void send()}
+                onStop={stop}
+                onCancelEdit={() => (setEditing(null), setDraft(""))}
+                onEditLast={() => {
+                  const lastUser = [...visible].reverse().find((m) => m.role === "user");
+                  if (lastUser) startEdit(lastUser);
+                }}
+                onNotice={setNotice}
+              />
+            )}
+          </div>
+        </>
+      )}
+    </section>
+  );
+
+  return (
+    <>
+      <PageHeader
+        title={t("chat.title")}
+        size="m"
+        meta={
+          <ModelSelector
+            rows={rows}
+            profilesFor={(id) => (id === model ? profileNames : rows.find((r) => r.id === id)?.profiles.length ? ["default", ...rows.find((r) => r.id === id)!.profiles] : ["default"])}
+            model={model}
+            profile={profile}
+            onPick={pick}
+            active={active}
+            engineState={e?.state ?? null}
+            autoLoad={autoLoad}
+            onLoadNow={() => void loadNow()}
+            loading={loadingModel}
+          />
+        }
+        actions={
+          <Button variant="text" aria-expanded={width === "wide" ? panelOpen : panelSheet} onClick={togglePanel}>
+            {t("chat.panel_toggle")} {(width === "wide" ? panelOpen : panelSheet) ? "▾" : "▸"}
+          </Button>
+        }
+      />
+      {!!models.error && (
+        <section class="band tight">
+          <LoadError thing={t("chat.model.load_models_failed")} error={models.error} onRetry={models.reload} />
+        </section>
+      )}
+      <div class="chat-layout" ref={layout} data-width={width}>
+        {width !== "narrow" && <aside class="chat-sidebar" aria-label={t("chat.list.label")}>{listEl}</aside>}
+        {threadEl}
+        {width === "wide" && panelOpen && <aside class="chat-options" aria-label={t("chat.panel.label")}>{panel}</aside>}
       </div>
+      <Sheet open={width === "narrow" && listSheet} title={t("chat.list_sheet_title")} onClose={() => setListSheet(false)}>
+        {listEl}
+      </Sheet>
+      <Sheet open={width !== "wide" && panelSheet} title={t("chat.panel_sheet_title")} onClose={() => setPanelSheet(false)}>
+        {panel}
+      </Sheet>
+      <Sheet open={showRequest} title={t("chat.request_sheet")} onClose={() => setShowRequest(false)}>
+        <CodeBlock code={JSON.stringify(error?.request ?? {}, null, 2)} label="JSON" />
+      </Sheet>
       <ConfirmSheet
-        open={deleting}
-        title="Delete conversation."
-        confirmLabel="Delete"
-        onClose={() => setDeleting(false)}
-        onConfirm={async () => {
-          if (!chat) return;
-          try {
-            await api.del(`/chats/${chat.id}`);
-            setChat(null);
-            setDeleting(false);
-            await list.reload();
-          } catch (e) {
-            setError(e);
-          }
-        }}
+        open={!!deleting}
+        title={t("chat.delete.title")}
+        confirmLabel={t("chat.delete.confirm_plain")}
+        busy={deleteBusy}
+        onClose={() => setDeleting(null)}
+        onConfirm={confirmDelete}
       >
-        <p>
-          This conversation and all its branches will be permanently deleted.
+        <p class="body">
+          {deleting
+            ? t("chat.delete.summary", {
+                title: deleting.title,
+                messages: t("chat.delete.messages", { n: deleting.message_count }),
+                attachments: t("chat.delete.no_attachments"),
+              })
+            : ""}
         </p>
-      </ConfirmSheet>
-      <ConfirmSheet
-        open={!!toolApproval}
-        title="Run MCP tool."
-        confirmLabel="Run tool"
-        busy={busy}
-        onClose={() => setToolApproval(null)}
-        onConfirm={() => runMcp(toolApproval!)}
-      >
-        <p>{toolApproval?.function.name}</p>
-        <pre>{toolApproval?.function.arguments}</pre>
+        {deleting && deleting.id === streamingId && <p class="meta">{t("chat.delete.streaming")}</p>}
       </ConfirmSheet>
     </>
   );

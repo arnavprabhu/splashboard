@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import errno
 import json
+import logging
 import os
 import shutil
 from pathlib import Path
@@ -27,6 +28,7 @@ from ..schemas import (
 )
 from ..state import ManagerState, get_state
 
+log = logging.getLogger(__name__)
 router = APIRouter()
 State = Annotated[ManagerState, Depends(get_state)]
 
@@ -58,19 +60,45 @@ def ensure_idle(state: ManagerState) -> None:
         raise ApiError(409, "Another storage operation is running", "storage_busy")
 
 
+STAGING_SUFFIX = ".splash-moving"
+
+
 def move_tree(source: Path, destination: Path) -> None:
+    """Move a directory tree: an atomic rename on the same volume, otherwise copy
+    to a staging directory beside the destination, rename it into place, then
+    delete the source (SPEC §5 "Moving the base directory").
+
+    A failure before the staging rename leaves the source untouched and removes
+    the partial copy, so nothing is lost and the move can simply be retried.
+    """
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
         source.rename(destination)
+        return
     except OSError as error:
         if error.errno != errno.EXDEV:
             raise
-        staging = destination.with_name(destination.name + ".splash-moving")
-        if staging.exists():
-            raise OSError("An interrupted move exists at " + str(staging)) from error
+    staging = destination.with_name(destination.name + STAGING_SUFFIX)
+    if staging.exists():
+        raise OSError(f"An interrupted move exists at {staging}; remove it and retry")
+    try:
         shutil.copytree(source, staging, symlinks=True)
         staging.rename(destination)
-        shutil.rmtree(source)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    # The copy is complete and in place; only now is the source removed.
+    shutil.rmtree(source)
+
+
+def default_hf_hub(models_dir: Path) -> Path:
+    """Hugging Face's default hub cache (`HF_HUB_CACHE`, else `HF_HOME/hub`), the
+    place earlier downloads live, unless that is our own models directory."""
+    explicit = os.environ.get("HF_HUB_CACHE")
+    if explicit and Path(explicit).expanduser().resolve() != models_dir.resolve():
+        return Path(explicit).expanduser()
+    home = Path(os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface")))
+    return home.expanduser() / "hub"
 
 
 @router.post("/storage/move", response_model=JobAccepted, status_code=202)
@@ -100,21 +128,38 @@ async def move(state: State, body: StorageMoveRequest) -> JobAccepted:
 
     async def run(job: Job) -> None:
         job.update(message="Moving files…")
-        if destination.exists():
-            destination.rmdir()
-        if body.move_files and source.exists():
-            await asyncio.to_thread(move_tree, source, destination)
-        else:
-            destination.mkdir(parents=True, mode=0o700)
+        created = not destination.exists()
+        moved = False
+        try:
+            if body.move_files and source.exists():
+                if destination.exists():
+                    destination.rmdir()  # checked empty above
+                await asyncio.to_thread(move_tree, source, destination)
+                moved = True
+            else:
+                destination.mkdir(parents=True, mode=0o700, exist_ok=True)
+        except OSError as error:
+            if not destination.exists() and not created:
+                destination.mkdir(parents=True, exist_ok=True)  # put the empty folder back
+            raise JobFailed(f"The move failed and nothing was changed: {error}") from None
+        job.update(progress=0.9, message="Saving settings…")
         document = state.settings.current.model_dump(mode="json", by_alias=True)
         document["global"]["storage"][body.target + "_dir"] = str(destination)
-        result, changes = state.settings.save(document)
-        if not result.ok:
-            if body.move_files and not source.exists():
+        try:
+            result, changes = state.settings.save(document)
+            ok = result.ok
+        except Exception:
+            log.exception("saving the storage setting failed")
+            ok, changes = False, []
+        if not ok:
+            if moved:
                 await asyncio.to_thread(move_tree, destination, source)
+            elif created:
+                shutil.rmtree(destination, ignore_errors=True)
             raise JobFailed("Settings could not be saved; storage was restored")
         for listener in state.settings_listeners:
             listener(changes, False)
+        job.line(f"{body.target} directory is now {destination}")
         state.events.publish("models.changed", ModelsChangedEvent(reason="moved"))
 
     return state.jobs.start("storage_move", run)
@@ -122,7 +167,7 @@ async def move(state: State, body: StorageMoveRequest) -> JobAccepted:
 
 @router.get("/storage/import-candidates", response_model=ImportCandidates)
 def import_candidates(state: State) -> ImportCandidates:
-    source = Path(os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface"))) / "hub"
+    source = default_hf_hub(state.settings.models_dir())
     candidates = []
     for folder in sorted(source.glob("models--*")):
         repo = repo_of_folder(folder.name)
@@ -174,10 +219,24 @@ async def import_models(state: State, body: ImportRequest) -> JobAccepted:
 
     async def run(job: Job) -> None:
         target.mkdir(parents=True, exist_ok=True)
+        done: list[tuple[Path, Path]] = []
         for index, candidate in enumerate(selected):
-            await asyncio.to_thread(
-                move_tree, Path(candidate.path), target / Path(candidate.path).name
-            )
+            origin = Path(candidate.path)
+            moved_to = target / origin.name
+            try:
+                await asyncio.to_thread(move_tree, origin, moved_to)
+            except OSError as error:
+                # All or nothing: put back what this import already moved.
+                for back_from, back_to in reversed(done):
+                    try:
+                        await asyncio.to_thread(move_tree, back_from, back_to)
+                    except OSError:
+                        log.exception("could not move %s back to %s", back_from, back_to)
+                raise JobFailed(
+                    f"Importing {candidate.repo_id} failed ({error}); nothing was imported"
+                ) from None
+            done.append((moved_to, origin))
+            job.line(f"imported {candidate.repo_id}")
             job.update(progress=(index + 1) / len(selected), message=candidate.repo_id)
         state.events.publish("models.changed", ModelsChangedEvent(reason="imported"))
 

@@ -508,3 +508,44 @@ def test_request_validation_error_shape(client: TestClient) -> None:
     assert response.status_code == 422
     error = response.json()["error"]
     assert error["code"] == "invalid_request" and error["issues"][0]["path"] == ["model"]
+
+
+def test_doctor_covers_the_spec_checks(client: TestClient) -> None:
+    report = client.get("/api/admin/doctor").json()
+    ids = {c["id"] for c in report["checks"]}
+    assert ids >= {
+        "hardware",
+        "engine",
+        "brew",
+        "disk",
+        "permissions",
+        "path",
+        "shim",
+        "ports",
+        "hf_token",
+        "integrations",
+    }
+    by = {c["id"]: c for c in report["checks"]}
+    assert by["engine"]["status"] == "ok" and "1.2.0" in by["engine"]["message"]
+    assert by["permissions"]["status"] == "ok"
+    assert by["hf_token"]["status"] == "warn", "the suite never sees the developer's token"
+    assert by["integrations"]["status"] == "ok"
+
+
+def test_install_homebrew_opens_terminal_with_the_official_command(
+    app: Any, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from splash_gui.schemas import BrewInfo
+    from splash_gui.system import api as system_api
+    from splash_gui.system.macos import RecordingMacOS
+
+    recorder = RecordingMacOS()
+    app.state.manager.macos = recorder
+    monkeypatch.setattr(system_api, "get_brew", lambda state: BrewInfo(installed=False))
+    result = client.post("/api/admin/system/brew/install").json()
+    assert result["ok"] is True and "Homebrew/install/HEAD/install.sh" in result["command"]
+    script = recorder.calls[-1][-1]
+    assert recorder.calls[-1][0].endswith("osascript") and "install.sh" in script
+    monkeypatch.setattr(system_api, "get_brew", lambda state: BrewInfo(installed=True))
+    again = client.post("/api/admin/system/brew/install")
+    assert again.status_code == 409 and again.json()["error"]["code"] == "brew_installed"

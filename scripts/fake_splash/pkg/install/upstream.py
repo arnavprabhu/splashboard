@@ -72,9 +72,7 @@ def select_gguf(files, variant):
     :VARIANT, the only target GGUF.
     """
     candidates = sorted(
-        n
-        for n in files
-        if "/" not in n and n.endswith(".gguf") and "mmproj" not in Path(n).stem.lower()
+        n for n in files if "/" not in n and n.endswith(".gguf") and "mmproj" not in Path(n).stem.lower()
     )
     if variant is None:
         if len(candidates) == 1:
@@ -102,8 +100,7 @@ def _gguf_target(repo, variant, language_only):
     name, by_ending = select_gguf(repo.files, variant)
     if by_ending:
         print(
-            f"No GGUF is named for :{variant} alone; using {name}, the only one "
-            f"whose name ends in -{variant}.",
+            f"No GGUF is named for :{variant} alone; using {name}, the only one whose name ends in -{variant}.",
             flush=True,
         )
     if any(part in name for part in ("BF16", "UD-Q8_K_XL")):
@@ -125,13 +122,10 @@ def _mlx_target(repo, language_only):
     quant = config.get("quantization") or {}
     if quant.get("mode", "affine") != "affine" or quant.get("bits") != 4:
         raise models.ModelError(
-            f"Splash needs an MLX affine 4-bit checkpoint, not "
-            f"{quant.get('mode', 'affine')} {quant.get('bits', 4)}-bit"
+            f"Splash needs an MLX affine 4-bit checkpoint, not {quant.get('mode', 'affine')} {quant.get('bits', 4)}-bit"
         )
     if quant.get("group_size") != 64:
-        raise models.ModelError(
-            f"Splash needs MLX group size 64, not {quant.get('group_size')}"
-        )
+        raise models.ModelError(f"Splash needs MLX group size 64, not {quant.get('group_size')}")
     files = {name: name for name in sorted(repo.files)}
     files.setdefault("config.json", "config.json")
     return Target("mlx-affine", "none" if language_only else "safetensors", config, files)

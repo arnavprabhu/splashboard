@@ -1,18 +1,19 @@
 import type { NavItem } from '../components/NavBand';
+import { t } from '../strings/en';
 
 export const STATUS_TABS: readonly NavItem[] = [
-  { href: '/status', label: 'Live' },
-  { href: '/status/history', label: 'Usage history' },
+  { href: '/status', label: t('nav.tab.live') },
+  { href: '/status/history', label: t('nav.tab.history') },
 ];
 
 export const MODELS_TABS: readonly NavItem[] = [
-  { href: '/models', label: 'Manager' },
-  { href: '/models/downloader', label: 'Downloader' },
+  { href: '/models', label: t('nav.tab.manager') },
+  { href: '/models/downloader', label: t('nav.tab.downloader') },
 ];
 
 export const LOGS_TABS: readonly NavItem[] = [
-  { href: '/logs', label: 'Live tail' },
-  { href: '/logs/diagnostics', label: 'Diagnostics' },
+  { href: '/logs', label: t('nav.tab.tail') },
+  { href: '/logs/diagnostics', label: t('nav.tab.diagnostics') },
 ];
 
 /** Settings sections in SPEC §10.9 order; slugs are the /admin/settings/:section values. */

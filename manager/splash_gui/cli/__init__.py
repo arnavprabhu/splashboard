@@ -238,7 +238,49 @@ def launch(client: Client, args: argparse.Namespace, passthrough: list[str]) -> 
         }
     )
     helper = Path(__file__).parents[1] / "helpers" / "launch_client.py"
+    if not args.print_only:
+        record_launch(client.paths, args.client, model)
     os.execve(str(engine.python), [str(engine.python), str(helper)], environment)  # noqa: S606
+    return 0  # type: ignore[unreachable]  # only when execve is stubbed (tests)
+
+
+def record_launch(paths: Paths, name: str, model: str | None) -> None:
+    """SPEC §11.2 step 4: a session row in usage.db for "last launched"."""
+    from ..usage.db import UsageDB
+
+    try:
+        db = UsageDB(paths.usage_db)
+        try:
+            db.record_launch(name, model)
+        finally:
+            db.close()
+    except Exception as error:  # never block a launch on bookkeeping
+        print(f"splash: could not record the launch: {error}", file=sys.stderr)
+
+
+def print_status(client: Client, engine: dict[str, Any], *, full: bool) -> None:
+    """`splash status` / `splash ps` for people (`--json` prints the raw view)."""
+    state = engine.get("state", "stopped")
+    model = engine.get("model") or "—"
+    print(f"Engine:   {state}  {model}")
+    if engine.get("uptime_s") is not None:
+        print(f"Uptime:   {engine['uptime_s']:.0f} s")
+    print(f"Requests: {engine.get('requests_in_flight', 0)} in flight")
+    try:
+        live = client.request("GET", "/metrics/snapshot")
+    except ValueError:
+        live = {}
+    memory = (live.get("memory") or {}).get("current_bytes")
+    if memory:
+        print(f"Memory:   {memory / 1024**3:.1f} GiB (Metal)")
+    tps = (live.get("throughput") or {}).get("decode_tps")
+    if tps is not None:
+        print(f"Decode:   {tps:.0f} tok/s")
+    if full:
+        print(f"Manager:  {client.url}  (admin {client.url}/admin/)")
+        print(f"OpenAI:   {client.url}/v1   Anthropic: {client.url}")
+    if engine.get("error"):
+        print(f"Error:    {engine['error'].get('message')}")
 
 
 def chat(client: Client, model: str, prompt: list[str]) -> None:
@@ -281,6 +323,49 @@ def chat(client: Client, model: str, prompt: list[str]) -> None:
             break
 
 
+def serve_port(arguments: list[str]) -> int:
+    """The port a passed-through `splash serve` will bind (Splash's launcher:
+    `--port`, else SPLASH_PORT, else 8000)."""
+    for index, argument in enumerate(arguments):
+        value = None
+        if argument == "--port" and index + 1 < len(arguments):
+            value = arguments[index + 1]
+        elif argument.startswith("--port="):
+            value = argument.split("=", 1)[1]
+        if value is not None:
+            try:
+                return int(value)
+            except ValueError:
+                return 0
+    try:
+        return int(os.environ.get("SPLASH_PORT", "8000"))
+    except ValueError:
+        return 0
+
+
+def warn_if_port_taken(arguments: list[str]) -> None:
+    """SPEC §12.2: `splash serve` warns, without blocking, when the manager uses
+    the same port."""
+    try:
+        store = SettingsStore(Paths.from_env())
+        store.load()
+        port = store.current.global_.server.port
+    except Exception:
+        return
+    if serve_port(arguments[1:]) != port:
+        return
+    try:
+        up = httpx.get(f"http://127.0.0.1:{port}/health", timeout=1).status_code == 200
+    except httpx.HTTPError:
+        up = False
+    if up:
+        print(
+            f"splash: warning: Splash GUI is serving on port {port}; this server will fail "
+            "to bind it. Use --port, or `splash load` to serve through Splash GUI.",
+            file=sys.stderr,
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments and arguments[0] not in (*COMMANDS, "--help"):
@@ -288,6 +373,8 @@ def main(argv: list[str] | None = None) -> int:
         if not engine.cli:
             print("splash: " + str(engine.error), file=sys.stderr)
             return 127
+        if arguments[0] == "serve":
+            warn_if_port_taken(arguments)
         os.execv(str(engine.cli), [str(engine.cli), *arguments])  # noqa: S606
     split = arguments.index("--") if "--" in arguments else len(arguments)
     args = parser().parse_args(arguments[:split])
@@ -333,6 +420,8 @@ def main(argv: list[str] | None = None) -> int:
             data = client.request("GET", route)
             if args.json:
                 print(json.dumps(data, indent=2))
+            elif name in ("status", "ps"):
+                print_status(client, data, full=name == "status")
             elif name == "ls":
                 for model in data["models"]:
                     gib = model["size_bytes"] / 1024**3

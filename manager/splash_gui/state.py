@@ -85,6 +85,9 @@ class ManagerState:
     integrations: Any = None
     updates: Any = None
     macos: MacOS = field(default_factory=MacOS)
+    # The home directory whose desktop-app configs integrations edit (None: the
+    # user's real home). Tests point it at a throwaway directory.
+    user_home: Path | None = None
     # Called to stop the whole manager (POST /shutdown); the runner sets it.
     request_shutdown: Callable[[], None] | None = None
     started_at: float = field(default_factory=time.time)

@@ -19,6 +19,12 @@ def main() -> None:
         print(shlex.join([spec["client"], "--model", spec["model"], *spec["args"]]))
         print("# Splash creates only its dedicated profile/provider; defaults stay unchanged.")
         return
+    # As Splash's own launcher does (install/launcher.py coding_client): only
+    # OpenCode needs its major version, because OpenCode 2 reads configuration in
+    # a background service and needs `--standalone` to see the inline config.
+    client_version = (
+        clients.probe_major_version(path) if spec["client"] == "opencode" and path else None
+    )
     argv, env = clients.command(
         spec["client"],
         path or spec["client"],
@@ -27,14 +33,18 @@ def main() -> None:
         spec["context"],
         input_modalities=spec["modalities"],
         client_args=spec["args"],
+        client_version=client_version,
     )
     if spec["print"]:
         changed = {key: value for key, value in env.items() if os.environ.get(key) != value}
+        secret = os.environ.get("SPLASH_API_KEY")
         for key in sorted(changed):
             value = changed[key]
-            if any(secret in key for secret in ("TOKEN", "KEY")):
-                value = "${SPLASH_API_KEY}"
-            print("export " + key + "=" + shlex.quote(value))
+            if secret and value == secret:
+                # Never print the key itself; the shell expands the reference.
+                print("export " + key + '="${SPLASH_API_KEY}"')
+            else:
+                print("export " + key + "=" + shlex.quote(value))
         print(shlex.join(argv))
     else:
         os.execvpe(argv[0], argv, env)  # noqa: S606 — Splash builds the client argv, no shell

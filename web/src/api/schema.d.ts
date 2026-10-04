@@ -72,6 +72,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/system/brew/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Install Brew
+         * @description SPEC §10.2 step 1: Homebrew needs the user's password, so its official
+         *     installer runs in Terminal; the wizard then polls `GET /system/brew`.
+         */
+        post: operations["install_brew_api_admin_system_brew_install_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/engine/upgrade": {
         parameters: {
             query?: never;
@@ -324,6 +345,44 @@ export interface paths {
         put?: never;
         /** Dismiss */
         post: operations["dismiss_api_admin_alerts__alert_id__dismiss_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Jobs
+         * @description Background jobs since the manager started (verify, storage moves, imports,
+         *     engine install/upgrade), oldest first. Progress also streams as `job` events.
+         */
+        get: operations["jobs_api_admin_jobs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Job */
+        get: operations["job_api_admin_jobs__job_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -623,7 +682,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Catalog */
+        /**
+         * Catalog
+         * @description The curated list filled from the Hub (cached a day; `refresh=true` refetches).
+         */
         get: operations["catalog_api_admin_catalog_get"];
         put?: never;
         post?: never;
@@ -996,7 +1058,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Summary */
+        /**
+         * Summary
+         * @description Totals for the Status numbers band (`scope`) and the history Totals band
+         *     (the filters). With a scope other than `all`, the later of the scope's start
+         *     and `start` applies.
+         */
         get: operations["summary_api_admin_usage_summary_get"];
         put?: never;
         post?: never;
@@ -1013,7 +1080,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Timeseries */
+        /**
+         * Timeseries
+         * @description Points per bucket (tokens per day per model, requests over time) and, with
+         *     `view=heatmap`, the 7 × 24 local-time grid. `group` is an alias of `group_by`.
+         *     Without `start`, the window is the last 30 days.
+         */
         get: operations["timeseries_api_admin_usage_timeseries_get"];
         put?: never;
         post?: never;
@@ -1030,8 +1102,33 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Requests */
+        /**
+         * Requests
+         * @description The request log, newest first. Page with `page` (1-based, `offset` and
+         *     `total` give the row range) or with `cursor` (`next_cursor` of the last page).
+         */
         get: operations["requests_api_admin_usage_requests_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/usage/facets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Facets
+         * @description Distinct models, endpoints, clients and profiles in range (the filters' options).
+         *     Takes the same filters; pass only `start`/`end` for every option in the range.
+         */
+        get: operations["facets_api_admin_usage_facets_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1856,6 +1953,8 @@ export interface components {
             recommended: boolean;
             /** Variants */
             variants?: components["schemas"]["VariantOut"][] | null;
+            /** Recommended Variant */
+            recommended_variant?: string | null;
             /** Last Modified */
             last_modified?: string | null;
             /** Perf Note */
@@ -2651,6 +2750,12 @@ export interface components {
             log_tail?: string[];
             /** Command */
             command?: string | null;
+            /** Taken Back */
+            taken_back?: {
+                [key: string]: number;
+            } | null;
+            /** Persistent Cache */
+            persistent_cache?: boolean | null;
             engine: components["schemas"]["EngineDiscoveryInfo"];
         };
         /** EntriesRemoved */
@@ -2998,6 +3103,37 @@ export interface components {
             job_id: string;
             /** Kind */
             kind: string;
+        };
+        /** JobList */
+        JobList: {
+            /** Jobs */
+            jobs: components["schemas"]["JobView"][];
+        };
+        /**
+         * JobView
+         * @description A background job's current state and its last output lines (`GET /jobs/{id}`).
+         */
+        JobView: {
+            /** Job Id */
+            job_id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "verify" | "storage_move" | "import" | "engine_install" | "engine_upgrade";
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "running" | "done" | "failed";
+            /** Model */
+            model?: string | null;
+            /** Progress */
+            progress?: number | null;
+            /** Message */
+            message?: string | null;
+            /** Lines */
+            lines?: string[];
         };
         /** KvMetrics */
         KvMetrics: {
@@ -4211,6 +4347,39 @@ export interface components {
             client: string;
             /** Requests */
             requests: number;
+            /**
+             * Prompt Tokens
+             * @default 0
+             */
+            prompt_tokens: number;
+            /**
+             * Completion Tokens
+             * @default 0
+             */
+            completion_tokens: number;
+            /**
+             * Total Tokens
+             * @default 0
+             */
+            total_tokens: number;
+            /** Last Seen At */
+            last_seen_at?: string | null;
+        };
+        /**
+         * UsageFacets
+         * @description Distinct values among the rows in range: the history filters' options.
+         */
+        UsageFacets: {
+            /** Models */
+            models?: string[];
+            /** Endpoints */
+            endpoints?: string[];
+            /** Clients */
+            clients?: string[];
+            /** Profiles */
+            profiles?: string[];
+            /** Statuses */
+            statuses?: string[];
         };
         /** UsageModelSummary */
         UsageModelSummary: {
@@ -4240,6 +4409,11 @@ export interface components {
              * @default 0
              */
             errors: number;
+            /**
+             * Cancelled
+             * @default 0
+             */
+            cancelled: number;
             /** Prompt Tokens */
             prompt_tokens: number;
             /** Cached Tokens */
@@ -4294,6 +4468,18 @@ export interface components {
             rows: components["schemas"]["UsageRow"][];
             /** Next Cursor */
             next_cursor?: string | null;
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+            /** Offset */
+            offset?: number | null;
+            /**
+             * Limit
+             * @default 100
+             */
+            limit: number;
         };
         /** UsageSummary */
         UsageSummary: {
@@ -4304,12 +4490,28 @@ export interface components {
             scope: "all" | "session" | "today";
             /** Since */
             since?: string | null;
+            /** Start */
+            start?: string | null;
+            /** End */
+            end?: string | null;
             /** Requests */
             requests: number;
             /** Completed */
             completed: number;
             /** Failed */
             failed: number;
+            /**
+             * Cancelled
+             * @default 0
+             */
+            cancelled: number;
+            /**
+             * Duration Ms
+             * @default 0
+             */
+            duration_ms: number;
+            /** Decode Tps Avg */
+            decode_tps_avg?: number | null;
             /** Prompt Tokens */
             prompt_tokens: number;
             /** Cached Tokens */
@@ -4349,6 +4551,8 @@ export interface components {
             points: components["schemas"]["UsagePoint"][];
             /** Heatmap */
             heatmap?: number[][] | null;
+            /** Heatmap Tokens */
+            heatmap_tokens?: number[][] | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -4666,6 +4870,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BrewInfo"];
+                };
+            };
+        };
+    };
+    install_brew_api_admin_system_brew_install_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OpenTerminalResult"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -5238,6 +5480,66 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    jobs_api_admin_jobs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobList"];
+                };
+            };
+        };
+    };
+    job_api_admin_jobs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobView"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5899,7 +6201,9 @@ export interface operations {
     };
     catalog_api_admin_catalog_get: {
         parameters: {
-            query?: never;
+            query?: {
+                refresh?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -5931,6 +6235,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
             /** @description Service Unavailable */
@@ -7219,6 +7532,14 @@ export interface operations {
             query?: {
                 scope?: "all" | "session" | "today";
                 model?: string | null;
+                endpoint?: string | null;
+                status?: string | null;
+                client?: string | null;
+                start?: string | null;
+                end?: string | null;
+                from?: string | null;
+                to?: string | null;
+                request_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -7250,11 +7571,18 @@ export interface operations {
         parameters: {
             query?: {
                 bucket?: "minute" | "hour" | "day";
-                group_by?: "none" | "model" | "client" | "endpoint";
+                group_by?: ("none" | "model" | "client" | "endpoint") | null;
+                group?: ("none" | "model" | "client" | "endpoint") | null;
+                view?: "series" | "heatmap";
+                model?: string | null;
+                endpoint?: string | null;
+                status?: string | null;
+                client?: string | null;
                 start?: string | null;
                 end?: string | null;
-                model?: string | null;
-                view?: "series" | "heatmap";
+                from?: string | null;
+                to?: string | null;
+                request_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -7285,14 +7613,18 @@ export interface operations {
     requests_api_admin_usage_requests_get: {
         parameters: {
             query?: {
+                limit?: number;
+                cursor?: string | null;
+                page?: number | null;
                 model?: string | null;
                 endpoint?: string | null;
                 status?: string | null;
                 client?: string | null;
                 start?: string | null;
                 end?: string | null;
-                limit?: number;
-                cursor?: string | null;
+                from?: string | null;
+                to?: string | null;
+                request_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -7320,6 +7652,45 @@ export interface operations {
             };
         };
     };
+    facets_api_admin_usage_facets_get: {
+        parameters: {
+            query?: {
+                model?: string | null;
+                endpoint?: string | null;
+                status?: string | null;
+                client?: string | null;
+                start?: string | null;
+                end?: string | null;
+                from?: string | null;
+                to?: string | null;
+                request_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageFacets"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     export_csv_api_admin_usage_export_csv_get: {
         parameters: {
             query?: {
@@ -7329,6 +7700,9 @@ export interface operations {
                 client?: string | null;
                 start?: string | null;
                 end?: string | null;
+                from?: string | null;
+                to?: string | null;
+                request_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -8261,6 +8635,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DataClearResult"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Validation Error */

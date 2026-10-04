@@ -301,6 +301,8 @@ class Supervisor:
             notices=list(self.notices),
             log_tail=list(self.log_tail) if self.state in ("starting", "failed", "crashed") else [],
             command=self._run.spec.display() if self._run else None,
+            taken_back=dict(self.taken_back) if self.taken_back is not None else None,
+            persistent_cache=st.boolean(status, "disk.persistent") if status else None,
             engine=EngineDiscoveryInfo.model_validate(engine.as_dict()),
         )
 
@@ -395,6 +397,10 @@ class Supervisor:
                 "model_not_installed",
                 details={"installed": sorted(installed)},
             )
+        jobs = getattr(self.app, "jobs", None)
+        if jobs is not None and (jobs.running("storage_move") or jobs.running("import")):
+            # The models or cache directory is being moved under the engine's feet.
+            raise ApiError(409, "Wait for the storage operation to finish", "storage_busy")
         engine = await asyncio.to_thread(self.app.engine)
         if not engine.found or engine.cli is None:
             raise ApiError(503, engine.error or "Splash is not installed", "engine_not_found")

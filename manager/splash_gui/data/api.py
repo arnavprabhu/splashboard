@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
+from ..errors import ApiError, error_responses
 from ..logs.api import clear_logs, delete_trace, traces
 from ..models.layout import directory_size
 from ..schemas import DataClearRequest, DataClearResult, DataSize, DataSizes
@@ -17,13 +19,38 @@ router = APIRouter()
 State = Annotated[ManagerState, Depends(get_state)]
 
 
+def _cache_bytes(cache: Path) -> int:
+    """The persistent KV cache: everything under the cache directory except the
+    session-only `tmp/` (SPEC §5), symlinks counted as links."""
+    if not cache.is_dir():
+        return 0
+    total = 0
+    for path in cache.iterdir():
+        if path.name == "tmp":
+            continue
+        try:
+            total += (
+                directory_size(path)
+                if path.is_dir() and not path.is_symlink()
+                else path.lstat().st_size
+            )
+        except OSError:
+            continue
+    return total
+
+
 @router.get("/data/sizes", response_model=DataSizes)
 def sizes(state: State) -> DataSizes:
-    cache = state.settings.cache_dir()
+    trace_list = traces(state).traces
     return DataSizes(
         targets=[
             DataSize(
-                target="chats", label="Chat history", bytes=directory_size(state.paths.chats_dir)
+                target="chats",
+                label="Chat history",
+                bytes=directory_size(state.paths.chats_dir),
+                items=sum(1 for _ in state.paths.chats_dir.glob("*.json"))
+                if state.paths.chats_dir.is_dir()
+                else 0,
             ),
             DataSize(
                 target="usage",
@@ -35,18 +62,13 @@ def sizes(state: State) -> DataSizes:
             DataSize(
                 target="traces",
                 label="Crash traces",
-                bytes=sum(t.size_bytes for t in traces(state).traces),
+                bytes=sum(t.size_bytes for t in trace_list),
+                items=len(trace_list),
             ),
             DataSize(
                 target="kv_cache",
                 label="Persistent KV cache",
-                bytes=sum(
-                    directory_size(p) if p.is_dir() else p.stat().st_size
-                    for p in cache.iterdir()
-                    if p.name != "tmp"
-                )
-                if cache.exists()
-                else 0,
+                bytes=_cache_bytes(state.settings.cache_dir()),
             ),
             DataSize(
                 target="responses",
@@ -61,9 +83,13 @@ def sizes(state: State) -> DataSizes:
     )
 
 
-@router.post("/data/clear", response_model=DataClearResult)
+@router.post("/data/clear", response_model=DataClearResult, responses=error_responses(409))
 async def clear(state: State, body: DataClearRequest) -> DataClearResult:
-    before = next(t.bytes or 0 for t in sizes(state).targets if t.target == body.target)
+    before = (
+        next(t.bytes or 0 for t in sizes(state).targets if t.target == body.target)
+        if body.target != "models"
+        else 0
+    )
     stopped = restarted = False
     if body.target == "chats":
         state.chats.delete_all()
@@ -90,9 +116,14 @@ async def clear(state: State, body: DataClearRequest) -> DataClearResult:
             await state.supervisor.restart(force=True)
             restarted = True
     elif body.target == "models":
-        for model in list(state.models.inventory().models):
-            result = await state.models.delete(model.id, confirm_active=True)
-            stopped |= result.engine_stopped
+        # Deleting every model is done in the Models manager with everything
+        # selected (SPEC §10.9), where reference counting and the active-model
+        # confirmation apply per model (docs/api.md §12).
+        raise ApiError(
+            409,
+            "Delete models from the Models manager (select all, then Delete)",
+            "use_models_manager",
+        )
     after = next(t.bytes or 0 for t in sizes(state).targets if t.target == body.target)
     return DataClearResult(
         target=body.target,

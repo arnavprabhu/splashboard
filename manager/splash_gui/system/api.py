@@ -20,6 +20,7 @@ from ..schemas import (
     EngineDiscoveryInfo,
     JobAccepted,
     OkResponse,
+    OpenTerminalResult,
     RevealRequest,
     SystemInfo,
     UpdateInfo,
@@ -74,6 +75,26 @@ def get_brew(state: State) -> BrewInfo:
     )
 
 
+# The official installer command from https://brew.sh (checked 2026-10-04).
+BREW_INSTALL = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+
+
+@router.post(
+    "/system/brew/install",
+    response_model=OpenTerminalResult,
+    responses=error_responses(409, 503),
+)
+def install_brew(state: State) -> OpenTerminalResult:
+    """SPEC §10.2 step 1: Homebrew needs the user's password, so its official
+    installer runs in Terminal; the wizard then polls `GET /system/brew`."""
+    if get_brew(state).installed:
+        raise ApiError(409, "Homebrew is already installed", "brew_installed")
+    result = state.macos.open_in_terminal(BREW_INSTALL)
+    if result.returncode:
+        raise ApiError(503, result.stderr or "Could not open Terminal", "terminal_failed")
+    return OpenTerminalResult(ok=True, command=BREW_INSTALL)
+
+
 @router.post(
     "/engine/upgrade", response_model=JobAccepted, status_code=202, responses=error_responses(409)
 )
@@ -111,9 +132,21 @@ def doctor(state: State) -> DoctorReport:
         DoctorCheck(
             id="engine",
             label="Splash engine",
-            status="ok" if engine.found else "fail",
-            message=engine.version or "Splash is not installed",
-            fix=None if engine.found else "brew install incoai/tap/splash",
+            status="fail"
+            if not engine.found or engine.support == "too_old"
+            else "warn"
+            if engine.support in ("untested", "unknown")
+            else "ok",
+            message=(
+                f"Splash {engine.version} ({engine.source}); Splash GUI supports >=1.2.0 <1.3.0"
+                if engine.found
+                else engine.error or "Splash is not installed"
+            ),
+            fix=None
+            if engine.found and engine.support == "supported"
+            else "brew upgrade incoai/tap/splash"
+            if engine.found
+            else "brew install incoai/tap/splash",
         ),
         DoctorCheck(
             id="brew",
@@ -154,7 +187,75 @@ def doctor(state: State) -> DoctorReport:
             fix="Remove the splash function or alias" if hidden else None,
         )
     )
+    checks.extend(_more_checks(state))
     return DoctorReport(ok=all(c.status != "fail" for c in checks), checks=checks)
+
+
+def _more_checks(state: ManagerState) -> list[DoctorCheck]:
+    """The rest of SPEC §12.2 `splash doctor`: the shim's place on PATH, ports,
+    the Hugging Face token and leftover integration state."""
+    from ..cli import install as shim
+    from ..secrets import SecretName, SecretsError
+
+    checks = []
+    first = shim.on_path(state.paths.bin_dir)
+    checks.append(
+        DoctorCheck(
+            id="shim",
+            label="splash CLI shim",
+            status="ok" if first else "warn",
+            message=f"{state.paths.shim} comes first on PATH"
+            if first
+            else f"{state.paths.bin_dir} is not first on PATH, so `splash` runs the engine CLI",
+            fix=None if first else "Add it in Settings → About (CLI), then open a new terminal",
+        )
+    )
+    g = state.settings.current.global_
+    bound = state.bound
+    checks.append(
+        DoctorCheck(
+            id="ports",
+            label="Ports",
+            status="ok",
+            message=(
+                f"Manager on {bound[0]}:{bound[1]}" if bound else f"Manager port {g.server.port}"
+            )
+            + f"; Claude Desktop gateway port {g.integrations.claude_desktop.port}",
+        )
+    )
+    try:
+        override = bool(state.secrets.get(SecretName.HF_TOKEN))
+    except SecretsError:
+        override = False
+    from ..models.hf import login_token
+
+    source = "Keychain override" if override else "hf login / HF_TOKEN" if login_token() else None
+    checks.append(
+        DoctorCheck(
+            id="hf_token",
+            label="Hugging Face token",
+            status="ok" if source else "warn",
+            message=f"Using the {source}" if source else "No token: gated or private models fail",
+            fix=None
+            if source
+            else "Run `hf auth login`, or add a token in Settings → Hugging Face",
+        )
+    )
+    leftovers = sorted(getattr(state.integrations, "recovery", set()) or set())
+    checks.append(
+        DoctorCheck(
+            id="integrations",
+            label="Desktop integrations",
+            status="warn" if leftovers else "ok",
+            message="Connected before an unclean shutdown: " + ", ".join(leftovers)
+            if leftovers
+            else "No leftover integration state",
+            fix="Integrations → Restore now, or `splash launch <app> --restore`"
+            if leftovers
+            else None,
+        )
+    )
+    return checks
 
 
 @router.post("/system/reveal", response_model=OkResponse, responses=error_responses(400, 404, 503))

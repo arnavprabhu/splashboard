@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from .events.bus import EventBus
-from .schemas import JobAccepted, JobEvent
+from .schemas import JobAccepted, JobEvent, JobView
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +48,17 @@ class Job:
                 message=self.message,
                 line=line,
             ),
+        )
+
+    def view(self) -> JobView:
+        return JobView(
+            job_id=self.id,
+            kind=self.kind,
+            state=self.state,
+            model=self.model,
+            progress=self.progress,
+            message=self.message,
+            lines=list(self.lines),
         )
 
     def line(self, text: str) -> None:
@@ -110,6 +121,9 @@ class Jobs:
 
     def get(self, job_id: str) -> Job | None:
         return self._jobs.get(job_id)
+
+    def all(self) -> list[Job]:
+        return list(self._jobs.values())
 
     def running(self, kind: JobKind, model: str | None = None) -> Job | None:
         for job in self._jobs.values():

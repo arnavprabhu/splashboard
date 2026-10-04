@@ -17,7 +17,11 @@ const ROUTES = [
   '/admin/integrations',
   '/admin/logs',
   '/admin/logs/diagnostics',
+  '/admin/settings',
   '/admin/settings/cache',
+  '/admin/settings/about',
+  '/admin/chat/c1',
+  '/admin/does-not-exist',
   '/admin/welcome',
   '/admin/login',
   '/admin/_design',
@@ -114,7 +118,7 @@ test.describe('shell', () => {
     await page.setViewportSize({ width: 360, height: 780 });
     await page.goto('/admin/status/history');
     await expect(page.locator('.heat-cell').first()).toBeVisible();
-    await expect(page.locator('.table-scroll tbody tr')).toHaveCount(50);
+    await expect(page.locator('.history-log tbody tr')).toHaveCount(50);
     const overflow = await page.evaluate(() => {
       const style = document.createElement('style');
       style.textContent = 'html,body{overflow-x:visible !important}';

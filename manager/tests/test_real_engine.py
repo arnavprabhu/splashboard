@@ -286,3 +286,47 @@ def test_the_managers_search_and_card_agree_with_the_hub(tmp_path: Path) -> None
     assert info.files, "the variant table is built from these"
     assert any(name.endswith(".gguf") for name in info.files), sorted(info.files)[:8]
     assert info.license, "SPEC §9.1 shows the license from the model card"
+
+
+# --- SPEC §21 acceptance, through the manager's own API ---------------------------
+
+
+@needs_engine
+@needs_network
+def test_acceptance_search_verdicts_on_the_live_hub(
+    paths: Any, secrets: Any, web_dist: Path
+) -> None:
+    """HF search marks `mlx-community/Qwen3.8-27B-8bit` incompatible with the reason
+    and `unsloth/Qwen3.8-27B-GGUF` compatible with a recommended variant, using the
+    installed Splash and the live Hub (64 GB, the owner's Mac)."""
+    from fastapi.testclient import TestClient
+
+    from splash_gui.app import AppConfig, create_app
+
+    app = create_app(AppConfig(paths=paths, web_dist=web_dist, secrets=secrets))
+    app.state.manager.memory_bytes = lambda: 64 * 1024**3
+    with TestClient(app, client=("127.0.0.1", 5)) as client:
+        headers = {"Authorization": f"Bearer {app.state.manager.auth.cli_token()}"}
+        found = client.get(
+            "/api/admin/search", params={"q": "Qwen3.8-27B", "limit": 100}, headers=headers
+        )
+        assert found.status_code == 200, found.text
+        eight = client.get(
+            "/api/admin/inspect", params={"id": "mlx-community/Qwen3.8-27B-8bit"}, headers=headers
+        )
+        if eight.status_code == 404:
+            pytest.skip("mlx-community/Qwen3.8-27B-8bit is not on the Hub")
+        assert eight.status_code == 200, eight.text
+        body = eight.json()
+        assert body["compatible"] is False and body["badge"] == "incompatible"
+        assert body["reason"] and ("4-bit" in body["reason"] or "affine" in body["reason"])
+        response = client.get(
+            "/api/admin/inspect", params={"id": "unsloth/Qwen3.8-27B-GGUF"}, headers=headers
+        )
+        assert response.status_code == 200, response.text
+        gguf = response.json()
+        assert gguf["compatible"] is True and gguf["family"] == "Qwen3.8-27B", gguf
+        assert gguf["recommended_variant"], [v["name"] for v in gguf["variants"]]
+        for variant in gguf["variants"]:
+            if variant["name"] in ("UD-Q8_K_XL", "BF16"):
+                assert variant["loadable"] is False, variant

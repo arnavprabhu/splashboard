@@ -48,6 +48,11 @@ GGUF_27B = "prism-ml/Ternary-Bonsai-2-27B-gguf"
 GGUF_NO_VISION = "unsloth/Qwen3.6-35B-A3B-GGUF-textonly"
 MLX_8BIT = "mlx-community/Qwen3.6-35B-A3B-8bit"
 LEGACY = "incoai/Qwen3.6-35B-A3B-Splash"
+# The two repositories the SPEC §21 acceptance checklist searches for.
+ACCEPT_8BIT = "mlx-community/Qwen3.8-27B-8bit"
+ACCEPT_GGUF = "unsloth/Qwen3.8-27B-GGUF"
+
+_ROUTE_LOCK = threading.Lock()
 
 CARD = "# Fixture model\n\nA local stand-in, served by scripts/fake_splash/hub.py.\n"
 
@@ -114,7 +119,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = unquote(urlsplit(self.path).path)
         try:
-            self._route(path)
+            # The fake installer's selection code swaps sys.stdout and shares
+            # module state, so concurrent requests (the catalog fetches every
+            # repository at once) are answered one at a time.
+            with _ROUTE_LOCK:
+                self._route(path)
         except (ValueError, KeyError):
             self._json({"error": "Repository Not Found"}, 404)
 
@@ -200,7 +209,17 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def _catalog() -> list[str]:
-    return [MLX_35B, MLX_27B, GGUF_35B, GGUF_27B, GGUF_NO_VISION, MLX_8BIT, LEGACY]
+    return [
+        MLX_35B,
+        MLX_27B,
+        GGUF_35B,
+        GGUF_27B,
+        GGUF_NO_VISION,
+        MLX_8BIT,
+        LEGACY,
+        ACCEPT_8BIT,
+        ACCEPT_GGUF,
+    ]
 
 
 class FakeHub:

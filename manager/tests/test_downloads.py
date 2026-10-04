@@ -438,3 +438,16 @@ def test_a_draft_repo_is_downloaded_too(hub_harness):
     repos = {f["repo_id"] for f in done["files"]}
     assert MLX in repos
     assert "incoai/Qwen3.6-35B-A3B-DFlash2" in repos, repos
+
+
+def test_a_download_that_does_not_fit_on_disk_is_refused_up_front(hub_harness, monkeypatch):
+    """SPEC §9.4 disk check: remaining bytes plus a 2 GB margin, before queuing."""
+    import shutil
+
+    harness = hub_harness()
+    usage = shutil.disk_usage(harness.home)
+    monkeypatch.setattr(shutil, "disk_usage", lambda _path: usage._replace(free=10**9))
+    response = harness.client.post("/api/admin/downloads", json={"id": f"{GGUF}:UD-Q4_K_M"})
+    assert response.status_code == 507, response.text
+    assert response.json()["error"]["code"] == "disk_full"
+    assert harness.client.get("/api/admin/downloads").json()["items"] == []

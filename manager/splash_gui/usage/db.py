@@ -86,6 +86,12 @@ REQUEST_COLUMNS = (
 )
 
 
+# A request the client abandoned before the response finished (a closed stream or
+# connection). Stored as HTTP 499 with this error code; `status=cancelled` filters it.
+CANCELLED = "cancelled"
+CANCELLED_STATUS = 499
+
+
 def iso(dt: datetime | None = None) -> str:
     return (dt or datetime.now(UTC)).astimezone(UTC).isoformat(timespec="microseconds")
 
@@ -94,7 +100,7 @@ def iso(dt: datetime | None = None) -> str:
 class RequestFilter:
     model: str | None = None
     endpoint: str | None = None
-    status: str | None = None  # "200", "2xx", "4xx", "5xx"
+    status: str | None = None  # "200", "2xx", "4xx", "5xx", "cancelled"
     client: str | None = None
     start: str | None = None
     end: str | None = None
@@ -127,7 +133,10 @@ class RequestFilter:
             args.append(self.since_id)
         if self.status:
             text = self.status.strip().lower()
-            if len(text) == 3 and text.endswith("xx") and text[0].isdigit():
+            if text == "cancelled":
+                clauses.append("error_code = ?")
+                args.append(CANCELLED)
+            elif len(text) == 3 and text.endswith("xx") and text[0].isdigit():
                 low = int(text[0]) * 100
                 clauses.append("status >= ? AND status < ?")
                 args += [low, low + 100]
@@ -135,7 +144,9 @@ class RequestFilter:
                 clauses.append("status = ?")
                 args.append(int(text))
             else:
-                raise ValueError("status must be a code such as 404 or a class such as 5xx")
+                raise ValueError(
+                    "status must be a code such as 404, a class such as 5xx, or cancelled"
+                )
         return (" WHERE " + " AND ".join(clauses)) if clauses else "", args
 
 
@@ -256,9 +267,39 @@ class UsageDB:
             conn.execute("DELETE FROM minute_rollup")
         return count
 
-    def request_count(self) -> int:
-        row = self._one("SELECT COUNT(*) AS n FROM requests")
+    def request_count(self, flt: RequestFilter | None = None) -> int:
+        where, args = flt.where() if flt is not None else ("", [])
+        row = self._one(f"SELECT COUNT(*) AS n FROM requests{where}", args)
         return int(row["n"]) if row else 0
+
+    def requests_page(self, flt: RequestFilter, limit: int, offset: int) -> list[dict[str, Any]]:
+        """One page of the request log, newest first (`/usage/requests?page=`)."""
+        where, args = flt.where()
+        rows = self._all(
+            f"SELECT * FROM requests{where} ORDER BY id DESC LIMIT ? OFFSET ?",
+            [*args, limit, offset],
+        )
+        return [self._request_dict(r) for r in rows]
+
+    def facets(self, flt: RequestFilter) -> dict[str, list[str]]:
+        """Distinct models, endpoints, clients and profiles among the matching rows,
+        for the history filters' options."""
+        where, args = flt.where()
+        out: dict[str, list[str]] = {}
+        for column, key in (
+            ("model", "models"),
+            ("endpoint", "endpoints"),
+            ("client", "clients"),
+            ("profile", "profiles"),
+        ):
+            rows = self._all(
+                f"SELECT DISTINCT {column} AS v FROM requests{where}"
+                + (" AND" if where else " WHERE")
+                + f" {column} IS NOT NULL ORDER BY {column}",
+                args,
+            )
+            out[key] = [str(r["v"]) for r in rows]
+        return out
 
     def last_used(self) -> dict[str, str]:
         rows = self._all(
@@ -271,7 +312,13 @@ class UsageDB:
         agg = self._one(
             "SELECT COUNT(*) AS requests,"
             " SUM(CASE WHEN status < 400 THEN 1 ELSE 0 END) AS completed,"
-            " SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) AS failed,"
+            " SUM(CASE WHEN status >= 400 AND COALESCE(error_code,'') != 'cancelled'"
+            " THEN 1 ELSE 0 END) AS failed,"
+            " SUM(CASE WHEN error_code = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,"
+            " COALESCE(SUM(duration_ms),0) AS duration_ms,"
+            " SUM(CASE WHEN predicted_ms > 0 THEN completion_tokens END) AS decode_tokens_timed,"
+            " SUM(CASE WHEN completion_tokens IS NOT NULL AND predicted_ms > 0"
+            " THEN predicted_ms END) AS predicted_ms,"
             " COALESCE(SUM(prompt_tokens),0) AS prompt_tokens,"
             " COALESCE(SUM(cached_tokens),0) AS cached_tokens,"
             " COALESCE(SUM(completion_tokens),0) AS completion_tokens"
@@ -303,7 +350,12 @@ class UsageDB:
         clients = [
             dict(r)
             for r in self._all(
-                f"SELECT client, COUNT(*) AS requests FROM requests{where}"
+                "SELECT client, COUNT(*) AS requests,"
+                " COALESCE(SUM(prompt_tokens),0) AS prompt_tokens,"
+                " COALESCE(SUM(completion_tokens),0) AS completion_tokens,"
+                " COALESCE(SUM(prompt_tokens),0) + COALESCE(SUM(completion_tokens),0)"
+                " AS total_tokens, MAX(ts) AS last_seen_at"
+                f" FROM requests{where}"
                 + (" AND" if where else " WHERE")
                 + " client IS NOT NULL GROUP BY client ORDER BY requests DESC LIMIT 10",
                 args,
@@ -313,10 +365,20 @@ class UsageDB:
         prompt = int(data.get("prompt_tokens") or 0)
         cached = int(data.get("cached_tokens") or 0)
         completion = int(data.get("completion_tokens") or 0)
+        timed_tokens = data.get("decode_tokens_timed")
+        timed_ms = data.get("predicted_ms")
+        decode_tps = (
+            float(timed_tokens) * 1000.0 / float(timed_ms)
+            if timed_tokens and timed_ms and float(timed_ms) > 0
+            else None
+        )
         return {
             "requests": int(data.get("requests") or 0),
             "completed": int(data.get("completed") or 0),
             "failed": int(data.get("failed") or 0),
+            "cancelled": int(data.get("cancelled") or 0),
+            "duration_ms": float(data.get("duration_ms") or 0.0),
+            "decode_tps_avg": decode_tps,
             "prompt_tokens": prompt,
             "cached_tokens": cached,
             "completion_tokens": completion,

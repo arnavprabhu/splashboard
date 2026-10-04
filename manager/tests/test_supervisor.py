@@ -292,3 +292,138 @@ def test_status_poll_interval_follows_watchers(
     h = harness_factory()
     h.state.watchers = watchers
     assert h.sup.watching() is bool(watchers)
+
+
+def test_the_effective_command_line_is_in_the_engine_log(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """SPEC §21: every option set in Settings shows in Logs at engine start."""
+    h = harness_factory()
+    h.patch_settings(
+        {
+            "global": {
+                "serve": {
+                    "max_context": "96K",
+                    "kv_format": "bf16",
+                    "max_memory": "40G",
+                    "decode_share": 1.5,
+                    "max_request_size": "256M",
+                    "max_image_pixels": 1048576,
+                    "request_timeout": 600,
+                    "queue_size": 8,
+                    "default_reasoning_effort": "low",
+                }
+            },
+            "models": {
+                MODEL: {
+                    "serve": {
+                        "served_model_names": ["moe"],
+                        "announce_served_name": True,
+                        "language_only": True,
+                    }
+                }
+            },
+        }
+    )
+    view = h.load()
+    assert view["state"] == "ready", view
+    lines = h.client.get("/api/admin/logs/engine", params={"tail": 200}).json()["lines"]
+    start = next(line["text"] for line in lines if "engine session started" in line["text"])
+    for expected in (
+        f"--model {MODEL}",
+        "--no-webui",
+        "--host 127.0.0.1",
+        "--max-context 96K",
+        "--kv-format bf16",
+        "--max-memory 40G",
+        "--decode-share 1.5",
+        "--max-request-size 256M",
+        "--max-image-pixels 1048576",
+        "--request-timeout 600",
+        "--queue-size 8",
+        "--default-reasoning-effort low",
+        "--served-model-name moe",
+        "--announce-served-name",
+        "--language-only",
+        "SPLASH_API_KEY=••••••",
+        f"TMPDIR={h.home / 'cache' / 'tmp'}",
+    ):
+        assert expected in start, (expected, start)
+    assert "splash-internal-" not in start
+    # The engine accepted every flag (the fake validates with Splash's own serve_options.py).
+    argv = h.fake("GET", "/_fake/state")["argv"]
+    assert "--announce-served-name" in argv and "--language-only" in argv
+
+
+def test_persistent_cache_flags_tmpdir_and_restore(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """SPEC §5, §21: --persistent-cache needs --max-cache-disk, gets --cache-dir
+    ~/.splash/cache, and TMPDIR is ~/.splash/cache/tmp; a restart restores states."""
+    h = harness_factory()
+    bad = h.settings_document()
+    bad["global"]["serve"].update(max_cache_disk="0", persistent_cache=True)
+    refused = h.client.put("/api/admin/settings", json=bad)
+    assert refused.status_code == 422, refused.text
+    h.patch_settings({"global": {"serve": {"max_cache_disk": "4G", "persistent_cache": True}}})
+    view = h.load()
+    cache = h.home / "cache"
+    assert f"--max-cache-disk 4G --persistent-cache --cache-dir {cache}" in view["command"]
+    fake = h.fake("GET", "/_fake/state")
+    assert fake["env"]["TMPDIR"] == str(cache / "tmp")
+    assert (cache / "tmp").is_dir()
+    chat = h.client.post(
+        "/v1/chat/completions",
+        json={
+            "model": MODEL,
+            "messages": [{"role": "user", "content": "x " * 3000}],
+            "max_tokens": 4,
+        },
+    )
+    assert chat.status_code == 200, chat.text
+    assert h.client.get("/api/admin/engine/status").json()["disk"]["persistent"] is True
+    # The fake publishes the prefix just after the response; wait for it.
+    deadline = time.monotonic() + 5
+    while not h.fake("GET", "/_fake/state")["counters"]["publications"]:
+        assert time.monotonic() < deadline, "the fake never published a restore point"
+        time.sleep(0.02)
+    restarted = h.client.post("/api/admin/engine/restart")
+    assert restarted.status_code in (200, 202), restarted.text
+    view = h.wait_state("ready", timeout=30)
+    deadline = time.monotonic() + 5
+    while not (view.get("taken_back") or {}).get("states") and time.monotonic() < deadline:
+        time.sleep(0.1)
+        view = h.engine()
+    log = (h.home / "logs" / "engine.log").read_text()
+    assert view["taken_back"]["states"] > 0, (view["taken_back"], log[-3000:])
+    assert view["persistent_cache"] is True
+    assert any(p.is_dir() and p.name != "tmp" for p in cache.iterdir()), (
+        "files under ~/.splash/cache"
+    )
+
+
+def test_three_quick_kills_fail_with_alert_and_notification(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    h = harness_factory()
+    published: list[tuple[str, object]] = []
+    bus = h.state.events
+    real = bus.publish
+
+    def spy(event: str, data: object) -> None:
+        published.append((event, data))
+        real(event, data)
+
+    bus.publish = spy
+    h.load()
+    for _ in range(2):
+        h.fake("POST", "/_fake/crash", {"signal": "SIGKILL"})
+        h.wait_state("crashed", "starting", timeout=10)
+        h.wait_state("ready", timeout=20)
+    h.fake("POST", "/_fake/crash", {"signal": "SIGKILL"})
+    view = h.wait_state("failed", timeout=10)
+    assert view["error"]["code"] == "crash_loop"
+    notes = [d for e, d in published if e == "notification"]
+    assert any(getattr(n, "kind", None) == "crash_loop" for n in notes), notes
+    alerts = [d for e, d in published if e == "alert"]
+    assert any(getattr(a, "condition", None) == "crash_loop" for a in alerts)

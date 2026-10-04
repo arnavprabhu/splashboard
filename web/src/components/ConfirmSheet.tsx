@@ -44,7 +44,8 @@ export function ConfirmSheet({
   const [typed, setTyped] = useState('');
   const inputId = useId();
   useEffect(() => {
-    if (open) setTyped('');
+    // Clear on close, not on open: a reset after the sheet opens could wipe what was just typed.
+    if (!open) setTyped('');
   }, [open]);
   const typedOk = !typedWord || typed.trim().toUpperCase() === typedWord.toUpperCase();
   const canConfirm = typedOk && !busy && !disabled;

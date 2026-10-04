@@ -37,3 +37,160 @@ def test_usage_filters_pagination_and_csv(app: FastAPI, client: TestClient) -> N
     assert sum(p["completion_tokens"] for p in series["points"]) == 6
     assert client.delete("/api/admin/usage").json()["deleted"] == 3
     assert client.get("/api/admin/usage/summary").json()["requests"] == 0
+
+
+def _seed(db) -> None:
+    rows = [
+        # ts, model, endpoint, client, status, error, prompt, cached, out, predicted_ms
+        (
+            "2026-09-01T10:00:00+00:00",
+            "org/a",
+            "/v1/chat/completions",
+            "curl",
+            200,
+            None,
+            100,
+            40,
+            10,
+            100.0,
+        ),
+        (
+            "2026-09-02T11:00:00+00:00",
+            "org/a",
+            "/v1/messages",
+            "claude-code",
+            200,
+            None,
+            50,
+            0,
+            20,
+            200.0,
+        ),
+        (
+            "2026-09-03T12:00:00+00:00",
+            "org/b",
+            "/v1/chat/completions",
+            "curl",
+            503,
+            "engine_unavailable",
+            None,
+            None,
+            None,
+            None,
+        ),
+        (
+            "2026-09-04T13:00:00+00:00",
+            "org/b",
+            "/v1/responses",
+            "codex",
+            499,
+            "cancelled",
+            10,
+            0,
+            1,
+            None,
+        ),
+    ]
+    for ts, model, endpoint, client, status, error, p, c, o, pm in rows:
+        db.insert_request(
+            {
+                "ts": ts,
+                "model": model,
+                "profile": "no-think" if endpoint == "/v1/messages" else None,
+                "endpoint": endpoint,
+                "client": client,
+                "status": status,
+                "error_code": error,
+                "prompt_tokens": p,
+                "cached_tokens": c,
+                "completion_tokens": o,
+                "predicted_ms": pm,
+                "duration_ms": 1000.0,
+                "request_id": f"req_{ts[8:10]}",
+            }
+        )
+
+
+def test_summary_takes_every_history_filter(app: FastAPI, client: TestClient) -> None:
+    _seed(app.state.manager.usage)
+    every = client.get("/api/admin/usage/summary").json()
+    assert every["requests"] == 4 and every["failed"] == 1 and every["cancelled"] == 1
+    assert every["completed"] == 2
+    assert every["duration_ms"] == 4000.0
+    # 30 completion tokens over 300 ms of decode.
+    assert every["decode_tps_avg"] == 100.0
+    clients = {c["client"]: c for c in every["top_clients"]}
+    assert clients["curl"]["requests"] == 2 and clients["curl"]["total_tokens"] == 110
+    assert clients["curl"]["last_seen_at"].startswith("2026-09-03")
+    ranged = client.get(
+        "/api/admin/usage/summary", params={"start": "2026-09-02", "end": "2026-09-03T23:59:59Z"}
+    ).json()
+    assert ranged["requests"] == 2 and ranged["start"] == "2026-09-02"
+    aliased = client.get(
+        "/api/admin/usage/summary", params={"from": "2026-09-02", "to": "2026-09-02T23:59:59Z"}
+    ).json()
+    assert aliased["requests"] == 1
+    assert (
+        client.get("/api/admin/usage/summary", params={"endpoint": "/v1/messages"}).json()[
+            "requests"
+        ]
+        == 1
+    )
+    assert client.get("/api/admin/usage/summary", params={"client": "curl"}).json()["requests"] == 2
+    assert client.get("/api/admin/usage/summary", params={"status": "5xx"}).json()["requests"] == 1
+    assert (
+        client.get("/api/admin/usage/summary", params={"status": "cancelled"}).json()["requests"]
+        == 1
+    )
+    assert client.get("/api/admin/usage/summary", params={"start": "bad"}).status_code == 400
+
+
+def test_timeseries_filters_heatmap_tokens_and_group_alias(
+    app: FastAPI, client: TestClient
+) -> None:
+    _seed(app.state.manager.usage)
+    params = {"start": "2026-09-01", "end": "2026-09-05", "view": "heatmap", "group": "none"}
+    series = client.get("/api/admin/usage/timeseries", params=params).json()
+    assert series["group_by"] == "none"
+    assert [p["requests"] for p in series["points"]] == [1, 1, 1, 1]
+    assert sum(p["errors"] for p in series["points"]) == 1
+    assert sum(p["cancelled"] for p in series["points"]) == 1
+    assert sum(map(sum, series["heatmap_tokens"])) == 191
+    only_chat = client.get(
+        "/api/admin/usage/timeseries", params={**params, "endpoint": "/v1/chat/completions"}
+    ).json()
+    assert sum(p["requests"] for p in only_chat["points"]) == 2
+    by_client = client.get(
+        "/api/admin/usage/timeseries",
+        params={"start": "2026-09-01", "end": "2026-09-05", "group_by": "client"},
+    ).json()
+    assert {p["group"] for p in by_client["points"]} == {"curl", "claude-code", "codex"}
+
+
+def test_requests_page_total_offset_and_request_id(app: FastAPI, client: TestClient) -> None:
+    _seed(app.state.manager.usage)
+    first = client.get("/api/admin/usage/requests", params={"page": 1, "limit": 3}).json()
+    assert first["total"] == 4 and first["offset"] == 0 and first["limit"] == 3
+    assert len(first["rows"]) == 3 and first["rows"][0]["ts"].startswith("2026-09-04")
+    second = client.get("/api/admin/usage/requests", params={"page": 2, "limit": 3}).json()
+    assert second["offset"] == 3 and len(second["rows"]) == 1 and second["next_cursor"] is None
+    filtered = client.get("/api/admin/usage/requests", params={"page": 1, "client": "curl"}).json()
+    assert filtered["total"] == 2
+    one = client.get("/api/admin/usage/requests", params={"request_id": "req_02"}).json()
+    assert [r["endpoint"] for r in one["rows"]] == ["/v1/messages"]
+    assert one["rows"][0]["profile"] == "no-think"
+    both = client.get("/api/admin/usage/requests", params={"page": 1, "cursor": "5"})
+    assert both.status_code == 400
+    csv_text = client.get("/api/admin/usage/export.csv", params={"client": "codex"}).text
+    assert csv_text.count("\n") == 2  # header + one row
+
+
+def test_facets(app: FastAPI, client: TestClient) -> None:
+    _seed(app.state.manager.usage)
+    facets = client.get("/api/admin/usage/facets").json()
+    assert facets["models"] == ["org/a", "org/b"]
+    assert facets["clients"] == ["claude-code", "codex", "curl"]
+    assert "/v1/responses" in facets["endpoints"] and facets["profiles"] == ["no-think"]
+    assert facets["statuses"] == ["2xx", "4xx", "5xx", "cancelled"]
+    ranged = client.get("/api/admin/usage/facets", params={"start": "2026-09-03"}).json()
+    assert ranged["models"] == ["org/b"]

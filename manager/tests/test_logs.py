@@ -140,3 +140,22 @@ def test_sse_framing_and_ping() -> None:
     assert frames[1] == 'id: 1\nevent: hello\ndata: {"a":1}\n\n'
     assert ": ping\n\n" in frames
     assert frames[-1] == 'id: 2\nevent: line\ndata: {"text":"é"}\n\n'
+
+
+def test_trace_replay_streams_the_engine_tool(harness_factory: Any, tmp_path: Path) -> None:
+    """SPEC §10.8 Replay: `python -m server.crash_trace <trace>` from PKG, as SSE."""
+    h = harness_factory(installed=None)
+    directory = tmp_path / "crash"
+    directory.mkdir()
+    h.state.crash_trace_dir = directory
+    (directory / TRACE).write_text(json.dumps({"frames": ["alloc", "decode"]}))
+    with h.client.stream("POST", f"/api/admin/traces/{TRACE}/replay") as response:
+        assert response.status_code == 200
+        text = "".join(response.iter_text())
+    events = [line for line in text.splitlines() if line.startswith(("event:", "data:"))]
+    lines = [json.loads(e[5:])["text"] for e in events if e.startswith("data:") and '"text"' in e]
+    assert lines == ["frame 0: alloc", "frame 1: decode", "replayed 2 frames"]
+    assert "event: exit" in text and '"code": 0' in text.replace('"code":0', '"code": 0')
+    assert h.client.post("/api/admin/traces/nope.json/replay").status_code == 400
+    missing = "splash-crash-g9-20261003T100000.json"
+    assert h.client.post(f"/api/admin/traces/{missing}/replay").status_code == 404

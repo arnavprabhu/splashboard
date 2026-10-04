@@ -283,3 +283,68 @@ def test_engine_discovery_exposes_what_the_helper_needs(hub_harness):
     assert engine.found
     assert engine.python is not None and Path(engine.python).exists()
     assert engine.pkg is not None and Path(engine.pkg, "install", "upstream.py").exists()
+
+
+def test_acceptance_search_verdicts(hub_harness):
+    """SPEC §21: HF search marks `mlx-community/Qwen3.8-27B-8bit` incompatible with
+    the reason, and `unsloth/Qwen3.8-27B-GGUF` compatible with a recommended
+    variant (on the owner's 64 GB Mac)."""
+    harness = hub_harness()
+    harness.state.memory_bytes = lambda: 64 * 1024**3
+    found = harness.client.get("/api/admin/search", params={"q": "Qwen3.8-27B"}).json()
+    ids = {r["id"]: r for r in found["results"]}
+    assert "mlx-community/Qwen3.8-27B-8bit" in ids and "unsloth/Qwen3.8-27B-GGUF" in ids
+    assert ids["unsloth/Qwen3.8-27B-GGUF"]["format_guess"] == "gguf"
+
+    eight = inspect(harness, "mlx-community/Qwen3.8-27B-8bit")
+    assert eight["compatible"] is False and eight["badge"] == "incompatible"
+    assert eight["family"] in (None, "Qwen3.8-27B")
+    assert "4-bit" in eight["reason"], eight["reason"]
+
+    gguf = inspect(harness, "unsloth/Qwen3.8-27B-GGUF")
+    assert gguf["compatible"] is True and gguf["family"] == "Qwen3.8-27B"
+    assert gguf["recommended_variant"], gguf
+    picked = next(v for v in gguf["variants"] if v["recommended"])
+    assert picked["name"] == gguf["recommended_variant"]
+    assert picked["loadable"] is True and picked["fit"] == "fits"
+
+
+def test_variant_labels_resolve_with_splash_s_own_selector(tmp_path):
+    """A stray `imatrix_*.gguf` leaves the root files no shared model name, so
+    Splash's prefix rule names nothing; the label must still be the short
+    VARIANT that `install/upstream.py select_gguf` resolves (checked on the live
+    unsloth/Qwen3.8-27B-GGUF, 2026-10-04)."""
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    reference = Path(__file__).resolve().parents[2] / "splash"
+    pkg = reference if (reference / "install" / "upstream.py").exists() else None
+    if pkg is None:
+        pytest.skip("no Splash reference clone to resolve against")
+    helper = Path(__file__).resolve().parents[1] / "splash_gui" / "helpers"
+    script = (
+        "import json, sys\n"
+        f"sys.path.insert(0, {str(helper)!r})\n"
+        "from install import upstream\n"
+        "from inspect_model import variant_label\n"
+        "names = json.loads(sys.argv[1])\n"
+        "print(json.dumps([variant_label(sys.argv[2], n, names, upstream) for n in names]))\n"
+    )
+    names = [
+        "Qwen3.8-27B-Q4_0.gguf",
+        "Qwen3.8-27B-UD-Q4_K_M.gguf",
+        "Qwen3.8-27B-UD-Q4_K_XL.gguf",
+        "imatrix_unsloth.gguf",
+    ]
+    result = subprocess.run(
+        [sys.executable, "-c", script, json.dumps(names), "unsloth/Qwen3.8-27B-GGUF"],
+        env={"PYTHONPATH": str(pkg), "PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == ["Q4_0", "UD-Q4_K_M", "UD-Q4_K_XL", "imatrix_unsloth"]

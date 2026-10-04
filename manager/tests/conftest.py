@@ -35,6 +35,9 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("SPLASH_GUI_SECRETS", "memory")
     monkeypatch.setenv("SPLASH_GUI_FAKE_DATA", str(home / "fake-data"))
     monkeypatch.setenv("SPLASH_GUI_UPDATE_CHECK", "0")
+    # No real macOS notifications from tests: with no menu bar app connected, an
+    # alert would otherwise fall back to `osascript display notification`.
+    monkeypatch.setenv("SPLASH_GUI_OSASCRIPT", "0")
     monkeypatch.delenv("SPLASH_GUI_REAL_SPLASH", raising=False)
     monkeypatch.delenv("SPLASH_GUI_WEB_DIST", raising=False)
     # The developer's own `hf auth login` token must never be visible to a test

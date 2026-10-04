@@ -66,9 +66,9 @@ struct AboutView: View {
             row("Status", v?.statusSchemaVersion.map { "schema \($0)" } ?? Format.unknown)
 
             HStack(spacing: 12) {
-                SquareButton("Check for Updates") { model.openAdmin("/admin/settings#about") }
+                SquareButton("Check for Updates") { model.openAdmin("/admin/settings/about") }
                     .disabled(!running)
-                SquareButton("Upgrade Engine…") { model.openAdmin("/admin/settings#about") }
+                SquareButton("Upgrade Engine…") { model.openAdmin("/admin/settings/about") }
                     .disabled(!running)
             }
             .padding(.top, 20)
@@ -83,7 +83,7 @@ struct AboutView: View {
                 LinkText("Splash repository ↗") {
                     if let u = URL(string: "https://github.com/incoai/splash") { NSWorkspace.shared.open(u) }
                 }
-                LinkText("Licenses ↗") { model.openAdmin("/admin/settings#licenses") }
+                LinkText("Licenses ↗") { model.openAdmin("/admin/settings/about#licenses") }
             }
             .foregroundStyle(ink)
             .padding(.top, 10)

@@ -37,7 +37,7 @@ The app starts the manager from this checkout with `uv run --project manager spl
 | Lint and type checks | `make lint` |
 | Web only | `cd web && pnpm typecheck && pnpm test && pnpm build && pnpm size && pnpm exec playwright test` |
 | Regenerate the web API types from the manager's OpenAPI | `cd web && pnpm gen:api` |
-| Contract tests against a real Splash (downloads a small GGUF) | `make test-real` |
+| Contract tests against the installed Splash and the live Hub (reads configs and GGUF headers, never weights) | `make test-real` |
 
 ## Architecture
 ```

@@ -19,6 +19,9 @@ import type {
   SettingsSaveResult,
   SettingsSchema,
   SettingsValidation,
+  SystemInfo,
+  UpdateInfo,
+  Versions,
 } from '../../api/models';
 import type { SettingsDoc } from '../../api/types';
 
@@ -80,13 +83,19 @@ export const settingsApi = {
   dataSizes: (signal?: AbortSignal) => api.get<DataSizes>('/data/sizes', undefined, signal),
   clearData: (target: string) => api.post<DataClearResult>('/data/clear', { target }),
   traces: (signal?: AbortSignal) =>
-    api.get<{ enabled: boolean; directory: string; traces: Array<{ name: string; size_bytes: number }> }>('/traces', undefined, signal),
+    api.get<{ enabled: boolean; directory: string; traces: Array<{ name: string; size_bytes: number; modified_at?: string }> }>('/traces', undefined, signal),
   deleteTrace: (name: string) => api.del<void>(`/traces/${encodeURIComponent(name)}`),
 
-  restartEngine: () => api.post<unknown>('/engine/restart'),
+  /** `force` restarts with requests in flight (otherwise 409 model_switch_busy, docs/api.md changelog). */
+  restartEngine: (force = false) => api.post<unknown>(force ? '/engine/restart?force=true' : '/engine/restart'),
   stopEngine: () => api.post<unknown>('/engine/stop'),
   upgradeEngine: () => api.post<{ job_id: string; kind: string }>('/engine/upgrade'),
   doctor: (signal?: AbortSignal) => api.get<DoctorReport>('/doctor', undefined, signal),
+  versions: (signal?: AbortSignal) => api.get<Versions>('/versions', undefined, signal),
+  system: (signal?: AbortSignal) => api.get<SystemInfo>('/system', undefined, signal),
+  checkEngineUpdate: () => api.post<UpdateInfo>('/engine/check-update'),
+  /** Native Sparkle check through the menu bar app (docs/ui/05 §3.17; not in the manager yet). */
+  checkAppUpdate: () => api.post<unknown>('/app/check-updates'),
   reveal: (target: string, id: string | null = null) => api.post<unknown>('/system/reveal', { target, id }),
   moveStorage: (target: 'models' | 'cache', path: string) => api.post<unknown>('/storage/move', { target, path, move_files: true }),
 };

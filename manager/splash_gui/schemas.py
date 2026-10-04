@@ -188,6 +188,11 @@ class EngineView(ApiModel):
     notices: list[EngineNotice] = Field(default_factory=list)
     log_tail: list[str] = Field(default_factory=list)
     command: str | None = None
+    # What the persistent cache restored at this start (`/status.disk.taken_back`,
+    # or Splash's startup line), for "Restored at start: N states …" (SPEC §10.3).
+    # Keys: states, kv_blocks, bytes, left_behind. Null when not persistent/unknown.
+    taken_back: dict[str, int] | None = None
+    persistent_cache: bool | None = None
     engine: EngineDiscoveryInfo
 
 
@@ -369,6 +374,22 @@ class JobEvent(ApiModel):
     progress: float | None = None
     message: str | None = None
     line: str | None = None
+
+
+class JobView(ApiModel):
+    """A background job's current state and its last output lines (`GET /jobs/{id}`)."""
+
+    job_id: str
+    kind: Literal["verify", "storage_move", "import", "engine_install", "engine_upgrade"]
+    state: Literal["running", "done", "failed"]
+    model: str | None = None
+    progress: float | None = None
+    message: str | None = None
+    lines: list[str] = Field(default_factory=list)
+
+
+class JobList(ApiModel):
+    jobs: list[JobView]
 
 
 class AlertCleared(ApiModel):
@@ -838,6 +859,9 @@ class CatalogEntry(ApiModel):
     installed: bool = False
     recommended: bool = False
     variants: list[VariantOut] | None = None
+    # GGUF: the variant to download by default (the §8.6 pick for this Mac when
+    # this repository is it, else the largest ≤ Q4-class variant that fits).
+    recommended_variant: str | None = None
     last_modified: str | None = None
     perf_note: str | None = None
 
@@ -1096,6 +1120,21 @@ class UsageRow(ApiModel):
 class UsageRows(ApiModel):
     rows: list[UsageRow]
     next_cursor: str | None = None
+    # Rows matching the filters, and where this page starts (0-based), for the
+    # "1–50 of 1,284" range. `offset` is null for a cursor page.
+    total: int = 0
+    offset: int | None = None
+    limit: int = 100
+
+
+class UsageFacets(ApiModel):
+    """Distinct values among the rows in range: the history filters' options."""
+
+    models: list[str] = Field(default_factory=list)
+    endpoints: list[str] = Field(default_factory=list)
+    clients: list[str] = Field(default_factory=list)
+    profiles: list[str] = Field(default_factory=list)
+    statuses: list[str] = Field(default_factory=lambda: ["2xx", "4xx", "5xx", "cancelled"])
 
 
 class UsageModelSummary(ApiModel):
@@ -1110,14 +1149,24 @@ class UsageModelSummary(ApiModel):
 class UsageClientSummary(ApiModel):
     client: str
     requests: int
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    last_seen_at: str | None = None
 
 
 class UsageSummary(ApiModel):
     scope: Literal["all", "session", "today"]
     since: str | None = None
+    start: str | None = None
+    end: str | None = None
     requests: int
     completed: int
     failed: int
+    cancelled: int = 0
+    duration_ms: float = 0.0
+    # completion tokens / predicted_ms over the rows that report timings.
+    decode_tps_avg: float | None = None
     prompt_tokens: int
     cached_tokens: int
     completion_tokens: int
@@ -1134,6 +1183,7 @@ class UsagePoint(ApiModel):
     group: str | None = None
     requests: int
     errors: int = 0
+    cancelled: int = 0
     prompt_tokens: int
     cached_tokens: int
     completion_tokens: int
@@ -1147,6 +1197,8 @@ class UsageTimeseries(ApiModel):
     points: list[UsagePoint]
     # 7 × 24 request counts (Monday first, local time) when `view=heatmap`.
     heatmap: list[list[int]] | None = None
+    # The same grid in tokens (prompt + completion), for the cell tooltip.
+    heatmap_tokens: list[list[int]] | None = None
 
 
 # Benchmark ------------------------------------------------------------------------

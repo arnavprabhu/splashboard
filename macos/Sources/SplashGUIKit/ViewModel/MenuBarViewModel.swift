@@ -507,7 +507,7 @@ public final class MenuBarViewModel {
             await call { try await $0.openTerminal(client: client) }
         case .checkForUpdates:
             // Sparkle is deferred (D30): show the About section of Settings instead.
-            if manager == .running { openAdmin("/admin/settings#about") } else { host?.showAbout() }
+            if manager == .running { openAdmin("/admin/settings/about") } else { host?.showAbout() }
         case .about:
             host?.showAbout()
         case .continueSetup:

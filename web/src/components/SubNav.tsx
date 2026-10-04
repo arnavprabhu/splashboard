@@ -1,11 +1,12 @@
 import { Link, useLocation } from 'wouter-preact';
 import { isActive, type NavItem } from './NavBand';
+import { t } from '../strings/en';
 
 export const TOOLS_TABS: readonly NavItem[] = [
-  { href: '/tools/playground', label: 'Playground' },
-  { href: '/tools/tokenizer', label: 'Tokenizer' },
-  { href: '/tools/judgments', label: 'Judgments' },
-  { href: '/tools/benchmark', label: 'Benchmark' },
+  { href: '/tools/playground', label: t('nav.tab.playground') },
+  { href: '/tools/tokenizer', label: t('nav.tab.tokenizer') },
+  { href: '/tools/judgments', label: t('nav.tab.judgments') },
+  { href: '/tools/benchmark', label: t('nav.tab.benchmark') },
 ];
 
 export interface SubNavProps {

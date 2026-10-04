@@ -65,6 +65,8 @@ export interface MessageMeta {
   response_format?: Record<string, unknown> | null;
   /** Tool messages: where the result came from. */
   tool?: { source: ToolSource; server?: string | null; duration_ms?: number | null; is_error?: boolean; auto?: boolean; name?: string };
+  /** Fields the proxy injected (sampling defaults / profile), from the usage row (G4). */
+  injected?: Record<string, unknown> | null;
   /** User messages: page counts per attachment (ChatAttachment has no pages field). */
   attachment_pages?: Array<number | null>;
 }

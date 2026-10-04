@@ -28,6 +28,7 @@ pkg/                     laid out like $(brew --prefix)/opt/splash (bin/) and it
     ├── fake_engine.py   memory plan, startup lines, generation timing, counters, /status
     ├── fake_shapes.py   response builders copied from api_shapes.py
     ├── fake_text.py     deterministic tokenizer, ChatML template, reply text
+    ├── crash_trace.py   `python -m server.crash_trace <trace>`: prints the trace's frames
     └── serve_options.py origins.py http_security.py errors.py images.py
         metrics.py latency.py json_codec.py   verbatim copies (a test checks this)
 harness.py               pytest helpers: FakeSplash, run_installer, fake_env, free_port

@@ -135,6 +135,8 @@ export const chatStrings = {
   'chat.meta.tip.tokps': 'timings.predicted_per_second = {v}',
   'chat.meta.tip.finish': 'finish_reason = {v}',
   'chat.meta.tip.profile': 'Profile {v} (model {id}:{v})',
+  'chat.meta.injected.one': '+{n} default',
+  'chat.meta.injected.other': '+{n} defaults',
 
   // thinking (07 §5.4)
   'chat.thinking.label': 'Thinking',
@@ -399,6 +401,7 @@ export const chatStrings = {
 
   'chat.action.retry': 'Retry',
   'chat.action.retry_in': 'Retry in {s} s',
+  'chat.action.switch_idle': 'Switch when idle',
   'chat.action.load': 'Load model',
   'chat.action.restart': 'Restart engine',
   'chat.action.logs': 'Open logs',

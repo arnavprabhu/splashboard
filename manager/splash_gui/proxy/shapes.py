@@ -14,6 +14,9 @@ leaves it out or sets it to null; it never overrides an explicit value):
 | thinking               | ✗                     | ✗           | ✗                  | thinking |
 | chat_template_kwargs   | ✓                     | ✗           | ✗                  | ✗        |
 | ignore_eos             | ✓                     | ✓           | ✗                  | ✗        |
+
+`stop` and `ignore_eos` are skipped for a request with tools or a structured
+format, which Splash would refuse with them.
 """
 
 from __future__ import annotations
@@ -59,6 +62,26 @@ def _missing(body: dict[str, Any], name: str) -> bool:
     return body.get(name) is None
 
 
+# Splash refuses these next to tools or structured output ("stop cannot be combined
+# with tools or structured output", "ignore_eos cannot be …"; server/frontend.py
+# around the `constrained` check), so a default never adds them to such a request.
+UNCONSTRAINED_ONLY = ("stop", "ignore_eos")
+
+
+def constrained(shape: Shape, body: dict[str, Any]) -> bool:
+    """Whether the request generates under a grammar: tools or a structured format."""
+    if body.get("tools"):
+        return True
+    if shape == "responses":
+        text = body.get("text")
+        fmt = text.get("format") if isinstance(text, dict) else None
+    else:
+        fmt = body.get("response_format")
+    if isinstance(fmt, dict):
+        return fmt.get("type") not in (None, "text")
+    return False
+
+
 def inject(
     shape: Shape, body: dict[str, Any], overlay: dict[str, Any]
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -67,7 +90,10 @@ def inject(
         return body, {}
     out = dict(body)
     injected: dict[str, Any] = {}
+    grammar = constrained(shape, body)
     for name in DIRECT_FIELDS[shape]:
+        if grammar and name in UNCONSTRAINED_ONLY:
+            continue
         if name in overlay and overlay[name] is not None and _missing(out, name):
             out[name] = overlay[name]
             injected[name] = overlay[name]
@@ -109,6 +135,7 @@ class UsageCapture:
     predicted_ms: float | None = None
     ttft_ms: float | None = None
     error_code: str | None = None
+    error_message: str | None = None
     finish_reason: str | None = None
     _buffer: bytearray = field(default_factory=bytearray)
     _body: bytearray = field(default_factory=bytearray)
@@ -169,6 +196,8 @@ class UsageCapture:
         error = data.get("error")
         if isinstance(error, dict) and data.get("type") != "response.failed":
             self.error_code = str(error.get("code") or error.get("type") or "error")
+            if isinstance(error.get("message"), str):
+                self.error_message = error["message"][:500]
         kind = data.get("type")
         if self.shape == "count_tokens" and isinstance(data.get("input_tokens"), int):
             self.prompt_tokens = int(data["input_tokens"])
@@ -203,9 +232,17 @@ class UsageCapture:
         if isinstance(timings, dict):
             self.prompt_ms = _f(timings.get("prompt_ms"), self.prompt_ms)
             self.predicted_ms = _f(timings.get("predicted_ms"), self.predicted_ms)
+            # llama-server-style timings (server/metrics.py) carry the token counts
+            # even when the client did not ask for `stream_options.include_usage`.
             cache_n = timings.get("cache_n")
             if isinstance(cache_n, int) and self.cached_tokens is None:
                 self.cached_tokens = cache_n
+            prompt_n = timings.get("prompt_n")
+            if isinstance(prompt_n, int) and self.prompt_tokens is None:
+                self.prompt_tokens = prompt_n
+            predicted_n = timings.get("predicted_n")
+            if isinstance(predicted_n, int) and self.completion_tokens is None:
+                self.completion_tokens = predicted_n
         usage = data.get("usage")
         if isinstance(usage, dict):
             self.prompt_tokens = _i(usage.get("prompt_tokens"), self.prompt_tokens)
@@ -227,6 +264,10 @@ class UsageCapture:
             error = response.get("error")
             if isinstance(error, dict):
                 self.error_code = str(error.get("code") or "response_failed")
+        if final and isinstance(response, dict) and response.get("output"):
+            # A non-streamed response: its first token arrived with the whole body,
+            # as for Chat and Messages.
+            self._first_token()
         if isinstance(response, dict):
             usage = response.get("usage")
             if isinstance(usage, dict):

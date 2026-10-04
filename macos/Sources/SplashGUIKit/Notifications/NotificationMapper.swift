@@ -56,10 +56,10 @@ public enum NotificationMapper {
         case "download_done": return "/admin/models"
         case "download_failed": return "/admin/models/downloader"
         case "engine_failed", "crash_loop": return "/admin/logs"
-        case "update_available": return "/admin/settings#about"
+        case "update_available": return "/admin/settings/about"
         case "unclean_integration_shutdown": return "/admin/integrations"
-        case "capacity_exhausted", "resource_timeout": return "/admin/settings#memory_context"
-        case "queue_full": return "/admin/settings#requests_limits"
+        case "capacity_exhausted", "resource_timeout": return "/admin/settings/memory"
+        case "queue_full": return "/admin/settings/requests"
         default: return "/admin/status"
         }
     }

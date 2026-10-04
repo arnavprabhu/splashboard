@@ -36,7 +36,7 @@ from ..auth.guard import allowed_hosts, bearer, is_loopback_client, is_same_orig
 from ..secrets import SecretName, SecretsError
 from ..settings import parsers as p
 from ..settings.effective import effective_profiles, sampling_defaults
-from ..usage.db import iso
+from ..usage.db import CANCELLED, CANCELLED_STATUS, iso
 from .shapes import SHAPES, Shape, UsageCapture, guess_client, inject
 
 if TYPE_CHECKING:
@@ -250,8 +250,12 @@ class ProxyPipeline:
 
     def _authenticate(self, request: Request) -> None:
         headers = request.headers
-        supplied: list[str | None] = list(headers.getlist("x-api-key"))
-        for value in headers.getlist("authorization"):
+        # Splash's rule (server/http_security.py authenticate): every credential given
+        # must be the key, and each header may appear only once.
+        authorization = headers.getlist("authorization")
+        api_keys = headers.getlist("x-api-key")
+        supplied: list[str | None] = list(api_keys)
+        for value in authorization:
             scheme, sep, token = value.partition(" ")
             supplied.append(token.strip() if sep and scheme.lower() == "bearer" else None)
         try:
@@ -261,6 +265,8 @@ class ProxyPipeline:
         if (
             key
             and supplied
+            and len(authorization) <= 1
+            and len(api_keys) <= 1
             and all(
                 v is not None and hmac.compare_digest(v.encode(), key.encode()) for v in supplied
             )
@@ -608,10 +614,17 @@ class ProxyPipeline:
         capture.stream = "text/event-stream" in content_type
 
         async def relay() -> AsyncIterator[bytes]:
+            outcome = "cancelled"  # until the upstream body has been read to its end
             try:
                 async for chunk in upstream.aiter_raw():
                     capture.feed(chunk)
                     yield chunk
+                outcome = "complete"
+            except httpx.HTTPError as error:
+                # The engine dropped the connection mid-response (a crash or a kill).
+                outcome = "engine_disconnected"
+                log.warning("engine connection lost mid-response: %s", error)
+                raise  # passed through as a disconnect, as Splash produced it (§7.2)
             finally:
                 await upstream.aclose()
                 done()
@@ -619,6 +632,11 @@ class ProxyPipeline:
                 if record:
                     status = upstream.status_code
                     code = capture.error_code
+                    if outcome == "cancelled":
+                        # The client went away first (SPEC §10.3 "cancelled" status).
+                        status, code = CANCELLED_STATUS, CANCELLED
+                    elif outcome == "engine_disconnected" and code is None:
+                        code = "engine_disconnected"
                     self._record(
                         request,
                         route,
@@ -633,7 +651,7 @@ class ProxyPipeline:
                         request_id,
                         client_label,
                     )
-                    self._alerts(status, code)
+                    self._alerts(status, code, capture.error_message)
 
         if capture.stream:
             out_headers.setdefault("cache-control", "no-cache")
@@ -758,10 +776,16 @@ class ProxyPipeline:
             {"request_id": request_id, "status": status, "model": route.model if route else None},
         )
 
-    def _alerts(self, status: int, code: str | None) -> None:
+    def _alerts(self, status: int, code: str | None, message: str | None = None) -> None:
         alerts = self.state.alerts
-        if code == "frontend_overloaded" or (
-            status in (503, 529) and code == "frontend_overloaded"
+        # Splash uses `frontend_overloaded` for several capacities. The --queue-size
+        # limit is the HTTP request gate ("frontend request capacity is exhausted",
+        # server/server.py) and its native twin ("request queue is full",
+        # server/backend.py); body, preparation and image capacity are not (SPEC
+        # §16.3). The message also identifies it on /v1/messages, which has no code.
+        text = message or ""
+        if status in (503, 529) and (
+            "frontend request capacity is exhausted" in text or "request queue is full" in text
         ):
             size = self.state.settings.current.global_.serve.queue_size
             alerts.raise_alert(

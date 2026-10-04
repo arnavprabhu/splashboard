@@ -41,8 +41,9 @@ def list_models(state: State) -> InstalledModels:
 
 
 @router.get("/catalog", response_model=Catalog, responses=_ERR)
-async def catalog(state: State) -> Catalog:
-    return await cast(Models, state.models).catalog()
+async def catalog(state: State, refresh: bool = False) -> Catalog:
+    """The curated list filled from the Hub (cached a day; `refresh=true` refetches)."""
+    return await cast(Models, state.models).catalog(refresh)
 
 
 @router.get("/search", response_model=SearchResults, responses=_ERR)

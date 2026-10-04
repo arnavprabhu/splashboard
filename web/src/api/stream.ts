@@ -130,6 +130,8 @@ export interface StreamMessage<T = unknown> {
 export interface PostStreamOptions {
   signal?: AbortSignal;
   headers?: Record<string, string>;
+  /** Called with the response headers before the body is read (e.g. `x-splash-request-id`). */
+  onHeaders?: (headers: Headers) => void;
 }
 
 /**
@@ -151,6 +153,7 @@ export async function* postStream<T = unknown>(
   if (options.signal) init.signal = options.signal;
   const res = await fetch(url, init);
   if (!res.ok) throw await errorFromResponse(res);
+  options.onHeaders?.(res.headers);
   for await (const evt of readSse(res, options.signal)) {
     if (evt.data === '[DONE]') return;
     let data: unknown;

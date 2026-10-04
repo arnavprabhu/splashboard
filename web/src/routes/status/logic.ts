@@ -355,6 +355,26 @@ export function stageBuckets(raw: unknown): Array<[string, number]> {
     .sort((a, b) => (a[0] === '+Inf' ? 1 : b[0] === '+Inf' ? -1 : Number(a[0]) - Number(b[0])));
 }
 
+/**
+ * A percentile in ms estimated from a cumulative histogram (decision T5): the upper bound
+ * (seconds) of the first bucket whose cumulative count reaches q·count. The `+Inf` bucket
+ * reports the largest finite bound. null without samples.
+ */
+export function stagePercentileMs(raw: unknown, q: number): number | null {
+  if (!isRecord(raw)) return null;
+  const count = typeof raw.count === 'number' ? raw.count : 0;
+  if (count <= 0) return null;
+  const rows = stageBuckets(raw);
+  const target = q * count;
+  let lastFinite: number | null = null;
+  for (const [bound, cum] of rows) {
+    const b = bound === '+Inf' ? null : Number(bound);
+    if (b !== null && Number.isFinite(b)) lastFinite = b;
+    if (cum >= target) return (b ?? lastFinite ?? 0) * 1000;
+  }
+  return lastFinite === null ? null : lastFinite * 1000;
+}
+
 // ---------- raw /status access ----------
 
 /** Reads a dotted path from the raw /status document; non-numbers read as null. */

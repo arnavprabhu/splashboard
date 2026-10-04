@@ -29,6 +29,14 @@ const Welcome = lazyRoute(() => import('./routes/welcome'));
 const Login = lazyRoute(() => import('./routes/login'));
 const Design = lazyRoute(() => import('./routes/design'));
 export const NotFound = lazyRoute(() => import('./routes/not-found'));
+/**
+ * Parts of the Status page below the fold. Declared here, not in the route: a dynamic import
+ * inside the Status chunk makes Rolldown wrap that chunk in a namespace helper that drags the
+ * Chat route into the initial set (SPEC §18.6).
+ */
+export const StatusLowerBands = lazyRoute(() => import('./routes/status/Bands'));
+export const StatusFitSheet = lazyRoute(() => import('./routes/status/FitSheet'));
+export const StatusFailureBand = lazyRoute(() => import('./routes/status/FailureBand'));
 
 /** Paths are relative to the router base (/admin). Order matters: first match wins. */
 export const ROUTES: readonly RouteDef[] = [
@@ -38,8 +46,9 @@ export const ROUTES: readonly RouteDef[] = [
   { path: '/models/downloader', component: Downloader },
   { path: '/models/:owner/:repo/settings', component: ModelSettings },
   { path: '/models/:id/settings', component: ModelSettings },
-  { path: '/chat', component: Chat },
-  { path: '/chat/:cid', component: Chat },
+  // One entry with an optional param: /chat → /chat/:cid after the first send must not remount
+  // the page (it would drop the reply that is streaming).
+  { path: '/chat/:cid?', component: Chat },
   { path: '/tools/playground', component: Playground },
   { path: '/tools/tokenizer', component: Tokenizer },
   { path: '/tools/judgments', component: Judgments },

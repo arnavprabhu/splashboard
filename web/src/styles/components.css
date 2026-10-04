@@ -1469,15 +1469,6 @@ textarea.input {
 }
 .band textarea, .chat-layout textarea { display: block; width: 100%; resize: vertical; }
 .band pre, .chat-layout pre { max-width: 100%; overflow-x: auto; }
-.chat-layout { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(0, 3fr) minmax(180px, 1fr); border-top: 2px solid var(--rule); }
-.chat-sidebar, .chat-thread, .chat-options { min-width: 0; padding: 24px var(--gutter); }
-.chat-sidebar, .chat-thread { border-right: 1px solid var(--rule); }
-.chat-list-item { display: block; width: 100%; text-align: left; font: inherit; color: var(--ink); background: transparent; border: 0; border-bottom: 1px solid var(--rule); padding: 12px 0; cursor: pointer; overflow-wrap: anywhere; }
-.chat-list-item small { display: block; color: var(--mute); }
-.chat-list-item[aria-current] { border-left: 3px solid var(--acc); padding-left: 8px; }
-.chat-message { border-bottom: 1px solid var(--rule); padding: 20px 0; overflow-wrap: anywhere; }
-.chat-composer { border-top: 2px solid var(--rule); padding-top: 20px; }
-.chat-options details { border-bottom: 1px solid var(--rule); padding-bottom: 16px; }
 .markdown p { white-space: pre-wrap; }
 .markdown h3 { margin: 20px 0 8px; }
 .markdown a { overflow-wrap: anywhere; }
@@ -1488,16 +1479,6 @@ textarea.input {
 .token-piece small { display: block; color: var(--mute); font-size: 11px; }
 .token-piece[data-special='true'] { border-color: var(--acc); }
 .benchmark-compare { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,340px),1fr)); gap: 24px; }
-.heatmap { overflow-x: auto; }
-.heatmap > div { flex-wrap: nowrap; gap: 4px; }
-.heat-cell { display: inline-block; flex: 0 0 25px; text-align: center; border: 1px solid var(--mute); font-size: 11px; }
-.heat-cell[data-active='true'] { background: var(--ink); color: var(--bg); }
-@media (max-width: 1000px) {
-  .chat-layout { grid-template-columns: minmax(0,1fr); }
-  .chat-sidebar, .chat-thread { border-right: 0; border-bottom: 1px solid var(--rule); }
-  .chat-sidebar nav { max-height: 180px; overflow-y: auto; }
-  .chat-options { border-top: 2px solid var(--rule); }
-}
 .status-id, .status-chart-head { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
 .status-id-model { overflow-wrap: anywhere; }
 .status-chart-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,300px),1fr)); gap: 24px; }
@@ -1507,3 +1488,91 @@ textarea.input {
 .status-chart-table, .status-samples { max-width: 100%; overflow-x: auto; }
 .page-title { overflow-wrap: anywhere; }
 .chart, .chart-host { min-width: 0; max-width: 100%; overflow: hidden; }
+
+/* ---------- usage history (docs/ui/02 §12) ---------- */
+.history-filters { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 16px 24px; }
+.history-filter-row { gap: 16px 20px; align-items: flex-end; }
+.history-filter { display: flex; flex-direction: column; gap: 6px; min-width: 0; max-width: 100%; }
+.history-filter .select, .history-filter select { max-width: min(100%, 320px); }
+.history-filter-actions { gap: 12px; align-items: center; }
+.history-legend { display: flex; flex-wrap: wrap; gap: 4px 20px; margin-top: 12px; overflow-wrap: anywhere; }
+.history-swatch[data-tone='acc'] { color: var(--acc); }
+.history-swatch[data-tone='ink'] { color: var(--ink); }
+.history-swatch[data-tone='mute'] { color: var(--mute); }
+.heatmap { overflow-x: auto; max-width: 100%; display: grid; gap: 2px; }
+.heat-row { display: grid; grid-template-columns: 4ch repeat(24, minmax(9px, 1fr)); gap: 2px; align-items: center; }
+.heat-day { white-space: nowrap; }
+.heat-hour { font-size: 11px; }
+.heat-cell { position: relative; display: block; aspect-ratio: 1; min-height: 9px; border: var(--rule-minor) solid var(--rule); }
+.heat-cell::before { content: ''; position: absolute; inset: 0; background: var(--ink); opacity: var(--heat, 0); }
+.heat-cell:focus-visible { outline: 2px solid var(--acc); outline-offset: 1px; }
+.heat-readout { min-height: 1.4em; margin-top: 8px; }
+.history-log .nowrap, .nowrap { white-space: nowrap; }
+.history-model { overflow-wrap: anywhere; }
+.history-pager { margin-top: 16px; gap: 12px; align-items: center; }
+.history-injected { display: grid; gap: 8px; padding: 4px 0 8px; }
+.history-injected pre { margin: 0; max-width: 100%; overflow-x: auto; }
+.tag-button { font: inherit; color: inherit; background: transparent; border: 0; padding: 0; cursor: pointer; }
+.tag-button[aria-expanded='true'] .tag { background: var(--ink); color: var(--bg); }
+.table-detail > td { padding-top: 0; }
+
+/* ---------- integrations (docs/ui/09) ---------- */
+.integrations-meta { gap: 8px; }
+.integrations-model { gap: 12px; align-items: center; min-width: 0; max-width: 100%; }
+.integrations-model .select, .integrations-model select { max-width: min(100%, 420px); }
+.integrations-lead { margin: 0; padding-inline: var(--gutter); }
+.integration-row:last-child { border-bottom: 0; }
+.integration-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px 24px; }
+.integration-title { margin: 0; overflow-wrap: anywhere; }
+.integration-state { margin: 0; display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
+.integration-command { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; border: var(--rule-minor) solid var(--rule); padding: 10px 12px; }
+.integration-cmd { overflow-wrap: anywhere; min-width: 0; }
+.integration-toggle { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; align-items: center; }
+.integration-toggle .meta, .integration-toggle .tag { grid-column: 1 / -1; justify-self: start; }
+.integration-files { margin: 0; padding-left: 18px; overflow-wrap: anywhere; }
+.sdk-tabs { display: flex; flex-wrap: wrap; gap: 4px 20px; margin-bottom: 16px; border-bottom: var(--rule-minor) solid var(--rule); }
+.sdk-tabs > button { background: transparent; border: 0; padding: 8px 0; cursor: pointer; color: var(--ink); font: inherit; }
+.sdk-tabs > button[aria-selected='true'] { border-bottom-color: var(--ink); }
+.sdk-wrap { container-type: inline-size; min-width: 0; }
+.sdk-select { display: none; margin-bottom: 16px; }
+@container (max-width: 520px) { .sdk-tabs { display: none; } .sdk-select { display: block; } }
+
+/* ---------- settings (docs/ui/05 §1) ---------- */
+.settings-band { container-type: inline-size; }
+.settings-nav-col { position: sticky; top: 0; align-self: flex-start; }
+.settings-nav { display: flex; flex-direction: column; }
+.settings-nav > li { border-bottom: var(--rule-minor) solid var(--rule); }
+.settings-nav .navlink { display: block; padding: 8px 0; }
+.settings-select { display: none; flex-direction: column; gap: 6px; }
+@container (max-width: 700px) {
+  .settings-nav { display: none; }
+  .settings-select { display: flex; }
+  .settings-nav-col { position: static; }
+}
+.settings-pager { justify-content: space-between; border-top: var(--rule-minor) solid var(--rule); padding-top: 16px; }
+.settings-result { border-bottom: var(--rule-minor) solid var(--rule); padding-bottom: 12px; }
+.secret-field .field-head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: baseline; }
+.secret-value { min-width: min(100%, 32ch); }
+.data-note { overflow-wrap: anywhere; }
+.about-notes { white-space: pre-wrap; max-width: 100%; overflow-x: auto; }
+.about-licenses { margin: 0; padding-left: 18px; }
+
+/* ---------- diagnostics (docs/ui/06 §5) ---------- */
+.json-view { max-width: 100%; overflow-x: auto; border: var(--rule-minor) solid var(--rule); padding: 12px; }
+.json-node > summary { cursor: pointer; list-style: none; }
+.json-node > summary::-webkit-details-marker { display: none; }
+.json-node[open] > summary .disclosure-glyph { display: inline-block; transform: rotate(90deg); }
+.json-children { padding-left: 18px; border-left: var(--rule-minor) solid var(--rule); margin-left: 4px; }
+.json-leaf { white-space: nowrap; }
+.trace-name, .path-text { overflow-wrap: anywhere; }
+.path-row { gap: 8px 12px; }
+.ms-meta { gap: 6px 12px; align-items: center; }
+.ms-path { overflow-wrap: anywhere; }
+.overlay-editor .field-head { gap: 6px 10px; align-items: center; }
+/* status lower bands (docs/ui/02 §8) */
+.band-lines { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.band-lines .meter { width: min(100%, 320px); }
+.histogram { display: inline-flex; align-items: flex-end; gap: 2px; height: 16px; border-bottom: var(--rule-minor) solid var(--rule); }
+.histogram-bar { display: block; width: 6px; min-height: 1px; background: var(--ink); }
+.batches { justify-content: flex-end; gap: 8px; }
+.strong { font-weight: 700; }

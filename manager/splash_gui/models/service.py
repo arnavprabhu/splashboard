@@ -41,15 +41,16 @@ from .layout import directory_size, execute_delete, plan_delete, read_all
 if TYPE_CHECKING:
     from ..state import ManagerState
 
-SEED = [
-    ("Qwen3.8-27B", "mlx-community/Qwen3.8-27B-4bit", "mlx"),
-    ("Qwen3.8-27B", "unsloth/Qwen3.8-27B-GGUF", "gguf"),
-    ("Qwen3.8-27B", "prism-ml/Ternary-Bonsai-2-27B-gguf", "gguf"),
-    ("Qwen3.8-27B", "incoai/Qwen3.8-27B-Splash", "legacy"),
-    ("Qwen3.6-35B-A3B", "mlx-community/Qwen3.6-35B-A3B-4bit", "mlx"),
-    ("Qwen3.6-35B-A3B", "unsloth/Qwen3.6-35B-A3B-GGUF", "gguf"),
-    ("Qwen3.6-35B-A3B", "incoai/Qwen3.6-35B-A3B-Splash", "legacy"),
-]
+
+def inspect_timeout(files: dict[str, int | None], variant: str | None) -> float:
+    """SPEC §9.2 gives the helper 20 s. Screening a GGUF variant reads its whole
+    metadata block (several MB, the tokenizer included) over range requests, so
+    a full variant table of a 27-file repository measured ~37 s on 2026-10-04;
+    allow 20 s plus 4 s per variant beyond the first, up to 150 s."""
+    if variant is not None:
+        return 20.0
+    roots = [n for n in files if "/" not in n and n.endswith(".gguf") and "mmproj" not in n.lower()]
+    return min(150.0, 20.0 + 4.0 * max(0, len(roots) - 1))
 
 
 def valid_id(model: str) -> str:
@@ -66,6 +67,7 @@ class Models:
         self.cache: dict[str, tuple[float, InspectResult]] = {}
         self.file_sets: dict[str, list[str]] = {}
         self.language_file_sets: dict[str, list[str]] = {}
+        self.catalog_cache: dict[str, tuple[float, Any]] = {}
 
     async def start(self) -> None:
         pass
@@ -291,7 +293,7 @@ class Models:
                         {"repo": repo_id, "sha": repo.sha, "files": repo.files, "variant": variant}
                     ).encode()
                 ),
-                20,
+                inspect_timeout(repo.files, variant),
             )
         except asyncio.CancelledError:
             proc.kill()
@@ -396,33 +398,105 @@ class Models:
             ],
         )
 
-    async def catalog(self) -> Catalog:
+    async def _repo_info_cached(self, repo_id: str) -> Any:
+        """Hub metadata for a catalog row, cached a day; None when unavailable."""
+        hit = self.catalog_cache.get(repo_id)
+        if hit is not None and time.time() - hit[0] < 86400:
+            return hit[1]
+        try:
+            info = await self.hf.repo_info(repo_id)
+        except HubError:
+            return hit[1] if hit is not None else None
+        self.catalog_cache[repo_id] = (time.time(), info)
+        return info
+
+    async def catalog(self, refresh: bool = False) -> Catalog:
+        """SPEC §9.1: the seed (Appendix C) plus Splash's official list, grouped by
+        family then format, each row filled from the Hub (sizes, license, vision,
+        GGUF variants) with a memory estimate, a fit badge and the "Recommended
+        for this Mac" mark (the §8.6 pick for the wizard's use case, else coding)."""
+        from ..paths import splash_data_dir
+        from ..settings.presets import recommend
+        from . import catalog as cat
+
+        if refresh:
+            self.catalog_cache.clear()
+        memory = self.state.memory_bytes()
         installed = {m.repo_id for m in self.inventory().models}
+        rows = list(cat.SEED)
+        engine = self.state.engine_cached()
+        for repo in cat.official_ids(engine.pkg, splash_data_dir()):
+            family = cat.family_guess(repo)
+            if family and repo not in {r[1] for r in rows}:
+                rows.append((family, repo, "legacy", "Official catalog.", None))
+        g = self.state.settings.current.global_
+        preset = g.wizard.preset or "coding"
+        pick = recommend(preset, memory).primary
+        pick_repo, pick_variant = split_model_id(pick.model) if pick else (None, None)
+        offline = g.hf.offline
+        gate = asyncio.Semaphore(4)  # be gentle with the Hub
+
+        async def fetch(repo: str) -> Any:
+            async with gate:
+                return await self._repo_info_cached(repo)
+
+        infos: list[Any] = (
+            [None] * len(rows) if offline else await asyncio.gather(*(fetch(r[1]) for r in rows))
+        )
+        refreshed = None
         families: list[CatalogFamily] = []
-        for family in dict.fromkeys(row[0] for row in SEED):
+        for family in dict.fromkeys(row[0] for row in rows):
             groups = []
             for fmt in ("mlx", "gguf", "legacy"):
-                entries = [
-                    CatalogEntry.model_validate(
-                        {
-                            "id": repo,
-                            "repo_id": repo,
-                            "family": fam,
-                            "format": kind,
-                            "installed": repo in installed,
-                        }
+                entries = []
+                for (fam, repo, kind, notes, perf), info in zip(rows, infos, strict=True):
+                    if fam != family or kind != fmt:
+                        continue
+                    facts = cat.entry_facts(repo, kind, info, memory)
+                    if facts:
+                        refreshed = iso()
+                    variants = facts.pop("variants", None)
+                    recommended_variant = facts.pop("recommended_variant", None)
+                    if kind == "legacy":
+                        facts.pop("vision", None)
+                    if variants is not None and pick_repo == repo and pick_variant:
+                        for variant in variants:
+                            variant["recommended"] = variant["name"] == pick_variant
+                    entries.append(
+                        CatalogEntry.model_validate(
+                            {
+                                "id": repo,
+                                "repo_id": repo,
+                                "recommended_variant": pick_variant
+                                if pick_repo == repo and pick_variant
+                                else recommended_variant,
+                                "family": fam,
+                                "format": kind,
+                                "notes": notes,
+                                "perf_note": perf,
+                                "installed": repo in installed,
+                                "recommended": repo == pick_repo,
+                                "variants": variants,
+                                **facts,
+                            }
+                        )
                     )
-                    for fam, repo, kind in SEED
-                    if fam == family and kind == fmt
-                ]
-                groups.append(CatalogGroup(format=fmt, label=fmt.upper(), entries=entries))
+                labels = {"mlx": "MLX 4-bit", "gguf": "GGUF", "legacy": "Splash package"}
+                groups.append(CatalogGroup(format=fmt, label=labels[fmt], entries=entries))
             families.append(
-                CatalogFamily.model_validate({"family": family, "label": family, "groups": groups})
+                CatalogFamily.model_validate(
+                    {
+                        "family": family,
+                        "label": f"{family} {'dense' if '27B' in family else 'MoE'}",
+                        "groups": groups,
+                    }
+                )
             )
         return Catalog(
             families=families,
-            memory_bytes=self.state.memory_bytes(),
-            offline=self.state.settings.current.global_.hf.offline,
+            memory_bytes=memory,
+            refreshed_at=refreshed,
+            offline=offline,
         )
 
 

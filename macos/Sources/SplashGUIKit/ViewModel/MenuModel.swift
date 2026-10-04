@@ -200,7 +200,7 @@ public enum MenuModel {
                 entries.append(.text(Format.truncate(msg, to: 80)))
             }
             if engine.error?.kind == "budget_refusal" {
-                entries.append(.button(MenuItem("Open Memory Settings", .openAdmin("/admin/settings#memory_context"))))
+                entries.append(.button(MenuItem("Open Memory Settings", .openAdmin("/admin/settings/memory"))))
             } else {
                 entries.append(.button(MenuItem("Restart Engine", .restartEngine)))
             }

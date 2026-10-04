@@ -30,9 +30,12 @@ export class ApiError extends Error {
   readonly issues: ErrorIssue[];
   readonly details: Record<string, unknown> | null;
   readonly body: unknown;
+  /** Seconds from a `Retry-After` header (503s from the manager and Splash), or null. */
+  readonly retryAfter: number | null;
 
-  constructor(status: number, error: ErrorBody, body?: unknown) {
+  constructor(status: number, error: ErrorBody, body?: unknown, retryAfter: number | null = null) {
     super(error.message);
+    this.retryAfter = retryAfter;
     this.name = 'ApiError';
     this.status = status;
     this.type = error.type;
@@ -134,7 +137,8 @@ export async function errorFromResponse(res: Response): Promise<ApiError> {
     type: statusType(res.status),
     code: null,
   };
-  return new ApiError(res.status, parsed, body);
+  const ra = Number(res.headers?.get?.('Retry-After') ?? NaN);
+  return new ApiError(res.status, parsed, body, Number.isFinite(ra) && ra >= 0 ? ra : null);
 }
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
