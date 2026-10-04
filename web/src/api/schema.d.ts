@@ -3887,41 +3887,25 @@ export interface components {
             revision?: string | null;
             /** Draft Model */
             draft_model?: string | null;
-            /**
-             * Language Only
-             * @default false
-             */
-            language_only: boolean;
+            /** Language Only */
+            language_only?: boolean;
             /** Served Model Names */
             served_model_names?: string[];
-            /**
-             * Announce Served Name
-             * @default false
-             */
-            announce_served_name: boolean;
+            /** Announce Served Name */
+            announce_served_name?: boolean;
             /** Default Reasoning Effort */
             default_reasoning_effort?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") | null;
             /**
              * Kv Format
-             * @default int8
              * @enum {string}
              */
-            kv_format: "int8" | "bf16";
-            /**
-             * Max Context
-             * @default auto
-             */
-            max_context: string;
-            /**
-             * Decode Share
-             * @default 0.5
-             */
-            decode_share: number;
-            /**
-             * Max Image Pixels
-             * @default 4194304
-             */
-            max_image_pixels: number;
+            kv_format?: "int8" | "bf16";
+            /** Max Context */
+            max_context?: string;
+            /** Decode Share */
+            decode_share?: number;
+            /** Max Image Pixels */
+            max_image_pixels?: number;
         };
         /** ModelSettings */
         ModelSettings: {

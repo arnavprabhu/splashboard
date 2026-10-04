@@ -24,7 +24,7 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic.json_schema import models_json_schema
 
-from . import __version__
+from . import SERVICE, __version__
 from .auth.api import router as auth_router
 from .auth.guard import AdminGuard
 from .benchmark.api import router as benchmark_router
@@ -261,7 +261,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
     @app.get("/health", tags=["Public"])
     def health() -> dict[str, Any]:
-        return {"status": "ok", "version": __version__}
+        return {"status": "ok", "service": SERVICE, "version": __version__}
 
     @app.get("/", include_in_schema=False)
     def root() -> RedirectResponse:

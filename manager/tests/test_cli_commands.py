@@ -163,14 +163,56 @@ def test_serve_passthrough_warns_when_the_manager_has_the_port(
         cli_module, "discover", lambda **kwargs: EngineInfo(found=True, cli=Path("/x/splash"))
     )
     monkeypatch.setattr(os, "execv", lambda path, argv: calls.append(argv))
-    monkeypatch.setattr(httpx, "get", lambda *a, **k: type("R", (), {"status_code": 200})())
+    health = {"status": "ok", "service": "splash-gui-manager", "version": "0.1.0"}
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: httpx.Response(200, json=health))
     with pytest.raises(SystemExit):
         cli_module.main(["serve", "--model", "x"])
     assert "Splash GUI is serving on port 8000" in capsys.readouterr().err
     with pytest.raises(SystemExit):
         cli_module.main(["serve", "--model", "x", "--port=9999"])
     assert "warning" not in capsys.readouterr().err
-    assert len(calls) == 2
+    # Another server's /health (oMLX on :8000) is not Splash GUI.
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: httpx.Response(200, json={"status": "ok"}))
+    with pytest.raises(SystemExit):
+        cli_module.main(["serve", "--model", "x"])
+    assert "Splash GUI is serving" not in capsys.readouterr().err
+    assert len(calls) == 3
+
+
+def _foreign_client(monkeypatch: pytest.MonkeyPatch, seen: list[str]) -> None:
+    """The settings port is held by another server whose /health says 200 (oMLX)."""
+    real = cli_module.Client
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        return httpx.Response(200, json={"state": "ready", "models": []})
+
+    class Client(real):  # type: ignore[misc, valid-type]
+        def __init__(self, port: int | None = None) -> None:
+            super().__init__(port)
+            self.http.close()
+            self.http: Any = httpx.Client(base_url=self.url, transport=httpx.MockTransport(answer))
+
+    monkeypatch.setattr(cli_module, "Client", Client)
+
+
+@pytest.mark.parametrize("argv", [["status"], ["ls"], ["start"], ["stop"], ["load", MODEL]])
+def test_another_server_on_the_port_is_not_mistaken_for_the_manager(
+    argv: list[str], capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[str] = []
+    _foreign_client(monkeypatch, seen)
+    spawned: list[Any] = []
+    import subprocess
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: spawned.append(a))
+    code, _, err = run(capsys, *argv)
+    assert code == 1
+    assert "not Splash GUI" in err and "port 8000" in err and "--port" in err
+    assert seen == ["/health"], "no admin call (or CLI token) may reach another server"
+    assert spawned == []
 
 
 @pytest.mark.parametrize(

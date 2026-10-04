@@ -2,8 +2,8 @@
 """Fake splash/install/models.py: the same command line, no network.
 
 `prepare` writes a huggingface_hub-style cache under $HF_HUB_CACHE
-(models--owner--repo/{blobs,snapshots,refs}), growing blobs/<hash>.incomplete
-at FAKE_SPLASH_DL_BPS and renaming each to its final blob, then publishes an
+(models--owner--repo/{blobs,snapshots,refs}), growing a partial blob at
+FAKE_SPLASH_DL_BPS and renaming each to its final blob, then publishes an
 assembly (model.json plus links into the snapshots) and a selection link under
 --models, exactly where the real installer puts them.
 
@@ -17,10 +17,15 @@ Environment knobs (all optional):
   FAKE_SPLASH_DL_FAIL          gated | network | network_mid | disk_full | incompatible
   FAKE_SPLASH_DL_FAIL_AFTER    bytes written before network_mid/disk_full fail
                                (default: half the target's first weight file)
+  FAKE_SPLASH_DL_HUB           partial-file behaviour: unset = huggingface_hub 1.28,
+                               as bundled with Splash 1.2.0 (a fresh
+                               blobs/<hash>.<uuid8>.incomplete per run, deleted on
+                               a handled error, never resumed); `legacy` = older hubs
+                               (blobs/<hash>.incomplete, appended to on the next run)
 
 SIGINT exits 130 like the real installer; SIGTERM keeps its default action
 (the real installer installs no SIGTERM handler, it only unblocks the signal),
-so the process ends at once and the partial .incomplete blob stays for resume.
+so the process ends at once and the partial .incomplete blob stays behind.
 """
 
 from __future__ import annotations
@@ -36,6 +41,7 @@ import signal
 import sys
 import tempfile
 import time
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -510,26 +516,36 @@ def download(
             f"from {repo.name}@{repo.commit[:12]}; cached files are reused.",
             flush=True,
         )
+    legacy = os.environ.get("FAKE_SPLASH_DL_HUB") == "legacy"
     for item in fetch:
         final = blobs / item.blob
-        partial = blobs / (item.blob + ".incomplete")
-        offset = partial.stat().st_size if partial.exists() else 0
-        if offset > item.size:
-            partial.unlink()
+        if legacy:
+            partial = blobs / (item.blob + ".incomplete")
+            offset = partial.stat().st_size if partial.exists() else 0
+            if offset > item.size:
+                partial.unlink()
+                offset = 0
+        else:
+            # huggingface_hub 1.28 file_download.py `_download_to_tmp_and_move`.
+            partial = blobs / f"{item.blob}.{uuid.uuid4().hex[:8]}.incomplete"
             offset = 0
-        with partial.open("ab") as out:
-            while offset < item.size:
-                size = min(throttle.chunk, item.size - offset)
-                limit = failure.limit()
-                if limit is not None:
-                    size = min(size, limit) or 1
-                chunk = item.read(offset, size)
-                out.write(chunk)
-                out.flush()
-                offset += len(chunk)
-                failure.check(len(chunk), context)
-                throttle.wait(len(chunk))
-        partial.replace(final)
+        try:
+            with partial.open("ab" if legacy else "wb") as out:
+                while offset < item.size:
+                    size = min(throttle.chunk, item.size - offset)
+                    limit = failure.limit()
+                    if limit is not None:
+                        size = min(size, limit) or 1
+                    chunk = item.read(offset, size)
+                    out.write(chunk)
+                    out.flush()
+                    offset += len(chunk)
+                    failure.check(len(chunk), context)
+                    throttle.wait(len(chunk))
+            partial.replace(final)
+        finally:
+            if not legacy:
+                partial.unlink(missing_ok=True)
     snapshot.mkdir(parents=True, exist_ok=True)
     result = {}
     for item in repo.files:

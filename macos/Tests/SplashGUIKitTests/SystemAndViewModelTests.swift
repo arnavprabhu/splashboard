@@ -104,6 +104,29 @@ struct ManagerControllerTests {
         #expect(await mc.ensureRunning() == .success(.child))
     }
 
+    @Test func anotherServerOnThePortIsNotTheManager() async {
+        let api = MockAPI()
+        api.probeOverride.value = .foreign
+        let agent = MockService(.notRegistered)
+        let launcher = MockLauncher()
+        let mc = ManagerController(api: api, paths: paths, repo: repo, agent: agent, launcher: launcher, sleep: { _ in })
+        let result = await mc.ensureRunning()
+        #expect(result == .failure(.portTaken))
+        #expect(launcher.launches.value.isEmpty)
+        #expect(agent.registerCount.value == 0)
+        #expect(mc.ownership == nil)
+        if case .failure(let error) = result { #expect(error.description.contains("not Splash GUI")) }
+    }
+
+    @Test func healthClassification() {
+        let ours = Data(#"{"status":"ok","service":"splash-gui-manager","version":"0.1.0"}"#.utf8)
+        #expect(HTTPAdminAPI.classifyHealth(status: 200, data: ours) == .manager)
+        // oMLX and other servers answer /health too.
+        #expect(HTTPAdminAPI.classifyHealth(status: 200, data: Data(#"{"status":"ok"}"#.utf8)) == .foreign)
+        #expect(HTTPAdminAPI.classifyHealth(status: 200, data: Data("OK".utf8)) == .foreign)
+        #expect(HTTPAdminAPI.classifyHealth(status: 404, data: ours) == .foreign)
+    }
+
     @Test func reportsMissingUv() async {
         let api = MockAPI()
         api.healthy.value = false

@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 
+from .. import SERVICE
 from ..engine.discovery import discover
 from ..paths import Paths
 from ..secrets import SecretName, SecretStore, backend_from_env
@@ -63,11 +64,22 @@ class Client:
             raise ValueError(message)
         return response.json() if response.content else None
 
-    def running(self) -> bool:
+    def probe(self) -> str:
+        """`ours`, `other` (something else answers on the port) or `down`."""
         try:
-            return self.http.get("/health", timeout=1).status_code == 200
+            response = self.http.get("/health", timeout=1)
         except httpx.HTTPError:
-            return False
+            return "down"
+        return "ours" if is_manager_health(response) else "other"
+
+    def running(self) -> bool:
+        """True when our manager answers. Another server on the port is an error:
+        starting a manager there would fail to bind, and talking to it would send
+        admin calls (and the CLI token) to a stranger."""
+        state = self.probe()
+        if state == "other":
+            raise ValueError(foreign_server_message(self.port))
+        return state == "ours"
 
     def start(self, foreground: bool = False) -> None:
         if self.running():
@@ -124,6 +136,25 @@ class Client:
                 print("\rLoading " + base + "…", end="", file=sys.stderr, flush=True)
             time.sleep(0.2)
         raise ValueError("Timed out loading " + base)
+
+
+def is_manager_health(response: httpx.Response) -> bool:
+    """A Splash GUI manager's `/health`: 200 with `service: splash-gui-manager`."""
+    if response.status_code != 200:
+        return False
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    return isinstance(body, dict) and body.get("service") == SERVICE
+
+
+def foreign_server_message(port: int) -> str:
+    return (
+        f"another server (not Splash GUI) is answering on port {port}. "
+        "Pass --port with the Splash GUI manager's port, or move one of them "
+        "(Splash GUI: Settings → Server & network → Port)."
+    )
 
 
 def parser() -> argparse.ArgumentParser:
@@ -361,7 +392,7 @@ def warn_if_port_taken(arguments: list[str]) -> None:
     if serve_port(arguments[1:]) != port:
         return
     try:
-        up = httpx.get(f"http://127.0.0.1:{port}/health", timeout=1).status_code == 200
+        up = is_manager_health(httpx.get(f"http://127.0.0.1:{port}/health", timeout=1))
     except httpx.HTTPError:
         up = False
     if up:

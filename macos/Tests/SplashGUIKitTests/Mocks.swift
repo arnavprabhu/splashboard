@@ -12,6 +12,8 @@ final class MockAPI: AdminAPI, @unchecked Sendable {
     let calls = LockedBox<[Call]>([])
     let responses = LockedBox<[String: Result<JSONValue, APIError>]>([:])
     let healthy = LockedBox<Bool>(true)
+    /// Set to `.foreign` to simulate another server on the port.
+    let probeOverride = LockedBox<HealthProbe?>(nil)
 
     init(engine: JSONValue = ["state": "stopped"]) {
         set("GET", "/api/admin/engine", .success(engine))
@@ -21,7 +23,8 @@ final class MockAPI: AdminAPI, @unchecked Sendable {
         responses.withValue { $0["\(method) \(path)"] = result }
     }
 
-    func health() async -> Bool { healthy.value }
+    func health() async -> Bool { await probe() == .manager }
+    func probe() async -> HealthProbe { probeOverride.value ?? (healthy.value ? .manager : .down) }
 
     func request(_ method: String, _ path: String, body: JSONValue?) async throws -> JSONValue {
         calls.withValue { $0.append(Call(method: method, path: path, body: body)) }

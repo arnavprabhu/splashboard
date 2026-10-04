@@ -42,6 +42,29 @@ def test_load_reaches_ready_and_logs_session(harness_factory: Callable[..., Engi
     assert not (h.home / "run" / "engine.pid").exists()
 
 
+def test_draft_is_the_repo_id_not_a_dict_repr(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """Acceptance 2026-10-04: the Status header showed `{'repo_id': …}` because
+    InstalledModel.draft is a DraftRef dict."""
+    h = harness_factory()
+    h.load()
+    real = h.state.model_info
+
+    def with_draft(model: str) -> dict[str, object] | None:
+        info = dict(real(model) or {})
+        info["draft"] = {
+            "repo_id": "incoai/Qwen3.6-35B-A3B-DFlash2",
+            "commit": "51ef7b69",
+            "shared": False,
+        }
+        return info
+
+    h.state.model_info = with_draft
+    view = h.client.get("/api/admin/engine").json()
+    assert view["draft"] == "incoai/Qwen3.6-35B-A3B-DFlash2"
+
+
 def test_engine_environment_and_flags(harness_factory: Callable[..., EngineHarness]) -> None:
     h = harness_factory()
     h.load()

@@ -15,8 +15,10 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    SerializerFunctionWrapHandler,
     ValidationInfo,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -395,7 +397,33 @@ def _drop_nulls(value: Any, keep: frozenset[str] = frozenset()) -> Any:
     return value
 
 
-class ModelServeOverrides(_Strict):
+def _no_schema_defaults(schema: dict[str, Any]) -> None:
+    """Sparse models have no defaults on the wire: an absent key means "not set"."""
+    for prop in schema.get("properties", {}).values():
+        prop.pop("default", None)
+
+
+class _Sparse(_Strict):
+    """A per-model overlay whose keys only exist when set (SPEC §15.1, docs/api.md §6.1).
+
+    Every dump (the API, settings.json, internal read-modify-write) carries only the
+    keys that were given, so a client that saves back what it read never turns a
+    default into an explicit override that shadows the global value."""
+
+    model_config = ConfigDict(json_schema_extra=_no_schema_defaults)
+
+    # No return annotation on purpose: pydantic would take it as the serialization
+    # schema, and the OpenAPI document (and the generated web types) would lose the
+    # model's fields. Without one, the JSON schema stays the model's own.
+    @model_serializer(mode="wrap")
+    def _only_set(self, handler: SerializerFunctionWrapHandler):  # type: ignore[no-untyped-def]
+        data = handler(self)
+        if not isinstance(data, dict):
+            return data
+        return {k: v for k, v in data.items() if k in self.model_fields_set}
+
+
+class ModelServeOverrides(_Sparse):
     """Per-model engine overrides (scope M or G/M). Only keys present are overrides;
     an absent key inherits the global value. `default_reasoning_effort: null` is an
     explicit override back to the model template's default."""
@@ -502,7 +530,7 @@ def _check_wire_type(name: str, value: Any) -> None:
         raise ValueError("ignore_eos must be a boolean")
 
 
-class SamplingOverlay(_Strict):
+class SamplingOverlay(_Sparse):
     """Request fields a profile or the per-model defaults inject (SPEC §7.5), with
     Splash's ranges (server/frontend.py SAMPLING_NUMBERS and friends). Absent = not set."""
 

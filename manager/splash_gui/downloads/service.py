@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import glob
 import json
 import os
 import shutil
@@ -178,27 +179,75 @@ class Downloads:
         self.tasks.pop(dl, None)
         self.schedule()
 
+    def blob_path(self, repo_id: str, digest: str) -> Path:
+        return (
+            self.state.settings.models_dir()
+            / ("models--" + repo_id.replace("/", "--"))
+            / "blobs"
+            / digest
+        )
+
+    def partials(self, repo_id: str, digest: str) -> list[Path]:
+        """A blob's partial files. huggingface_hub before 1.x used `<etag>.incomplete`;
+        1.28 (bundled with Splash 1.2.0) writes a per-process `<etag>.<uuid8>.incomplete`
+        (huggingface_hub/file_download.py `_download_to_tmp_and_move`, PR #4228)."""
+        blob = self.blob_path(repo_id, digest)
+        legacy = blob.with_name(blob.name + ".incomplete")
+        found = [legacy] if legacy.is_file() else []
+        found += sorted(blob.parent.glob(glob.escape(blob.name) + ".*.incomplete"))
+        return found
+
     def progress(self, item: DownloadItem) -> None:
         for file in item.files:
             digest = self.blobs.get(item.id, {}).get(file.repo_id + "/" + file.name)
             if not digest:
                 continue
-            path = (
-                self.state.settings.models_dir()
-                / ("models--" + file.repo_id.replace("/", "--"))
-                / "blobs"
-                / digest
-            )
-            partial = path.with_name(path.name + ".incomplete")
+            path = self.blob_path(file.repo_id, digest)
             try:
                 if path.is_file():
                     file.done_bytes, file.state = path.stat().st_size, "done"
-                elif partial.is_file():
-                    file.done_bytes, file.state = partial.stat().st_size, "downloading"
+                    continue
             except FileNotFoundError:
                 pass
+            # The file being written is the newest partial; older ones are left over
+            # from a paused or killed run (the hub cannot continue them).
+            sizes: list[tuple[float, int]] = []
+            for partial_path in self.partials(file.repo_id, digest):
+                with contextlib.suppress(FileNotFoundError):
+                    info = partial_path.stat()
+                    sizes.append((info.st_mtime, info.st_size))
+            if sizes:
+                file.done_bytes, file.state = max(sizes)[1], "downloading"
         item.bytes_done = sum(f.done_bytes for f in item.files)
         item.progress = min(1.0, item.bytes_done / item.bytes_total) if item.bytes_total else None
+
+    def shared_digests(self, dl: str) -> set[str]:
+        """Blobs another unfinished download also needs: their partials are not ours to delete."""
+        return {
+            blob
+            for key, mapping in self.blobs.items()
+            if key != dl
+            and key in self.items
+            and self.items[key].state not in ("cancelled", "done", "failed")
+            for blob in mapping.values()
+        }
+
+    def remove_partials(self, item: DownloadItem, *, stale_only: bool) -> None:
+        """Delete this download's partial files, never one that existed before it was
+        queued or one another download shares. `stale_only` keeps `<etag>.incomplete`,
+        which an older hub could still continue, and removes only the per-process
+        `<etag>.<uuid>.incomplete` files that no later run can reuse."""
+        shared = self.shared_digests(item.id)
+        keep = set(self.preexisting.get(item.id, []))
+        for file in item.files:
+            digest = self.blobs.get(item.id, {}).get(file.repo_id + "/" + file.name)
+            if not digest or digest in shared:
+                continue
+            legacy = self.blob_path(file.repo_id, digest).name + ".incomplete"
+            for path in self.partials(file.repo_id, digest):
+                if str(path) in keep or (stale_only and path.name == legacy):
+                    continue
+                path.unlink(missing_ok=True)
 
     async def command(self, item: DownloadItem, action: str) -> None:
         argv, env = self.state.models.installer(
@@ -267,6 +316,10 @@ class Downloads:
             self.processes.pop(item.id, None)
 
     async def run(self, item: DownloadItem) -> None:
+        # A resumed download starts each unfinished file again in a new partial file;
+        # the ones a paused run left behind would only waste disk (SPEC §9.4).
+        self.remove_partials(item, stale_only=True)
+        self.progress(item)
         item.state, item.started_at, item.error = "running", iso(), None
         self.publish(item)
         try:
@@ -384,25 +437,7 @@ class Downloads:
             await self.pause(dl)
         item.state = "cancelled"
         if not keep_files:
-            shared = {
-                blob
-                for key, mapping in self.blobs.items()
-                if key != dl
-                and key in self.items
-                and self.items[key].state not in ("cancelled", "done", "failed")
-                for blob in mapping.values()
-            }
-            for file in item.files:
-                digest = self.blobs.get(dl, {}).get(file.repo_id + "/" + file.name)
-                if digest and digest not in shared:
-                    path = (
-                        self.state.settings.models_dir()
-                        / ("models--" + file.repo_id.replace("/", "--"))
-                        / "blobs"
-                        / (digest + ".incomplete")
-                    )
-                    if str(path) not in self.preexisting.get(dl, []):
-                        path.unlink(missing_ok=True)
+            self.remove_partials(item, stale_only=False)
         self.publish(item)
 
     async def shutdown(self) -> None:

@@ -324,6 +324,29 @@ test.describe('not found', () => {
 });
 
 test.describe('phone width, populated', () => {
+  test('no horizontal scroll at 360px on chat with a long GGUF model ID (acceptance 2026-10-04)', async ({ page }) => {
+    const LONG = 'unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q2_K_XL';
+    await mockManager(page, {
+      engine: { ...READY, model: LONG },
+      extra: (method, p) => {
+        if (p === '/chats' && method === 'GET') return { json: { chats: [] } };
+        if (p === '/chats/c1') return { json: { ...CHAT, model: LONG } };
+        if (p.endsWith('/profiles')) return { json: { model: LONG, profiles: [], sampling_defaults: {} } };
+        return undefined;
+      },
+    });
+    await page.route('**/v1/models', (r) =>
+      r.fulfill({ json: { object: 'list', data: [{ id: LONG, loaded: true, max_model_len: 262144, vision: true }, { id: `${LONG}:no-think`, root: LONG, profile: 'no-think', loaded: true }] } }),
+    );
+    await page.setViewportSize({ width: 360, height: 780 });
+    await page.goto('/admin/chat/c1');
+    await page.waitForLoadState('networkidle');
+    await expect(page.getByTestId('chat-model')).toContainText('UD-Q2_K_XL');
+    expect(await noOverflow(page)).toBeLessThanOrEqual(0);
+    const box = await page.getByTestId('chat-model').boundingBox();
+    expect(box!.x + box!.width).toBeLessThanOrEqual(360);
+  });
+
   for (const path of ['/admin/settings/about', '/admin/settings/data', '/admin/chat/c1', '/admin/does-not-exist', '/admin/integrations']) {
     test(`no horizontal scroll at 360px on ${path}`, async ({ page }) => {
       await mockManager(page, {

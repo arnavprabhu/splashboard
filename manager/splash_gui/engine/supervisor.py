@@ -315,8 +315,11 @@ class Supervisor:
         if not self.model:
             return None
         info = self.app.model_info(self.model)
-        if info and info.get("draft"):
-            return str(info["draft"])
+        draft = info.get("draft") if info else None
+        if isinstance(draft, dict) and draft.get("repo_id"):
+            return str(draft["repo_id"])  # InstalledModel.draft is a DraftRef
+        if isinstance(draft, str) and draft:
+            return draft
         with contextlib.suppress(Exception):
             return effective_serve(self.app.settings.current, self.model).draft_model
         return None

@@ -28,6 +28,10 @@
 /* model selector */
 .chat-model { gap: 8px 12px; align-items: center; min-width: 0; }
 .chat-model-value { overflow-wrap: anywhere; text-transform: none; }
+/* A long model ID (`unsloth/…-GGUF:UD-Q2_K_XL`) wraps inside the menu button instead of
+   pushing the page wider than a 360px phone (acceptance 2026-10-04). */
+.chat-model .menu { max-width: 100%; min-width: 0; }
+.chat-model .menu > .btn { max-width: 100%; white-space: normal; text-align: left; justify-content: flex-start; }
 .chat-model-meta { gap: 6px 12px; align-items: center; }
 .chat-model-profile { padding-left: 16px; }
 

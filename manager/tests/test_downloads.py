@@ -9,6 +9,7 @@ blobs survive — not a state flag flipped in isolation.
 
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -143,6 +144,55 @@ def test_progress_reports_bytes_speed_and_a_log_tail(hub_harness):
     assert seen_file, "per-file progress must be reported"
 
 
+def _in_flight_file(harness, dl: str, timeout: float = 30.0) -> dict[str, Any]:
+    """Poll until the queue reports a file mid-download (bytes > 0, not finished)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        row = item(harness, dl)
+        for file in row["files"]:
+            size = file["size_bytes"] or 0
+            if file["state"] == "downloading" and 0 < file["done_bytes"] < size:
+                return row
+        if row["state"] not in ("queued", "running"):
+            break
+        time.sleep(0.1)
+    raise AssertionError(f"no file was ever reported mid-download: {item(harness, dl)}")
+
+
+@pytest.mark.parametrize("hub", ["1.28", "legacy"])
+def test_progress_reads_the_partial_file_while_it_grows(hub_harness, hub):
+    """Acceptance 2026-10-04: huggingface_hub 1.28 (bundled with Splash 1.2.0) writes
+    `<etag>.<uuid8>.incomplete`; progress froze until each file finished. The old
+    `<etag>.incomplete` name must keep working."""
+    env = dict(SLOW)
+    if hub == "legacy":
+        env["FAKE_SPLASH_DL_HUB"] = "legacy"
+    harness = hub_harness(env)
+    started = queue(harness, MODEL)
+    row = _in_flight_file(harness, started["id"])
+    finished = sum(p.stat().st_size for p in finished_blobs(harness))
+    assert row["bytes_done"] > finished, "the growing partial file counts toward progress"
+    names = [p.name for p in incomplete_blobs(harness)]
+    pattern = r"[0-9a-f]+\.[0-9a-f]{8}\.incomplete" if hub == "1.28" else r"[0-9a-f]+\.incomplete"
+    assert names and all(re.fullmatch(pattern, n) for n in names), names
+    harness.client.delete(f"/api/admin/downloads/{started['id']}")
+
+
+def test_resume_discards_the_partial_the_paused_run_left(hub_harness):
+    """Hub 1.28 cannot continue a partial file: each run writes a new one. The stale one
+    is deleted when the download resumes, so progress is honest and no disk leaks."""
+    harness = hub_harness(SLOW)
+    started = queue(harness, MODEL)
+    _in_flight_file(harness, started["id"])
+    harness.client.post(f"/api/admin/downloads/{started['id']}/pause")
+    stale = incomplete_blobs(harness)
+    assert stale, "sanity: the paused run left its partial file"
+    harness.client.post(f"/api/admin/downloads/{started['id']}/resume")
+    _in_flight_file(harness, started["id"])
+    assert not any(p.exists() for p in stale), "the paused run's partial is gone"
+    harness.client.delete(f"/api/admin/downloads/{started['id']}")
+
+
 def test_pause_stops_the_child_and_keeps_the_partial_blob(hub_harness):
     harness = hub_harness(SLOW)
     started = queue(harness, MODEL)
@@ -181,8 +231,12 @@ def test_resume_finishes_the_download(hub_harness):
 def test_cancel_removes_the_blobs_it_started(hub_harness):
     harness = hub_harness(SLOW)
     started = queue(harness, MODEL)
-    wait_for_progress(harness, started["id"], 0.05)
+    _in_flight_file(harness, started["id"])
     assert incomplete_blobs(harness), "sanity: a partial blob exists while downloading"
+    # A second run (pause → resume) leaves a stale per-process partial too.
+    harness.client.post(f"/api/admin/downloads/{started['id']}/pause")
+    harness.client.post(f"/api/admin/downloads/{started['id']}/resume")
+    _in_flight_file(harness, started["id"])
 
     response = harness.client.delete(f"/api/admin/downloads/{started['id']}")
     assert response.status_code == 204, response.text
@@ -190,6 +244,31 @@ def test_cancel_removes_the_blobs_it_started(hub_harness):
     assert not incomplete_blobs(harness), "cancel discards this download's partial blobs"
     time.sleep(1.0)
     assert not incomplete_blobs(harness), "and nothing reappears afterwards"
+
+
+def test_cancel_leaves_partials_that_existed_before_queueing(hub_harness):
+    from splash_gui.schemas import DownloadFile, DownloadItem
+
+    harness = hub_harness()
+    downloads = harness.state.downloads
+    blobs = harness.state.settings.models_dir() / "models--o--r" / "blobs"
+    blobs.mkdir(parents=True)
+    theirs = blobs / "abc.1234abcd.incomplete"
+    ours = [blobs / "abc.incomplete", blobs / "abc.deadbeef.incomplete"]
+    for path in (theirs, *ours):
+        path.write_bytes(b"x")
+    downloads.items["dl"] = DownloadItem(
+        id="dl",
+        model="o/r",
+        state="paused",
+        created_at="2026-10-04T00:00:00Z",
+        files=[DownloadFile(name="a.safetensors", repo_id="o/r")],
+    )
+    downloads.blobs = {"dl": {"o/r/a.safetensors": "abc"}}
+    downloads.preexisting = {"dl": [str(theirs)]}
+    assert harness.client.delete("/api/admin/downloads/dl").status_code == 204
+    assert theirs.exists(), "a partial that was there before queueing is not ours"
+    assert not any(p.exists() for p in ours)
 
 
 def test_cancel_keeps_files_when_asked(hub_harness):

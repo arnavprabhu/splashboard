@@ -96,6 +96,8 @@ SPEC_ROUTES = [
 def test_health(client: TestClient) -> None:
     response = client.get("/health")
     assert response.status_code == 200 and response.json()["status"] == "ok"
+    # The CLI and the menu bar app tell our manager from other servers by this.
+    assert response.json()["service"] == "splash-gui-manager"
 
 
 def test_root_redirects_to_admin(client: TestClient) -> None:
@@ -362,6 +364,48 @@ def test_effective_and_launch_preview(client: TestClient) -> None:
     assert (
         client.get("/api/admin/settings/launch-preview", params={"model": "bad"}).status_code == 400
     )
+
+
+def test_get_put_round_trip_is_a_no_op(client: TestClient, paths: Paths) -> None:
+    """Acceptance 2026-10-04: saving back what GET returned must not turn per-model
+    defaults into overrides that shadow the global values (docs/api.md §6.1)."""
+    doc = _settings(client)
+    doc["global"]["serve"].update(
+        {"max_context": "128K", "decode_share": 0.75, "max_image_pixels": 1048576}
+    )
+    doc["models"][MLX] = {"serve": {"served_model_names": ["qwen-moe"]}}
+    assert client.put("/api/admin/settings", json=doc).status_code == 200
+    on_disk = paths.settings_file.read_text()
+    argv = client.get("/api/admin/settings/launch-preview", params={"model": MLX}).json()["argv"]
+    assert "--max-context" in argv and "--decode-share" in argv
+
+    got = client.get("/api/admin/settings").json()["settings"]
+    assert got["models"][MLX] == {
+        "serve": {"served_model_names": ["qwen-moe"]},
+        "sampling_defaults": {},
+        "profiles": {},
+    }
+    saved = client.put("/api/admin/settings", json=got)
+    assert saved.status_code == 200 and saved.json()["changed"] == []
+    assert saved.json()["settings"]["models"][MLX]["serve"] == {"served_model_names": ["qwen-moe"]}
+    assert paths.settings_file.read_text() == on_disk
+    after = client.get("/api/admin/settings/launch-preview", params={"model": MLX}).json()["argv"]
+    assert after == argv
+    eff = client.get("/api/admin/settings/effective", params={"model": MLX}).json()["values"]
+    assert eff["serve.max_context"]["source"] == "global"
+    assert eff["serve.max_context"]["value"] == "128K"
+
+
+def test_explicit_per_model_null_survives_the_round_trip(client: TestClient) -> None:
+    doc = _settings(client)
+    doc["global"]["serve"]["default_reasoning_effort"] = "high"
+    doc["models"][MLX] = {"serve": {"default_reasoning_effort": None}}
+    client.put("/api/admin/settings", json=doc)
+    got = client.get("/api/admin/settings").json()["settings"]
+    assert got["models"][MLX]["serve"] == {"default_reasoning_effort": None}
+    client.put("/api/admin/settings", json=got)
+    eff = client.get("/api/admin/settings/effective", params={"model": MLX}).json()["values"]
+    assert eff["serve.default_reasoning_effort"]["source"] == "model"
 
 
 def test_presets(client: TestClient) -> None:

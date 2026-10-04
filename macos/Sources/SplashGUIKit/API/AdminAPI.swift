@@ -45,16 +45,35 @@ public enum APIError: Error, Sendable, Equatable, CustomStringConvertible {
     }
 }
 
+/// What answers `GET /health` on the manager's port.
+public enum HealthProbe: Sendable, Equatable {
+    /// A Splash GUI manager (`{"status":"ok","service":"splash-gui-manager"}`).
+    case manager
+    /// Something else is listening there (oMLX, another app): never talk to it as the manager.
+    case foreign
+    /// Nothing answers.
+    case down
+}
+
+/// The `service` value the manager's `/health` carries (manager/splash_gui/__init__.py).
+public let managerHealthService = "splash-gui-manager"
+
 /// The manager's admin API as the app uses it. The two primitives make mocking trivial; the
 /// typed calls are extensions.
 public protocol AdminAPI: Sendable {
-    /// `GET /health` → true when `{"status":"ok"}`.
+    /// `GET /health` → true only when our manager answers (`.manager` from `probe()`).
     func health() async -> Bool
+    /// `GET /health`, telling our manager from another server on the same port.
+    func probe() async -> HealthProbe
     /// GET/POST/PUT/DELETE with a JSON body; returns the parsed JSON (`.null` for 204).
     func request(_ method: String, _ path: String, body: JSONValue?) async throws -> JSONValue
 }
 
 public extension AdminAPI {
+    func probe() async -> HealthProbe {
+        await health() ? .manager : .down
+    }
+
     func get(_ path: String) async throws -> JSONValue {
         try await request("GET", path, body: nil)
     }
@@ -170,12 +189,23 @@ public final class HTTPAdminAPI: AdminAPI {
     }
 
     public func health() async -> Bool {
+        await probe() == .manager
+    }
+
+    public func probe() async -> HealthProbe {
         var req = URLRequest(url: url(for: "/health"))
         req.timeoutInterval = 2
         guard let (data, response) = try? await session.data(for: req),
-              let http = response as? HTTPURLResponse, http.statusCode == 200
-        else { return false }
-        return (try? JSONValue.parse(data))?["status"]?.string == "ok"
+              let http = response as? HTTPURLResponse
+        else { return .down }
+        return Self.classifyHealth(status: http.statusCode, data: data)
+    }
+
+    /// Our manager answers 200 with `status: ok` and `service: splash-gui-manager`; any other
+    /// answer means another server holds the port (oMLX also says `{"status":"ok"}`).
+    public static func classifyHealth(status: Int, data: Data) -> HealthProbe {
+        guard status == 200, let body = try? JSONValue.parse(data) else { return .foreign }
+        return body["status"]?.string == "ok" && body["service"]?.string == managerHealthService ? .manager : .foreign
     }
 
     public func request(_ method: String, _ path: String, body: JSONValue?) async throws -> JSONValue {

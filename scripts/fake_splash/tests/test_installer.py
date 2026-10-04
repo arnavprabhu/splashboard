@@ -1,4 +1,4 @@
-"""The fake install/models.py: layout, progress, SIGTERM/resume, failures."""
+"""The fake install/models.py: layout, progress, SIGTERM/partials, failures."""
 
 from __future__ import annotations
 
@@ -109,8 +109,8 @@ def test_failed_update_keeps_installed_commit(tmp_path):
     assert code == 0 and "Warning: keeping the installed " in err
 
 
-def test_progress_sigterm_keeps_incomplete_and_resume(tmp_path):
-    env = {"FAKE_SPLASH_DL_BPS": "2M", "FAKE_SPLASH_DL_SHARD_BYTES": "4M"}
+def _sigterm_mid_file(tmp_path: Path, env: dict) -> tuple[Path, Path, int]:
+    """Start `prepare`, watch one partial blob grow, SIGTERM the process group."""
     process = run_installer(tmp_path, ["--models", str(tmp_path / "links"), "--model", GGUF, "prepare"], env=env)
     blobs = repo_dir(tmp_path, "unsloth/Qwen3.6-35B-A3B-GGUF") / "blobs"
     sizes: list[int] = []
@@ -128,13 +128,33 @@ def test_progress_sigterm_keeps_incomplete_and_resume(tmp_path):
     assert len(partial) == 1
     kept = partial[0].stat().st_size
     assert 0 < kept < 4 << 20
+    return blobs, partial[0], kept
+
+
+def test_progress_sigterm_keeps_a_uuid_partial_that_is_never_resumed(tmp_path):
+    """huggingface_hub 1.28 (Splash 1.2.0): `<hash>.<uuid8>.incomplete`, a new one per run."""
+    env = {"FAKE_SPLASH_DL_BPS": "2M", "FAKE_SPLASH_DL_SHARD_BYTES": "4M"}
+    blobs, stale, kept = _sigterm_mid_file(tmp_path, env)
+    assert re.fullmatch(r"[0-9a-f]{64}\.[0-9a-f]{8}\.incomplete", stale.name), stale.name
+    code, _, err = install(tmp_path, "--model", GGUF, "prepare", env={**env, "FAKE_SPLASH_DL_BPS": "64M"})
+    assert code == 0, err
+    final = blobs / stale.name.split(".")[0]
+    assert final.stat().st_size == 4 << 20
+    assert stale.exists() and stale.stat().st_size == kept, "the killed run's partial is left behind"
+    assert list(blobs.glob("*.incomplete")) == [stale]
+
+
+def test_legacy_hub_resumes_the_incomplete_blob(tmp_path):
+    env = {"FAKE_SPLASH_DL_BPS": "2M", "FAKE_SPLASH_DL_SHARD_BYTES": "4M", "FAKE_SPLASH_DL_HUB": "legacy"}
+    blobs, partial, _ = _sigterm_mid_file(tmp_path, env)
+    assert re.fullmatch(r"[0-9a-f]{64}\.incomplete", partial.name), partial.name
     started = time.monotonic()
     code, _, err = install(tmp_path, "--model", GGUF, "prepare", env={**env, "FAKE_SPLASH_DL_BPS": "64M"})
     assert code == 0, err
     assert not list(blobs.glob("*.incomplete"))
-    assert (blobs / partial[0].name.removesuffix(".incomplete")).stat().st_size == 4 << 20
+    assert (blobs / partial.name.removesuffix(".incomplete")).stat().st_size == 4 << 20
     assert time.monotonic() - started < 5
-    assert install(tmp_path, "--model", GGUF, "verify", "--full")[0] == 0
+    assert install(tmp_path, "--model", GGUF, "verify", "--full", env=env)[0] == 0
 
 
 def test_sigint_exits_130(tmp_path):
@@ -174,7 +194,13 @@ def test_network_mid_download_and_disk_full(tmp_path):
     code, _, err = install(tmp_path / "b", "--model", GGUF, "prepare", env={"FAKE_SPLASH_DL_FAIL": "disk_full"})
     assert code == 1 and err.strip() == f"error: cannot install {GGUF}: [Errno 28] No space left on device"
     blobs = repo_dir(tmp_path / "b", "unsloth/Qwen3.6-35B-A3B-GGUF") / "blobs"
-    assert list(blobs.glob("*.incomplete"))
+    # huggingface_hub 1.28 deletes its per-run partial when the download fails;
+    # older hubs kept `<hash>.incomplete` for the next run.
+    assert not list(blobs.glob("*.incomplete"))
+    legacy = {"FAKE_SPLASH_DL_FAIL": "disk_full", "FAKE_SPLASH_DL_HUB": "legacy"}
+    code, _, _ = install(tmp_path / "c", "--model", GGUF, "prepare", env=legacy)
+    assert code == 1
+    assert list((repo_dir(tmp_path / "c", "unsloth/Qwen3.6-35B-A3B-GGUF") / "blobs").glob("*.incomplete"))
 
 
 def test_incompatible(tmp_path):

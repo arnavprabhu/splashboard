@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { expect, test } from '../support/manager';
 
 test.describe('pages against the real manager', () => {
@@ -21,6 +24,24 @@ test.describe('pages against the real manager', () => {
     await page.goto('/admin/settings/about');
     await expect(page.getByText(/manager .* · Python /)).toBeVisible();
     await expect(page.getByRole('link', { name: 'Re-run welcome wizard' })).toBeVisible();
+  });
+
+  test('saving one global field adds no per-model keys (acceptance 2026-10-04)', async ({ page, manager }) => {
+    const model = 'unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q2_K_XL';
+    await manager.patchSettings((doc) => {
+      doc.global.serve = { ...doc.global.serve, max_context: '128K' };
+      doc.models[model] = { serve: { served_model_names: ['qwen-moe'] } };
+    });
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto('/admin/settings/requests');
+    await page.locator('[data-key="serve.queue_size"] input').fill('16');
+    await page.getByRole('region', { name: 'Unsaved changes' }).getByRole('button', { name: /^Save/ }).click();
+    await expect(page.getByText('Settings saved.')).toBeVisible();
+    const disk = JSON.parse(readFileSync(join(manager.home, 'settings.json'), 'utf8'));
+    expect(disk.global.serve.queue_size).toBe(16);
+    expect(disk.models[model]).toEqual({ serve: { served_model_names: ['qwen-moe'] }, sampling_defaults: {}, profiles: {} });
+    const preview = await manager.api<{ argv: string[] }>('GET', `/settings/launch-preview?model=${encodeURIComponent(model)}`);
+    expect(preview.body.argv.join(' ')).toContain('--max-context 128K');
   });
 
   test('integrations lists the five CLI agents and two desktop apps', async ({ page }) => {

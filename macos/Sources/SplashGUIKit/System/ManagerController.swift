@@ -87,11 +87,17 @@ public final class ManagerController {
     /// Makes sure a manager answers `/health`. Order: already running → LaunchAgent (bundle) →
     /// child process. Returns the ownership or a human-readable failure.
     public func ensureRunning() async -> Result<ManagerOwnership, ManagerStartError> {
-        if await api.health() {
+        switch await api.probe() {
+        case .manager:
             if ownership == nil {
                 ownership = (agent?.status == .enabled) ? .agent : .external
             }
             return .success(ownership!)
+        case .foreign:
+            // A manager started now could not bind the port; never treat the stranger as ours.
+            return .failure(.portTaken)
+        case .down:
+            break
         }
         if let agent {
             do {
@@ -190,6 +196,8 @@ public enum ManagerStartError: Error, Sendable, Equatable, CustomStringConvertib
     case launchFailed(String)
     case exited(log: URL)
     case timedOut(log: URL)
+    /// Another server (not Splash GUI) answers on the manager's port.
+    case portTaken
 
     public var description: String {
         switch self {
@@ -198,6 +206,9 @@ public enum ManagerStartError: Error, Sendable, Equatable, CustomStringConvertib
         case .launchFailed(let why): return "Couldn't start the manager: \(why)"
         case .exited(let log): return "The manager exited during startup. See \(log.path)."
         case .timedOut: return "The manager did not answer within 20 s."
+        case .portTaken:
+            return "Another server (not Splash GUI) is using the manager's port. Quit it, or change "
+                + "server.port in ~/.splash/settings.json."
         }
     }
 }

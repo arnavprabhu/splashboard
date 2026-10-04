@@ -143,6 +143,7 @@ Installer (`install/models.py`, and the install step of `serve`):
 |---|---|---|
 | `HF_HUB_CACHE` | `$SPLASH_GUI_FAKE_DATA/hub` | Where `models--owner--repo/{blobs,snapshots,refs}` are written |
 | `FAKE_SPLASH_DL_BPS` | 64M | Download rate in bytes/s (`.incomplete` blobs grow at this rate) |
+| `FAKE_SPLASH_DL_HUB` | — | Unset: huggingface_hub 1.28 partials, as Splash 1.2.0 bundles (`blobs/<hash>.<uuid8>.incomplete`, a new file per run, deleted on a handled error, never resumed). `legacy`: older hubs (`blobs/<hash>.incomplete`, appended to by the next run) |
 | `FAKE_SPLASH_DL_SHARD_BYTES`, `_SHARDS`, `_DRAFT_BYTES`, `_VISION_BYTES` | 2M, 2, 1M, 512K | File sizes |
 | `FAKE_SPLASH_DL_COMMIT_SALT` | — | Changes every resolved commit, so `prepare` reports "moved from … to …" (simulates updates). The first weight file changes too, so an update fetches one file; if that fails, the old commit is kept with `Warning: keeping the installed …` and `prepare` still exits 0 (upstream.py `_keeping_installation`) |
 | `FAKE_SPLASH_DL_FAIL` | — | `gated` (401 unless `HF_TOKEN` is set), `network` (Hub unreachable), `network_mid`, `disk_full` (ENOSPC mid-download), `incompatible` |
@@ -150,7 +151,9 @@ Installer (`install/models.py`, and the install step of `serve`):
 
 Support comes from the repository name: `*35B-A3B*` is Qwen3.6-35B-A3B,
 `*27B*` is Qwen3.8-27B, and anything else is refused as incompatible with
-`families.family_for`'s wording. `prepare` resumes partial `.incomplete` blobs.
+`families.family_for`'s wording. `prepare` starts each unfinished file again
+in a new partial blob, as huggingface_hub 1.28 does (`FAKE_SPLASH_DL_HUB=legacy`
+resumes `<hash>.incomplete` instead).
 SIGINT exits 130. SIGTERM keeps its default action, as in the real installer,
 which only unblocks the signal, so the process ends at once and the partial
 blob stays.

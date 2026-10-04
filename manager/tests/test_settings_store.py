@@ -88,6 +88,17 @@ def test_reset_to_global_by_removing_the_key() -> None:
     assert effective_values(d2, MLX)["serve.max_context"].source == "default"
 
 
+def test_every_dump_keeps_per_model_overrides_sparse() -> None:
+    """Internal read-modify-write (storage move, reset, CLI `config set`) dumps the
+    document; per-model defaults must not come back as explicit overrides."""
+    d = doc({"models": {MLX: {"serve": {"max_context": "64K"}, "sampling_defaults": {}}}})
+    dumped = d.model_dump(mode="json", by_alias=True)
+    assert dumped == d.to_json_dict()
+    assert dumped["models"][MLX]["serve"] == {"max_context": "64K"}
+    again = SettingsDocument.model_validate(dumped)
+    assert again.models[MLX].serve.model_fields_set == {"max_context"}
+
+
 def test_effective_serve() -> None:
     d = doc(
         {
