@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, cast
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from ..errors import error_responses
 from ..schemas import (
@@ -12,6 +12,8 @@ from ..schemas import (
     DesktopIntegration,
     EntriesRemoved,
     Integrations,
+    LaunchPrint,
+    OpenedPath,
     OpenTerminalRequest,
     OpenTerminalResult,
     RestoreAllResult,
@@ -64,3 +66,33 @@ def open_terminal(
 @router.delete("/integrations/{name}/entries", response_model=EntriesRemoved, responses=_ERR)
 def remove_entries(state: State, name: Literal["hermes", "pi"]) -> EntriesRemoved:
     return cast(IntegrationsService, state.integrations).remove_entries(name)
+
+
+@router.post(
+    "/integrations/{name}/open", response_model=OpenedPath, responses=error_responses(404, 503)
+)
+def open_app(state: State, name: DesktopName) -> OpenedPath:
+    """Open app (G17): `open -a Claude`, or the Codex app on a new thread."""
+    return cast(IntegrationsService, state.integrations).open(name)
+
+
+@router.post(
+    "/integrations/{name}/reveal-backup",
+    response_model=OpenedPath,
+    responses=error_responses(404, 503),
+)
+def reveal_backup(
+    state: State, name: Literal["claude-desktop", "codex-app", "hermes", "pi"]
+) -> OpenedPath:
+    """View backup (G16): the newest `integrations/backups/<name>/<time>` folder in Finder."""
+    return cast(IntegrationsService, state.integrations).reveal_backup(name)
+
+
+@router.get("/integrations/{name}/print", response_model=LaunchPrint)
+def print_launch(
+    state: State,
+    name: CliName,
+    model: Annotated[str | None, Query(description="ID or ID:profile; default active")] = None,
+) -> LaunchPrint:
+    """`splash launch <name> --print` as data (G13), for "What this changes"."""
+    return cast(IntegrationsService, state.integrations).print_launch(name, model)

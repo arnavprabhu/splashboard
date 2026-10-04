@@ -35,6 +35,18 @@ def main() -> None:
         client_args=spec["args"],
         client_version=client_version,
     )
+    if spec.get("format") == "json":
+        # `GET /integrations/{client}/print`: the same configuration as data.
+        print(
+            json.dumps(
+                {
+                    "argv": argv,
+                    "env": {k: v for k, v in env.items() if os.environ.get(k) != v},
+                    "removed": sorted(k for k in os.environ if k not in env),
+                }
+            )
+        )
+        return
     if spec["print"]:
         changed = {key: value for key, value in env.items() if os.environ.get(key) != value}
         secret = os.environ.get("SPLASH_API_KEY")

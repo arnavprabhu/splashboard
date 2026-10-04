@@ -88,6 +88,8 @@ class ManagerState:
     # The home directory whose desktop-app configs integrations edit (None: the
     # user's real home). Tests point it at a throwaway directory.
     user_home: Path | None = None
+    # Running crash-trace replays by trace name (POST /traces/{name}/replay/cancel).
+    replays: dict[str, Any] = field(default_factory=dict)
     # Called to stop the whole manager (POST /shutdown); the runner sets it.
     request_shutdown: Callable[[], None] | None = None
     started_at: float = field(default_factory=time.time)

@@ -1,7 +1,8 @@
 """Fake `python -m server.crash_trace <trace>` (splash/server/crash_trace.py main).
 
 The real tool replays a native crash trace against the engine; the fake only
-reads the JSON file and prints one line per recorded frame, then exits 0, or 2
+reads the JSON file and prints one line per recorded frame (pausing
+`seconds_per_frame`, so Stop can be tested), then exits 0, or 2
 for a file it cannot read, so the manager's replay route can be exercised.
 """
 
@@ -10,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 
@@ -18,12 +20,15 @@ def main() -> int:
     parser.add_argument("trace", type=Path)
     args = parser.parse_args()
     try:
-        frames = json.loads(args.trace.read_text()).get("frames", [])
+        trace = json.loads(args.trace.read_text())
+        frames = trace.get("frames", [])
+        pause = float(trace.get("seconds_per_frame", 0))
     except (OSError, ValueError, AttributeError) as error:
         print(f"cannot read trace: {error}", file=sys.stderr)
         return 2
     for index, frame in enumerate(frames):
-        print(f"frame {index}: {frame}")
+        print(f"frame {index}: {frame}", flush=True)
+        time.sleep(pause)
     print(f"replayed {len(frames)} frames")
     return 0
 

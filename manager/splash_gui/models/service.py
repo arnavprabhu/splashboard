@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import shutil
 import time
@@ -21,6 +22,7 @@ from ..schemas import (
     CatalogGroup,
     DeleteModelResult,
     DiskUsage,
+    DownloadPlan,
     DraftRef,
     InspectResult,
     InstalledModel,
@@ -29,7 +31,11 @@ from ..schemas import (
     ModelCard,
     ModelDetail,
     ModelFile,
+    ModelFingerprints,
     ModelsChangedEvent,
+    PlannedFile,
+    TokenPiece,
+    TokenPieces,
     VariantOut,
     VisionInfo,
 )
@@ -40,6 +46,36 @@ from .layout import directory_size, execute_delete, plan_delete, read_all
 
 if TYPE_CHECKING:
     from ..state import ManagerState
+
+log = logging.getLogger(__name__)
+
+
+def fingerprints(facts: dict[str, Any]) -> ModelFingerprints | None:
+    """The model's last-load identity from usage.db `model_facts` (Appendix B
+    `identity.*`); None until it has been loaded once."""
+    if not facts:
+        return None
+    identity = facts.get("identity") if isinstance(facts.get("identity"), dict) else None
+
+    def text(*path: str) -> str | None:
+        node: Any = identity
+        for key in path:
+            node = node.get(key) if isinstance(node, dict) else None
+        return str(node) if isinstance(node, str | int) and not isinstance(node, bool) else None
+
+    return ModelFingerprints(
+        # runtime/engine/Status.cpp: identity.cache.{loaded_model_layout_sha256,
+        # build_id}, identity.kv.{target_model_sha256, format, quantization}.
+        build_id=text("cache", "build_id"),
+        loaded_model_layout_sha256=text("cache", "loaded_model_layout_sha256"),
+        target_model_sha256=text("kv", "target_model_sha256"),
+        kv_format=text("kv", "format"),
+        kv_quantization=text("kv", "quantization"),
+        identity=identity,
+        max_context=facts.get("max_context"),
+        vision=facts.get("vision"),
+        recorded_at=facts.get("updated_at"),
+    )
 
 
 def inspect_timeout(files: dict[str, int | None], variant: str | None) -> float:
@@ -204,6 +240,7 @@ class Models:
             files=files,
             link_path=str(selections[0].link),
             chat_template_mode=facts.get("chat_template_mode"),
+            fingerprints=fingerprints(facts),
         )
 
     async def delete(self, model: str, confirm_active: bool = False) -> DeleteModelResult:
@@ -272,7 +309,8 @@ class Models:
             raise ApiError(error.status, error.message, "hub_unreachable") from None
         key = f"{model}@{repo.sha}"
         if not refresh and key in self.cache and time.time() - self.cache[key][0] < 86400:
-            return self.cache[key][1].model_copy(update={"cached": True})
+            cached = self.cache[key][1].model_copy(update={"cached": True})
+            return await self.with_plans(model, cached, repo)
         engine = self.state.engine_cached()
         if not engine.python or not engine.pkg:
             raise ApiError(503, "Install Splash to check model compatibility", "engine_unavailable")
@@ -376,7 +414,86 @@ class Models:
             }
         )
         self.cache[key] = (time.time(), result)
-        return result
+        return await self.with_plans(model, result, repo)
+
+    async def with_plans(self, model: str, result: InspectResult, repo: Any) -> InspectResult:
+        """Attach SPEC §9.4's expected file set (target + draft) with what is already
+        present, recomputed on every call; never fails the inspection."""
+        if not result.compatible:
+            return result
+        try:
+            draft_info = None
+            if result.draft and not Path(result.draft).is_absolute():
+                draft_info = await self._repo_info_cached(result.draft)
+            plans = {
+                language_only: self.plan(model, result, repo, draft_info, language_only)
+                for language_only in (False, True)
+            }
+        except Exception:
+            log.exception("could not build the download plan for %s", model)
+            return result
+        return result.model_copy(
+            update={"download_plan": plans[False], "language_only_plan": plans[True]}
+        )
+
+    def plan(
+        self,
+        model: str,
+        result: InspectResult,
+        repo: Any,
+        draft: Any,
+        language_only: bool,
+    ) -> DownloadPlan | None:
+        sets = self.language_file_sets if language_only else self.file_sets
+        selected = sets.get(model)
+        if selected is None:
+            return None
+        _, variant = split_model_id(model)
+        models_dir = self.state.settings.models_dir()
+        files: list[PlannedFile] = []
+
+        def present(repo_id: str, info: Any, name: str) -> bool:
+            blob = info.blobs.get(name)
+            if not blob:
+                return False
+            folder = models_dir / ("models--" + repo_id.replace("/", "--"))
+            return (folder / "blobs" / str(blob)).is_file()
+
+        for name in selected:
+            files.append(
+                PlannedFile(
+                    name=name,
+                    repo_id=result.repo_id,
+                    bytes=repo.files.get(name),
+                    present=present(result.repo_id, repo, name),
+                )
+            )
+        if draft is not None and result.draft:
+            for name, size in draft.files.items():
+                if name == "config.json" or name.startswith("model.safetensors"):
+                    files.append(
+                        PlannedFile(
+                            name=name,
+                            repo_id=result.draft,
+                            bytes=size,
+                            present=present(result.draft, draft, name),
+                        )
+                    )
+        total = sum(f.bytes or 0 for f in files)
+        remaining = sum(f.bytes or 0 for f in files if not f.present)
+        models_dir.mkdir(parents=True, exist_ok=True)
+        free = shutil.disk_usage(models_dir).free
+        margin = 2 * 1024**3
+        return DownloadPlan(
+            variant=variant,
+            language_only=language_only,
+            files=files,
+            total_bytes=total,
+            remaining_bytes=remaining,
+            free_bytes=free,
+            margin_bytes=margin,
+            fits_on_disk=remaining + margin <= free,
+        )
 
     async def card(self, model: str) -> ModelCard:
         repo_id, _ = split_model_id(valid_id(model))
@@ -396,6 +513,51 @@ class Models:
                 ModelFile(path=name, repo_id=repo_id, size_bytes=size)
                 for name, size in repo.files.items()
             ],
+        )
+
+    async def token_pieces(self, model: str | None, ids: list[int]) -> TokenPieces:
+        """Each token id's vocabulary piece and decoded text, read from the model's
+        own `tokenizer/tokenizer.json` in Splash's assembly with the `tokenizers`
+        library Splash bundles (one helper run per request; no engine round trip).
+        SPEC §22 Q6 is open: this is the cheap path, see session3-backend.md."""
+        chosen = model or self.state.active_model()
+        if not chosen:
+            raise ApiError(409, "Load a model or name one", "no_model")
+        selection = next(
+            (s for s in read_all(splash_models_dir()) if s.model == valid_id(chosen)), None
+        )
+        if selection is None:
+            raise ApiError(404, f"{chosen} is not installed", "model_not_installed")
+        if not ids:
+            return TokenPieces(model=chosen, pieces=[])
+        # The assembly's tokenizer/tokenizer.json: the MLX file, or the one Splash
+        # derives from a GGUF (install/assembly.py, gguf.DERIVED_FILES).
+        tokenizer = selection.link / "tokenizer" / "tokenizer.json"
+        engine = self.state.engine_cached()
+        if not tokenizer.is_file() or not engine.python:
+            raise ApiError(503, "Token pieces are unavailable for this model", "pieces_unavailable")
+        proc = await asyncio.create_subprocess_exec(
+            str(engine.python),
+            str(Path(__file__).parents[1] / "helpers" / "token_pieces.py"),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            out, err = await asyncio.wait_for(
+                proc.communicate(json.dumps({"tokenizer": str(tokenizer), "ids": ids}).encode()),
+                30,
+            )
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise ApiError(503, "Token pieces timed out", "pieces_unavailable") from None
+        if proc.returncode:
+            log.info("token pieces helper failed: %s", err.decode(errors="replace")[-500:])
+            raise ApiError(503, "Token pieces are unavailable for this model", "pieces_unavailable")
+        data = json.loads(out)
+        return TokenPieces(
+            model=chosen, pieces=[TokenPiece.model_validate(p) for p in data["pieces"]]
         )
 
     async def _repo_info_cached(self, repo_id: str) -> Any:

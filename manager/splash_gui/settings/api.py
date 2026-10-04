@@ -21,6 +21,7 @@ from ..schemas import (
     HfTokenIn,
     HfTokenTestIn,
     HfTokenTestOut,
+    HfWhoami,
     IssueOut,
     LaunchPreview,
     ModelPickOut,
@@ -32,8 +33,11 @@ from ..schemas import (
     ProfilesView,
     RecommendationOut,
     ResolvedPaths,
+    SecretMeta,
     SecretsState,
     SettingChange,
+    SettingsResetRequest,
+    SettingsResetResult,
     SettingsResponse,
     SettingsSaveResult,
     SettingsSchema,
@@ -203,6 +207,52 @@ def put_settings(state: State, body: Annotated[dict[str, Any], Body()]) -> Setti
     return save_settings(state, body)
 
 
+# What "Reset all settings" keeps (docs/ui/05 G3): where the data lives, the
+# wizard's completion (otherwise the admin would bounce to the welcome flow) and
+# the configured MCP servers. Secrets, models, chats and usage are untouched.
+RESET_KEEPS = ("global.storage", "global.wizard", "global.chat.mcp_servers")
+
+
+@router.post(
+    "/settings/reset",
+    response_model=SettingsResetResult,
+    responses=error_responses(409, 422),
+)
+async def reset_settings(
+    state: State, body: SettingsResetRequest | None = None
+) -> SettingsResetResult:
+    """Global and per-model settings back to defaults (docs/ui/05 G3)."""
+    options = body or SettingsResetRequest()
+    sup = state.supervisor
+    if options.restart_engine and sup.active_model() and sup.busy() and not options.force:
+        raise ApiError(
+            409,
+            "Requests are in flight; reset anyway with force",
+            "model_switch_busy",
+            details={"requests_in_flight": sup.in_flight},
+        )
+    current = state.settings.current.model_dump(mode="json", by_alias=True)
+    fresh = SettingsDocument().model_dump(mode="json", by_alias=True)
+    for dotted in RESET_KEEPS:
+        *parents, leaf = dotted.split(".")
+        source, target = current, fresh
+        for key in parents:
+            source, target = source.get(key, {}), target.setdefault(key, {})
+        if leaf in source:
+            target[leaf] = source[leaf]
+    saved = save_settings(state, fresh)
+    restarted = False
+    if options.restart_engine and saved.restart_required and sup.active_model():
+        await sup.restart(force=True)
+        restarted = True
+    return SettingsResetResult(
+        settings=saved.settings,
+        restart_required=saved.restart_required and not restarted,
+        engine_restarted=restarted,
+        kept=list(RESET_KEEPS),
+    )
+
+
 @router.post("/settings/validate", response_model=SettingsValidation, openapi_extra=_SETTINGS_BODY)
 def validate_settings(state: State, body: Annotated[dict[str, Any], Body()]) -> SettingsValidation:
     result = state.settings.validate(body, _context(state))
@@ -343,6 +393,29 @@ def _secret_call(fn: Any, *args: Any) -> Any:
         raise ApiError(503, str(error), "keychain_unavailable") from None
 
 
+_SECRET_NAMES = {"api_key": SecretName.API_KEY, "hf_token": SecretName.HF_TOKEN}
+
+
+def mask_secret(value: str) -> tuple[str | None, str | None, str]:
+    """(prefix, last4, masked) for display. Short values show nothing of themselves."""
+    if len(value) < 12:
+        return None, None, "••••"
+    prefix = value[: value.rindex("-", 0, 11) + 1] if "-" in value[:11] else value[:4]
+    if len(prefix) > 10:
+        prefix = value[:4]
+    return prefix, value[-4:], f"{prefix}••••{value[-4:]}"
+
+
+@router.get("/settings/secret/meta", response_model=SecretMeta, responses=error_responses(503))
+def secret_meta(state: State, name: Literal["api_key", "hf_token"] = "api_key") -> SecretMeta:
+    """Whether a secret is set and its mask (`prefix••••last4`); never the value."""
+    value = _secret_call(state.secrets.get, _SECRET_NAMES[name])
+    if not value:
+        return SecretMeta(name=name, set=False)
+    prefix, last4, masked = mask_secret(value)
+    return SecretMeta(name=name, set=True, prefix=prefix, last4=last4, masked=masked)
+
+
 @router.get("/settings/secrets/api-key", response_model=ApiKeyOut)
 def reveal_api_key(state: State) -> ApiKeyOut:
     return ApiKeyOut(key=_secret_call(state.secrets.get, SecretName.API_KEY))
@@ -447,6 +520,55 @@ async def test_hf_token(
         user=data.get("name"),
         orgs=orgs,
     )
+
+
+@router.get("/hf/whoami", response_model=HfWhoami)
+async def hf_whoami(
+    request: Request,
+    state: State,
+    use: Literal["active", "override", "login"] = "active",
+) -> HfWhoami:
+    """Who the Hugging Face token belongs to (Downloader header, Settings → HF).
+    `active` is the token downloads use (D10: Keychain override, else `HF_TOKEN`,
+    else the `hf auth login` token); `override`/`login` check just that one."""
+    from ..models.hf import login_token
+
+    token: str | None = None
+    source: Literal["override", "env", "hf_login", "none"] = "none"
+    override = _secret_call(state.secrets.get, SecretName.HF_TOKEN)
+    if use in ("active", "override") and override:
+        token, source = override, "override"
+    elif use in ("active", "login"):
+        if os.environ.get("HF_TOKEN"):
+            token, source = os.environ["HF_TOKEN"], "env"
+        elif found := login_token():
+            token, source = found, "hf_login"
+    if not token:
+        return HfWhoami(status="no_token", source="none", message="No Hugging Face token")
+    endpoint = (state.settings.current.global_.hf.endpoint or "https://huggingface.co").rstrip("/")
+    transport = getattr(request.app.state, "http_transport", None)
+    try:
+        async with httpx.AsyncClient(timeout=10, transport=transport) as client:
+            reply = await client.get(
+                f"{endpoint}/api/whoami-v2", headers={"Authorization": f"Bearer {token}"}
+            )
+    except httpx.HTTPError as error:
+        return HfWhoami(
+            status="unreachable", source=source, message=f"Hugging Face is unreachable: {error}"
+        )
+    if reply.status_code != 200:
+        return HfWhoami(
+            status="rejected",
+            source=source,
+            http_status=reply.status_code,
+            message=f"Token rejected ({reply.status_code})",
+        )
+    try:
+        data = reply.json()
+    except ValueError:
+        data = {}
+    orgs = [str(o["name"]) for o in data.get("orgs", []) if isinstance(o, dict) and o.get("name")]
+    return HfWhoami(status="ok", source=source, user=data.get("name"), orgs=orgs, http_status=200)
 
 
 # Profiles (SPEC §7.5) -----------------------------------------------------------

@@ -100,6 +100,7 @@ class _Run:
     tasks: list[asyncio.Task[Any]] = field(default_factory=list)
     readers_done: asyncio.Event = field(default_factory=asyncio.Event)
     exit_code: int | None = None
+    saved_identity: dict[str, Any] | None = None
 
     @property
     def base_url(self) -> str:
@@ -933,6 +934,18 @@ class Supervisor:
         taken = st.dig(data, "disk.taken_back")
         if isinstance(taken, dict):
             self.taken_back = {k: int(v) for k, v in taken.items() if isinstance(v, int)}
+        identity = data.get("identity")
+        if isinstance(identity, dict) and identity != run.saved_identity and self.ready_at:
+            # Per-model fingerprints for the model detail view (SPEC §10.4 Info).
+            run.saved_identity = identity
+            with contextlib.suppress(Exception):
+                self.app.usage.set_model_facts(
+                    run.model,
+                    identity=identity,
+                    max_context=self.max_context,
+                    vision=self.vision,
+                    chat_template_mode=self.chat_template_mode,
+                )
         self._apply_transport(data)
         self._apply_busy(data)
         for listener in list(self.status_listeners):

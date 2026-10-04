@@ -30,7 +30,10 @@ from ..schemas import (
     IntegrationChanges,
     IntegrationError,
     Integrations,
+    LaunchPrint,
+    OpenedPath,
     OpenTerminalResult,
+    PrintedFile,
     RestoreAllResult,
 )
 from ..usage.db import iso
@@ -231,6 +234,14 @@ class IntegrationsService:
                 ),
             }
         )
+
+    def progress(self, name: str, state: str, step: str, message: str | None = None) -> None:
+        """One `integration.state` event: the row as it is now, plus the step the
+        connect/restore sequence just entered (docs/ui/09 §4, API gap G14)."""
+        row = self.desktop(name).model_copy(
+            update={"state": state, "step": step, "message": message}
+        )
+        self.state.events.publish("integration.state", row)
 
     def listing(self) -> Integrations:
         launched = self.state.usage.last_launches()
@@ -537,7 +548,10 @@ class IntegrationsService:
                 )
             if name in self.recovery:
                 await self.restore_one(name, reopen=False)
+            label = "Claude" if name == "claude-desktop" else "Codex"
+            self.progress(name, "connecting", "quitting_app", f"Quitting {label}…")
             await self.quit_app(name)
+            self.progress(name, "connecting", "backing_up", "Backing up the current configuration…")
             plans = self.plans(name)
             backup = self.state.paths.integrations_backups / name / str(time.time_ns())
             backup.mkdir(parents=True, mode=0o700)
@@ -561,30 +575,37 @@ class IntegrationsService:
             self.persist()  # Must precede every third-party write.
             try:
                 if name == "claude-desktop":
+                    self.progress(name, "connecting", "starting_gateway", "Starting the gateway…")
                     await self.start_gateway()
+                self.progress(name, "connecting", "writing_config", "Writing the configuration…")
                 for path, data, _ in plans:
                     write_atomic(path, data)
                 app = self.app(name)
                 assert app
+                self.progress(name, "connecting", "opening_app", f"Opening {label}…")
                 result = self.open_app(name, app)
                 if result.returncode:
                     raise ApiError(
                         503, result.stderr or "Could not open the app", "app_open_failed"
                     )
-            except Exception:
+            except Exception as error:
                 await self.restore_one(name, reopen=False)
+                message = error.message if isinstance(error, ApiError) else str(error)
+                self.progress(name, "not_connected", "failed", message)
                 raise
             self.recovery.discard(name)
             if not self.recovery:
                 self.state.alerts.clear_condition("unclean_integration_shutdown")
-            self.state.events.publish("integration.state", self.desktop(name))
+            self.progress(name, "connected", "done")
             return self.desktop(name)
 
     async def restore_one(self, name: str, reopen: bool = True) -> DesktopIntegration:
         record = self.records.get(name)
         if not record:
             return self.desktop(name)
+        self.progress(name, "restoring", "quitting_app")
         running = await self.quit_app(name)
+        self.progress(name, "restoring", "restoring_files", "Restoring the previous configuration…")
         failures = []
         for path, item in record["files"].items():
             try:
@@ -594,6 +615,7 @@ class IntegrationsService:
         if failures:
             # Keep the record so Restore can be retried; nothing is forgotten.
             self.persist()
+            self.progress(name, "needs_restore", "failed", "; ".join(failures))
             raise ApiError(
                 409,
                 "Some files could not be restored: " + "; ".join(failures),
@@ -610,8 +632,9 @@ class IntegrationsService:
                 await self.gateway_task
             self.gateway = None
         if reopen and running and (app := self.app(name)):
+            self.progress(name, "restoring", "opening_app")
             self.open_app(name, app)
-        self.state.events.publish("integration.state", self.desktop(name))
+        self.progress(name, "not_connected", "done")
         return self.desktop(name)
 
     async def disconnect(self, name: str) -> DesktopIntegration:
@@ -733,6 +756,135 @@ class IntegrationsService:
             await asyncio.gather(self.gateway_task, return_exceptions=True)
             sock.close()
             raise
+
+    def open(self, name: str) -> OpenedPath:
+        """ "Open app" (docs/ui/09 §5, G17): `open -a Claude`, or the Codex app on a
+        new thread."""
+        app = self.app(name)
+        if app is None:
+            raise ApiError(404, "Install the desktop app first", "app_not_found")
+        result = self.open_app(name, app)
+        if result.returncode:
+            raise ApiError(503, result.stderr or "Could not open the app", "app_open_failed")
+        return OpenedPath(path=str(app))
+
+    def reveal_backup(self, name: str) -> OpenedPath:
+        """ "View backup" (G16): the newest backup folder of this integration in Finder."""
+        root = self.state.paths.integrations_backups / name
+        folders = (
+            sorted((p for p in root.iterdir() if p.is_dir()), key=lambda p: p.name)
+            if root.is_dir()
+            else []
+        )
+        if not folders:
+            raise ApiError(404, f"No backup of {name} yet", "no_backup")
+        result = self.state.macos.reveal(folders[-1])
+        if result.returncode:
+            raise ApiError(503, result.stderr or "Finder could not reveal it", "reveal_failed")
+        return OpenedPath(path=str(folders[-1]))
+
+    def print_launch(self, client: str, model: str | None) -> LaunchPrint:
+        """`splash launch <client> --print` as data (G13). Claude, Codex and OpenCode
+        run Splash's own `install/clients.py` (the helper's JSON mode), so this and
+        the CLI share one source; Hermes and Pi would write their profile/provider
+        when configured, so they get the static description of what that writes."""
+        g = self.state.settings.current.global_
+        chosen = model or self.state.active_model() or g.routing.default_model
+        listing = self.state.proxy.models_list()["data"]
+        if chosen is None and listing:
+            chosen = str(listing[0]["id"])
+        static = self.changes(client)
+        if chosen is not None:
+            static = IntegrationChanges.model_validate_json(
+                static.model_dump_json().replace("<model>", chosen)
+            )
+        entry: dict[str, Any] = next((m for m in listing if m.get("id") == chosen), {})
+        context = entry.get("context_length")
+        if not isinstance(context, int) or context <= 0:
+            context = 262144
+        engine = self.state.engine_cached()
+        exact_ok = (
+            client in ("claude", "codex", "opencode")
+            and chosen is not None
+            and engine.python is not None
+            and engine.pkg is not None
+            and (engine.pkg / "install" / "clients.py").is_file()
+        )
+        fallback = LaunchPrint(
+            client=client,
+            model=chosen,
+            exact=False,
+            env=static.env,
+            args=static.args,
+            command=shlex.join([client, *static.args]),
+            files=[PrintedFile(path=f, change=self._file_change(client)) for f in static.files],
+            notes=static.notes,
+        )
+        if not exact_ok:
+            return fallback
+        placeholder = "${SPLASH_API_KEY}"
+        spec = {
+            "client": client,
+            "model": chosen,
+            "url": f"http://127.0.0.1:{g.server.port}",
+            "context": context,
+            "modalities": entry.get("input_modalities") or ["text"],
+            "args": [],
+            "print": True,
+            "format": "json",
+        }
+        env = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "HOME": str(self.home),
+            "PYTHONPATH": str(engine.pkg),
+            "SPLASH_GUI_CLIENT_SPEC": json.dumps(spec),
+            # Present so the output shows that Splash removes it for the session.
+            "ANTHROPIC_API_KEY": "(yours)",
+        }
+        if g.security.api_key_required:
+            env["SPLASH_API_KEY"] = placeholder
+        helper = Path(__file__).parents[1] / "helpers" / "launch_client.py"
+        try:
+            result = subprocess.run(
+                [str(engine.python), str(helper)],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+                stdin=subprocess.DEVNULL,
+            )
+            data = json.loads(result.stdout) if result.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError, ValueError):
+            data = None
+        if not isinstance(data, dict):
+            return fallback
+        argv = [str(a) for a in data.get("argv", [])]
+        changed = {str(k): str(v) for k, v in (data.get("env") or {}).items()}
+        changed.pop("SPLASH_GUI_CLIENT_SPEC", None)
+        secret = sorted(k for k, v in changed.items() if placeholder in v)
+        shown = {k: v.replace(placeholder, "••••") for k, v in changed.items()}
+        removed = [k for k in data.get("removed") or [] if k != "SPLASH_GUI_CLIENT_SPEC"]
+        return LaunchPrint(
+            client=client,
+            model=chosen,
+            exact=True,
+            env=shown,
+            secret_env=secret,
+            removed_env=removed,
+            args=argv[1:],
+            command=shlex.join([client, *argv[1:]]),
+            files=[],
+            notes=static.notes,
+        )
+
+    @staticmethod
+    def _file_change(client: str) -> str:
+        if client == "hermes":
+            return "model: default, provider custom, base_url, api_key, context_length, max_tokens"
+        if client == "pi":
+            return "adds or replaces this server's provider entry"
+        return ""
 
     def open_terminal(self, name: str, model: str | None) -> OpenTerminalResult:
         command = shlex.join(

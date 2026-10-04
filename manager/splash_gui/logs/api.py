@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import fnmatch
 import io
 import re
@@ -19,6 +20,7 @@ from fastapi.responses import StreamingResponse
 from ..engine.api import get_engine
 from ..errors import SSE_RESPONSES, ApiError, error_responses
 from ..schemas import (
+    CancelResult,
     DeletedBytes,
     DiagnosticsBundle,
     LogLine,
@@ -226,6 +228,7 @@ def replay(state: State, name: str) -> StreamingResponse:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
+        state.replays[name] = proc
         try:
             assert proc.stdout
             seq = 0
@@ -237,11 +240,29 @@ def replay(state: State, name: str) -> StreamingResponse:
                 seq += 1
             yield "exit", {"code": await proc.wait()}
         finally:
+            if state.replays.get(name) is proc:
+                del state.replays[name]
             if proc.returncode is None:
                 proc.kill()
                 await proc.wait()
 
     return sse_response(output())
+
+
+@router.post(
+    "/traces/{name}/replay/cancel", response_model=CancelResult, responses=error_responses(400)
+)
+def cancel_replay(state: State, name: str) -> CancelResult:
+    """Replay → Stop: end the running replay of this trace; the stream then sends
+    `exit` with the signal's code (`-15`). `cancelled` is false when none runs."""
+    if not _is_trace_name(name):
+        raise ApiError(400, "Invalid trace name", "invalid_trace")
+    proc = state.replays.get(name)
+    if proc is None or proc.returncode is not None:
+        return CancelResult(cancelled=False)
+    with contextlib.suppress(ProcessLookupError):
+        proc.terminate()
+    return CancelResult(cancelled=True)
 
 
 @router.delete("/traces/{name}", status_code=204, responses=error_responses(400, 404))

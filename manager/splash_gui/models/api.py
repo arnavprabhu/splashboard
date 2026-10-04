@@ -24,6 +24,8 @@ from ..schemas import (
     ModelDetail,
     SearchResult,
     SearchResults,
+    TokenPieces,
+    TokenPiecesRequest,
     VerifyRequest,
 )
 from ..state import ManagerState, get_state
@@ -126,3 +128,11 @@ async def delete_model(
     state: State, model_id: str, confirm_active: bool = False
 ) -> DeleteModelResult:
     return await cast(Models, state.models).delete(model_id, confirm_active)
+
+
+@router.post(
+    "/tokenizer/pieces", response_model=TokenPieces, responses=error_responses(404, 409, 503)
+)
+async def token_pieces(state: State, body: TokenPiecesRequest) -> TokenPieces:
+    """Exact pieces for token ids from `/tokenize` (Tokenizer page, G10; SPEC §22 Q6)."""
+    return await cast(Models, state.models).token_pieces(body.model, body.ids)

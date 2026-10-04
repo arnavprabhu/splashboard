@@ -388,6 +388,22 @@ class JobView(ApiModel):
     lines: list[str] = Field(default_factory=list)
 
 
+class TokenPiece(ApiModel):
+    id: int
+    piece: str | None  # the vocabulary entry (byte-level form, e.g. "Ġhello")
+    text: str  # what the id decodes to on its own
+
+
+class TokenPieces(ApiModel):
+    model: str
+    pieces: list[TokenPiece]
+
+
+class TokenPiecesRequest(ApiModel):
+    ids: list[int] = Field(max_length=32768)
+    model: str | None = None  # default: the active model
+
+
 class JobList(ApiModel):
     jobs: list[JobView]
 
@@ -699,6 +715,42 @@ class HfTokenTestIn(ApiModel):
     token: str | None = None
 
 
+class HfWhoami(ApiModel):
+    """`GET /hf/whoami`: which token the manager uses and who it belongs to."""
+
+    status: Literal["ok", "no_token", "rejected", "unreachable"]
+    source: Literal["override", "env", "hf_login", "none"]
+    user: str | None = None
+    orgs: list[str] = Field(default_factory=list)
+    http_status: int | None = None
+    message: str | None = None
+
+
+class SecretMeta(ApiModel):
+    """A secret's presence and mask; the value itself never leaves the Keychain."""
+
+    name: Literal["api_key", "hf_token"]
+    set: bool
+    prefix: str | None = None
+    last4: str | None = None
+    masked: str | None = None  # "{prefix}••••{last4}", or "••••" for short values
+    updated_at: str | None = None
+
+
+class SettingsResetRequest(ApiModel):
+    # Restart the engine afterwards when the active model's flags changed.
+    restart_engine: bool = True
+    # Restart even with requests in flight (otherwise 409 model_switch_busy).
+    force: bool = False
+
+
+class SettingsResetResult(ApiModel):
+    settings: SettingsDocument
+    restart_required: bool
+    engine_restarted: bool = False
+    kept: list[str] = Field(default_factory=list)
+
+
 class HfTokenTestOut(ApiModel):
     ok: bool
     source: Literal["provided", "override", "env", "hf_login", "none"]
@@ -787,12 +839,30 @@ class ModelFile(ApiModel):
     role: Literal["weights", "config", "tokenizer", "mmproj", "draft", "other"] = "other"
 
 
+class ModelFingerprints(ApiModel):
+    """What the engine reported at this model's last load (`/status.identity`,
+    stored in usage.db `model_facts`; SPEC §10.4 Info)."""
+
+    build_id: str | None = None
+    loaded_model_layout_sha256: str | None = None
+    target_model_sha256: str | None = None
+    kv_format: str | None = None
+    kv_quantization: str | None = None
+    # The whole `identity` object as Splash wrote it (tolerant of new keys).
+    identity: dict[str, Any] | None = None
+    max_context: int | None = None
+    vision: bool | None = None
+    recorded_at: str | None = None
+
+
 class ModelDetail(InstalledModel):
     files: list[ModelFile] = Field(default_factory=list)
     latest_commit: str | None = None
     update_available: bool = False
     chat_template_mode: Literal["native", "patched", "unsupported"] | None = None
     link_path: str | None = None
+    # Null until the model has been loaded once.
+    fingerprints: ModelFingerprints | None = None
 
 
 class DeleteModelResult(ApiModel):
@@ -824,6 +894,28 @@ class VisionInfo(ApiModel):
     projector: str | None = None
 
 
+class PlannedFile(ApiModel):
+    name: str
+    repo_id: str
+    bytes: int | None = None
+    # Already in the models directory (shared draft, another variant's files).
+    present: bool = False
+
+
+class DownloadPlan(ApiModel):
+    """SPEC §9.4 "expected size": the files `prepare` will fetch for this ID."""
+
+    variant: str | None = None
+    language_only: bool = False
+    files: list[PlannedFile] = Field(default_factory=list)
+    total_bytes: int = 0
+    remaining_bytes: int = 0
+    free_bytes: int | None = None
+    margin_bytes: int = 2 * 1024**3
+    # remaining_bytes + margin_bytes <= free_bytes (the §9.4 disk check).
+    fits_on_disk: bool = True
+
+
 class InspectResult(ApiModel):
     """SPEC §9.2 compatibility output, cached by repo@sha for 24 h."""
 
@@ -843,6 +935,10 @@ class InspectResult(ApiModel):
     fit: Fit | None = None
     cached: bool = False
     checked_at: str
+    # Recomputed on every call (presence and free space change); null when
+    # incompatible or the file set is unknown.
+    download_plan: DownloadPlan | None = None
+    language_only_plan: DownloadPlan | None = None
 
 
 class CatalogEntry(ApiModel):
@@ -1292,6 +1388,18 @@ class CliIntegration(ApiModel):
     last_launched_at: str | None = None
 
 
+IntegrationStep = Literal[
+    "backing_up",
+    "quitting_app",
+    "writing_config",
+    "starting_gateway",
+    "opening_app",
+    "restoring_files",
+    "done",
+    "failed",
+]
+
+
 class DesktopIntegration(ApiModel):
     name: DesktopApp
     label: str
@@ -1303,6 +1411,9 @@ class DesktopIntegration(ApiModel):
     state: Literal["not_connected", "connecting", "connected", "restoring", "needs_restore"]
     connected_at: str | None = None
     warning: str
+    # Progress on `integration.state` events while connecting/restoring (null otherwise).
+    step: IntegrationStep | None = None
+    message: str | None = None
 
 
 class Integrations(ApiModel):
@@ -1357,6 +1468,31 @@ class ShimStatus(ApiModel):
 class OpenTerminalResult(ApiModel):
     ok: bool
     command: str
+
+
+class OpenedPath(ApiModel):
+    ok: bool = True
+    path: str
+
+
+class PrintedFile(ApiModel):
+    path: str
+    change: str
+
+
+class LaunchPrint(ApiModel):
+    """What `splash launch <client> --print` reports, as data (SPEC §11.2)."""
+
+    client: str
+    model: str | None
+    exact: bool  # false: Splash's configurator could not run; a static description
+    env: dict[str, str] = Field(default_factory=dict)
+    secret_env: list[str] = Field(default_factory=list)  # values shown as "••••"
+    removed_env: list[str] = Field(default_factory=list)
+    args: list[str] = Field(default_factory=list)  # the client argv after the program
+    command: str | None = None  # shell form, secrets as "${SPLASH_API_KEY}"
+    files: list[PrintedFile] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
 
 
 class EntriesRemoved(ApiModel):

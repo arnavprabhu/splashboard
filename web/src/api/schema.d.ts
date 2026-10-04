@@ -481,6 +481,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/settings/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset Settings
+         * @description Global and per-model settings back to defaults (docs/ui/05 G3).
+         */
+        post: operations["reset_settings_api_admin_settings_reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/settings/validate": {
         parameters: {
             query?: never;
@@ -583,6 +603,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/settings/secret/meta": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Secret Meta
+         * @description Whether a secret is set and its mask (`prefix••••last4`); never the value.
+         */
+        get: operations["secret_meta_api_admin_settings_secret_meta_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/settings/secrets/api-key": {
         parameters: {
             query?: never;
@@ -634,6 +674,28 @@ export interface paths {
         put?: never;
         /** Test Hf Token */
         post: operations["test_hf_token_api_admin_settings_secrets_hf_token_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/hf/whoami": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Hf Whoami
+         * @description Who the Hugging Face token belongs to (Downloader header, Settings → HF).
+         *     `active` is the token downloads use (D10: Keychain override, else `HF_TOKEN`,
+         *     else the `hf auth login` token); `override`/`login` check just that one.
+         */
+        get: operations["hf_whoami_api_admin_hf_whoami_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -793,6 +855,26 @@ export interface paths {
         post?: never;
         /** Delete Model */
         delete: operations["delete_model_api_admin_models__model_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/tokenizer/pieces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Token Pieces
+         * @description Exact pieces for token ids from `/tokenize` (Tokenizer page, G10; SPEC §22 Q6).
+         */
+        post: operations["token_pieces_api_admin_tokenizer_pieces_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1359,6 +1441,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/integrations/{name}/open": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open App
+         * @description Open app (G17): `open -a Claude`, or the Codex app on a new thread.
+         */
+        post: operations["open_app_api_admin_integrations__name__open_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/integrations/{name}/reveal-backup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reveal Backup
+         * @description View backup (G16): the newest `integrations/backups/<name>/<time>` folder in Finder.
+         */
+        post: operations["reveal_backup_api_admin_integrations__name__reveal_backup_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/integrations/{name}/print": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Print Launch
+         * @description `splash launch <name> --print` as data (G13), for "What this changes".
+         */
+        get: operations["print_launch_api_admin_integrations__name__print_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/cli/shim": {
         parameters: {
             query?: never;
@@ -1483,6 +1625,27 @@ export interface paths {
         put?: never;
         /** Replay */
         post: operations["replay_api_admin_traces__name__replay_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/traces/{name}/replay/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel Replay
+         * @description Replay → Stop: end the running replay of this trace; the stream then sends
+         *     `exit` with the signal's code (`-15`). `cancelled` is false when none runs.
+         */
+        post: operations["cancel_replay_api_admin_traces__name__replay_cancel_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2295,6 +2458,10 @@ export interface components {
             connected_at?: string | null;
             /** Warning */
             warning: string;
+            /** Step */
+            step?: ("backing_up" | "quitting_app" | "writing_config" | "starting_gateway" | "opening_app" | "restoring_files" | "done" | "failed") | null;
+            /** Message */
+            message?: string | null;
         };
         /** DiagnosticsBundle */
         DiagnosticsBundle: {
@@ -2465,6 +2632,43 @@ export interface components {
             items: components["schemas"]["DownloadItem"][];
             /** Parallel */
             parallel: number;
+        };
+        /**
+         * DownloadPlan
+         * @description SPEC §9.4 "expected size": the files `prepare` will fetch for this ID.
+         */
+        DownloadPlan: {
+            /** Variant */
+            variant?: string | null;
+            /**
+             * Language Only
+             * @default false
+             */
+            language_only: boolean;
+            /** Files */
+            files?: components["schemas"]["PlannedFile"][];
+            /**
+             * Total Bytes
+             * @default 0
+             */
+            total_bytes: number;
+            /**
+             * Remaining Bytes
+             * @default 0
+             */
+            remaining_bytes: number;
+            /** Free Bytes */
+            free_bytes?: number | null;
+            /**
+             * Margin Bytes
+             * @default 2147483648
+             */
+            margin_bytes: number;
+            /**
+             * Fits On Disk
+             * @default true
+             */
+            fits_on_disk: boolean;
         };
         /** DownloadRequest */
         DownloadRequest: {
@@ -2910,6 +3114,30 @@ export interface components {
             /** Error */
             error?: string | null;
         };
+        /**
+         * HfWhoami
+         * @description `GET /hf/whoami`: which token the manager uses and who it belongs to.
+         */
+        HfWhoami: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "no_token" | "rejected" | "unreachable";
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "override" | "env" | "hf_login" | "none";
+            /** User */
+            user?: string | null;
+            /** Orgs */
+            orgs?: string[];
+            /** Http Status */
+            http_status?: number | null;
+            /** Message */
+            message?: string | null;
+        };
         /** ImportCandidate */
         ImportCandidate: {
             /** Repo Id */
@@ -2980,6 +3208,8 @@ export interface components {
             cached: boolean;
             /** Checked At */
             checked_at: string;
+            download_plan?: components["schemas"]["DownloadPlan"] | null;
+            language_only_plan?: components["schemas"]["DownloadPlan"] | null;
         };
         /** InstalledModel */
         InstalledModel: {
@@ -3171,6 +3401,34 @@ export interface components {
             display: string;
             /** Error */
             error?: string | null;
+        };
+        /**
+         * LaunchPrint
+         * @description What `splash launch <client> --print` reports, as data (SPEC §11.2).
+         */
+        LaunchPrint: {
+            /** Client */
+            client: string;
+            /** Model */
+            model: string | null;
+            /** Exact */
+            exact: boolean;
+            /** Env */
+            env?: {
+                [key: string]: string;
+            };
+            /** Secret Env */
+            secret_env?: string[];
+            /** Removed Env */
+            removed_env?: string[];
+            /** Args */
+            args?: string[];
+            /** Command */
+            command?: string | null;
+            /** Files */
+            files?: components["schemas"]["PrintedFile"][];
+            /** Notes */
+            notes?: string[];
         };
         /** LifecycleSettings */
         LifecycleSettings: {
@@ -3538,6 +3796,7 @@ export interface components {
             chat_template_mode?: ("native" | "patched" | "unsupported") | null;
             /** Link Path */
             link_path?: string | null;
+            fingerprints?: components["schemas"]["ModelFingerprints"] | null;
         };
         /** ModelFile */
         ModelFile: {
@@ -3553,6 +3812,33 @@ export interface components {
              * @enum {string}
              */
             role: "weights" | "config" | "tokenizer" | "mmproj" | "draft" | "other";
+        };
+        /**
+         * ModelFingerprints
+         * @description What the engine reported at this model's last load (`/status.identity`,
+         *     stored in usage.db `model_facts`; SPEC §10.4 Info).
+         */
+        ModelFingerprints: {
+            /** Build Id */
+            build_id?: string | null;
+            /** Loaded Model Layout Sha256 */
+            loaded_model_layout_sha256?: string | null;
+            /** Target Model Sha256 */
+            target_model_sha256?: string | null;
+            /** Kv Format */
+            kv_format?: string | null;
+            /** Kv Quantization */
+            kv_quantization?: string | null;
+            /** Identity */
+            identity?: {
+                [key: string]: unknown;
+            } | null;
+            /** Max Context */
+            max_context?: number | null;
+            /** Vision */
+            vision?: boolean | null;
+            /** Recorded At */
+            recorded_at?: string | null;
         };
         /** ModelPickOut */
         ModelPickOut: {
@@ -3688,6 +3974,30 @@ export interface components {
             /** Command */
             command: string;
         };
+        /** OpenedPath */
+        OpenedPath: {
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+            /** Path */
+            path: string;
+        };
+        /** PlannedFile */
+        PlannedFile: {
+            /** Name */
+            name: string;
+            /** Repo Id */
+            repo_id: string;
+            /** Bytes */
+            bytes?: number | null;
+            /**
+             * Present
+             * @default false
+             */
+            present: boolean;
+        };
         /** PowerInfo */
         PowerInfo: {
             /**
@@ -3729,6 +4039,13 @@ export interface components {
                 [key: string]: unknown;
             };
             recommendation: components["schemas"]["RecommendationOut"];
+        };
+        /** PrintedFile */
+        PrintedFile: {
+            /** Path */
+            path: string;
+            /** Change */
+            change: string;
         };
         /** ProfileOut */
         ProfileOut: {
@@ -4016,6 +4333,27 @@ export interface components {
             /** Results */
             results: components["schemas"]["SearchResult"][];
         };
+        /**
+         * SecretMeta
+         * @description A secret's presence and mask; the value itself never leaves the Keychain.
+         */
+        SecretMeta: {
+            /**
+             * Name
+             * @enum {string}
+             */
+            name: "api_key" | "hf_token";
+            /** Set */
+            set: boolean;
+            /** Prefix */
+            prefix?: string | null;
+            /** Last4 */
+            last4?: string | null;
+            /** Masked */
+            masked?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
+        };
         /** SecretsState */
         SecretsState: {
             /** Api Key Set */
@@ -4079,6 +4417,32 @@ export interface components {
             models?: {
                 [key: string]: components["schemas"]["ModelSettings"];
             };
+        };
+        /** SettingsResetRequest */
+        SettingsResetRequest: {
+            /**
+             * Restart Engine
+             * @default true
+             */
+            restart_engine: boolean;
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
+        };
+        /** SettingsResetResult */
+        SettingsResetResult: {
+            settings: components["schemas"]["SettingsDocument"];
+            /** Restart Required */
+            restart_required: boolean;
+            /**
+             * Engine Restarted
+             * @default false
+             */
+            engine_restarted: boolean;
+            /** Kept */
+            kept?: string[];
         };
         /** SettingsResponse */
         SettingsResponse: {
@@ -4261,6 +4625,29 @@ export interface components {
             prefill_tps?: number | null;
             /** Prefill Tps Delta */
             prefill_tps_delta?: number | null;
+        };
+        /** TokenPiece */
+        TokenPiece: {
+            /** Id */
+            id: number;
+            /** Piece */
+            piece: string | null;
+            /** Text */
+            text: string;
+        };
+        /** TokenPieces */
+        TokenPieces: {
+            /** Model */
+            model: string;
+            /** Pieces */
+            pieces: components["schemas"]["TokenPiece"][];
+        };
+        /** TokenPiecesRequest */
+        TokenPiecesRequest: {
+            /** Ids */
+            ids: number[];
+            /** Model */
+            model?: string | null;
         };
         /** TotalsMetrics */
         TotalsMetrics: {
@@ -5711,6 +6098,48 @@ export interface operations {
             };
         };
     };
+    reset_settings_api_admin_settings_reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SettingsResetRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResetResult"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     validate_settings_api_admin_settings_validate_post: {
         parameters: {
             query?: never;
@@ -5899,6 +6328,46 @@ export interface operations {
             };
         };
     };
+    secret_meta_api_admin_settings_secret_meta_get: {
+        parameters: {
+            query?: {
+                name?: "api_key" | "hf_token";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretMeta"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     reveal_api_key_api_admin_settings_secrets_api_key_get: {
         parameters: {
             query?: never;
@@ -6046,6 +6515,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HfTokenTestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    hf_whoami_api_admin_hf_whoami_get: {
+        parameters: {
+            query?: {
+                use?: "active" | "override" | "login";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HfWhoami"];
                 };
             };
             /** @description Validation Error */
@@ -6650,6 +7150,66 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    token_pieces_api_admin_tokenizer_pieces_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TokenPiecesRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenPieces"];
                 };
             };
             /** @description Not Found */
@@ -8244,6 +8804,138 @@ export interface operations {
             };
         };
     };
+    open_app_api_admin_integrations__name__open_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: "claude-desktop" | "codex-app";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OpenedPath"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    reveal_backup_api_admin_integrations__name__reveal_backup_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: "claude-desktop" | "codex-app" | "hermes" | "pi";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OpenedPath"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    print_launch_api_admin_integrations__name__print_get: {
+        parameters: {
+            query?: {
+                /** @description ID or ID:profile; default active */
+                model?: string | null;
+            };
+            header?: never;
+            path: {
+                name: "claude" | "codex" | "opencode" | "hermes" | "pi";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LaunchPrint"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_shim_api_admin_cli_shim_get: {
         parameters: {
             query?: never;
@@ -8510,6 +9202,46 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_replay_api_admin_traces__name__replay_cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CancelResult"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
