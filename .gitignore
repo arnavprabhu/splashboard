@@ -32,3 +32,6 @@ xcuserdata/
 # Build output
 dist/
 build/
+
+# Claude Code agent worktrees
+.claude/worktrees/
