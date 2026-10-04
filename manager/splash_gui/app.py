@@ -10,7 +10,11 @@ Route layout on the public port:
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import logging
 import os
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -25,12 +29,14 @@ from .auth.api import router as auth_router
 from .auth.guard import AdminGuard
 from .benchmark.api import router as benchmark_router
 from .chats.api import router as chats_router
+from .cli.api import router as cli_router
 from .data.api import router as data_router
 from .downloads.api import router as downloads_router
 from .engine.api import router as engine_router
 from .errors import install_error_handlers
 from .events.api import router as events_router
 from .integrations.api import router as integrations_router
+from .integrations.router import router as codex_router
 from .logs.api import router as logs_router
 from .mcp.api import router as mcp_router
 from .metrics.api import router as metrics_router
@@ -45,6 +51,8 @@ from .state import ManagerState
 from .storage.api import router as storage_router
 from .system.api import router as system_router
 from .usage.api import router as usage_router
+
+log = logging.getLogger(__name__)
 
 ADMIN_PREFIX = "/api/admin"
 WEB_DIST_ENV = "SPLASH_GUI_WEB_DIST"
@@ -65,6 +73,7 @@ ADMIN_ROUTERS: tuple[tuple[str, APIRouter], ...] = (
     ("Usage", usage_router),
     ("Benchmark", benchmark_router),
     ("Integrations", integrations_router),
+    ("CLI", cli_router),
     ("Logs", logs_router),
     ("Data", data_router),
     ("Storage", storage_router),
@@ -100,7 +109,93 @@ def build_state(config: AppConfig) -> ManagerState:
         web_dist=config.web_dist or default_web_dist(),
     )
     state.auth.ensure_cli_token()
+    attach_core(state)
     return state
+
+
+def attach_core(state: ManagerState) -> None:
+    """The supervisor, proxy and metrics hub exist from the start (routes use them);
+    their background tasks start with the app lifespan."""
+    from .engine.supervisor import Supervisor
+    from .metrics.live import MetricsHub
+    from .proxy.pipeline import ProxyPipeline
+
+    supervisor = Supervisor(state)
+    state.supervisor = supervisor
+    state.active_model = supervisor.active_model
+    state.raw_status = lambda: supervisor.status
+    state.proxy = ProxyPipeline(state)
+    state.metrics = MetricsHub(state)
+
+
+def subsystem_services(state: ManagerState) -> list[Any]:
+    """Every optional subsystem's service, in start order (shut down in reverse)."""
+    from .benchmark import service as benchmark_service
+    from .chats import service as chats_service
+    from .downloads import service as downloads_service
+    from .engine import updates
+    from .integrations import service as integrations_service
+    from .mcp import service as mcp_service
+    from .models import service as models_service
+
+    services = []
+    for factory in (
+        models_service.create,
+        downloads_service.create,
+        chats_service.create,
+        mcp_service.create,
+        benchmark_service.create,
+        integrations_service.create,
+        updates.create,
+    ):
+        service = factory(state)
+        if service is not None:
+            services.append(service)
+    return services
+
+
+@contextlib.asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    state: ManagerState = app.state.manager
+    state.events.attach(asyncio.get_running_loop())
+    with contextlib.suppress(Exception):
+        await asyncio.to_thread(state.engine)
+    _ensure_shim(state)
+    core = [state.proxy, state.supervisor, state.metrics]
+    services = subsystem_services(state)
+    started: list[Any] = []
+    try:
+        for service in (*core, *services):
+            await service.start()
+            started.append(service)
+        yield
+    finally:
+        for service in reversed(started):
+            try:
+                await service.shutdown()
+            except Exception:
+                log.exception("shutdown of %s failed", type(service).__name__)
+        with contextlib.suppress(Exception):
+            await state.jobs.shutdown()
+        state.usage.close_open_sessions()
+
+
+def _ensure_shim(state: ManagerState) -> None:
+    """Keep `~/.splash/bin/splash` present and current (SPEC §12.1).
+
+    Writing our own script is idempotent and cheap, so it happens on every
+    start; the user's rc files are never touched here — adding the PATH block is
+    something the user agrees to in the app.
+    """
+    from .cli import install as shim
+
+    try:
+        wanted = shim.render(shim.interpreter_command())
+        if state.paths.shim.is_file() and state.paths.shim.read_bytes() == wanted:
+            return
+        shim.install_shim(state.paths)
+    except OSError:
+        log.warning("could not install the splash CLI shim", exc_info=True)
 
 
 def _not_built(dist: Path) -> HTMLResponse:
@@ -144,6 +239,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         docs_url=f"{ADMIN_PREFIX}/docs",
         redoc_url=None,
         separate_input_output_schemas=False,
+        lifespan=lifespan,
     )
     app.state.manager = state
     install_error_handlers(app)
@@ -167,6 +263,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     for tag, router in ADMIN_ROUTERS:
         app.include_router(router, prefix=ADMIN_PREFIX, tags=[tag])
     app.include_router(proxy_router)
+    app.include_router(codex_router)
     app.add_middleware(AdminGuard, settings=state.settings, auth=state.auth)
     app.openapi = lambda: custom_openapi(app)  # type: ignore[method-assign]
     return app

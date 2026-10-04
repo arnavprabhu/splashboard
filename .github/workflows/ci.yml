@@ -1,0 +1,121 @@
+# CI for Splash GUI (SPEC §20.3, ci part; release.yml is deferred to docs/roadmap.md by D30).
+# Runs on Apple-silicon macOS runners: the manager, the fake engine, the web admin and the
+# menu bar app. Nothing here needs a model, Metal or the network beyond package installs.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Never touch a developer's ~/.splash; every job uses a throwaway base directory.
+  SPLASH_GUI_SECRETS: memory
+  FORCE_COLOR: '1'
+
+jobs:
+  manager:
+    name: manager (uv · ruff · mypy · pytest)
+    runs-on: macos-26
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: manager
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: manager/uv.lock
+      - name: uv sync
+        run: uv sync --locked
+      - name: ruff
+        run: uv run ruff check . && uv run ruff format --check .
+      - name: mypy
+        run: uv run mypy
+      - name: pytest
+        run: SPLASH_GUI_HOME="$RUNNER_TEMP/splash-home" uv run pytest
+
+  fake-engine:
+    name: fake engine (ruff · mypy · pytest)
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: ruff
+        run: uvx ruff check scripts/fake_splash && uvx ruff format --check scripts/fake_splash
+      - name: mypy
+        run: uvx --with pytest mypy --config-file scripts/fake_splash/mypy.ini
+      - name: pytest
+        run: uv run --no-project --with pytest pytest scripts/fake_splash/tests
+
+  web:
+    name: web (typecheck · vitest · build · size · playwright)
+    runs-on: macos-26
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      # The real-manager Playwright tests start the manager with uv and the fake engine.
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: manager/uv.lock
+      - name: uv sync (manager for e2e)
+        working-directory: manager
+        run: uv sync --locked
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+      - name: typecheck
+        run: pnpm typecheck
+      - name: vitest
+        run: pnpm test
+      - name: build
+        run: pnpm build
+      - name: bundle size (SPEC §18.6)
+        run: pnpm size
+      - name: install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+      - name: playwright (stubbed shell + real manager with the fake engine)
+        run: pnpm exec playwright test
+      - name: upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            web/playwright-report
+            web/test-results
+          retention-days: 7
+
+  macos:
+    name: menu bar app (swift build · swift test)
+    runs-on: macos-26
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: macos
+    steps:
+      - uses: actions/checkout@v4
+      - name: toolchain
+        run: swift --version && xcodebuild -version
+      - name: swift build
+        run: swift build
+      - name: swift test
+        run: swift test

@@ -311,8 +311,9 @@ describe('handleEvent', () => {
     handleEvent('alerts', { alerts: [{ id: 'w', severity: 'warn', message: 'w' }] });
     expect(alerts.value.map((a) => a.id)).toEqual(['w']);
     settings.value = { settings: { version: 1, global: {}, models: {} } };
-    handleEvent('settings', {});
-    expect(settings.value).toBeNull();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(json(200, { settings: { version: 1, global: { ui: {} }, models: {} } }));
+    handleEvent('settings.changed', { changed: [], restart_required: false });
+    expect(fetchSpy).toHaveBeenCalledWith('/api/admin/settings', expect.anything());
     handleEvent('unknown', {});
   });
 });

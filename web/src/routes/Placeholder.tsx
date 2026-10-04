@@ -1,6 +1,6 @@
-import type { ComponentChildren } from 'preact';
-import { PageHeader, Section } from '../components/Section';
-import { Empty } from '../components/States';
+import type { ComponentChildren } from "preact";
+import { PageHeader, Section } from "../components/Section";
+import { Empty } from "../components/States";
 
 export interface PlaceholderProps {
   title: string;
@@ -16,7 +16,9 @@ export function Placeholder({ title, spec, meta, children }: PlaceholderProps) {
       <PageHeader title={title} meta={meta} />
       {children}
       <Section label="Not built yet" meta={spec}>
-        <Empty title="Coming in a later build step">This page is specified in SPEC {spec}.</Empty>
+        <Empty title="Coming in a later build step">
+          This page is specified in SPEC {spec}.
+        </Empty>
       </Section>
     </>
   );

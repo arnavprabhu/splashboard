@@ -195,6 +195,10 @@ class LoadRequest(ApiModel):
     model: str
     # Switch even with requests in flight (they are cut off).
     force: bool = False
+    # Answer only once the model is ready or failed (CLI `load`, G25).
+    wait: bool = False
+    # Seconds to wait with `wait`; default routing.load_timeout.
+    timeout: float | None = Field(default=None, gt=0, le=3600)
 
 
 # System ---------------------------------------------------------------------
@@ -1061,6 +1065,8 @@ class McpCallResult(ApiModel):
     content: list[dict[str, Any]]
     structured_content: Any = None
     is_error: bool = False
+    # Wall time of the call (UI gap G6).
+    duration_ms: float | None = None
 
 
 # Usage (SPEC §15.3) ---------------------------------------------------------------
@@ -1107,7 +1113,7 @@ class UsageClientSummary(ApiModel):
 
 
 class UsageSummary(ApiModel):
-    scope: Literal["all", "session"]
+    scope: Literal["all", "session", "today"]
     since: str | None = None
     requests: int
     completed: int
@@ -1269,6 +1275,31 @@ class RestoreAllResult(ApiModel):
 
 class OpenTerminalRequest(ApiModel):
     model: str | None = None
+
+
+# CLI shim (SPEC §12.1) -------------------------------------------------------------
+
+
+class RcFileStatus(ApiModel):
+    file: str
+    present: bool
+    managed: bool
+
+
+class ShimInstallRequest(ApiModel):
+    add_to_path: bool = False
+
+
+class ShimStatus(ApiModel):
+    """Whether `splash` is installed, and what is still left to do."""
+
+    shim: str
+    installed: bool
+    executable: bool
+    command: str
+    on_path: bool
+    rc_files: list[RcFileStatus] = Field(default_factory=list)
+    problems: list[str] = Field(default_factory=list)
 
 
 class OpenTerminalResult(ApiModel):

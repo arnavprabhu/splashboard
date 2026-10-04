@@ -26,7 +26,7 @@ describe('App shell', () => {
     go('/admin');
     render(<App base="/admin" />);
     await waitFor(() => expect(location.pathname).toBe('/admin/status'));
-    expect(await screen.findByText('No model.')).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy();
   });
 
@@ -68,10 +68,10 @@ describe('App shell', () => {
       .mockResolvedValue(json(200, { admin_requires_key: true, authenticated: true, method: 'session' }));
     go('/admin/login?next=%2Fmodels%2Fdownloader');
     render(<App base="/admin" />);
-    const input = await screen.findByLabelText('API key');
+    const input = await screen.findByLabelText('Admin key');
     fireEvent.input(input, { target: { value: 'wrong' } });
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
-    expect(await screen.findByText("That key didn't match.")).toBeTruthy();
+    expect(await screen.findByText('That key didn’t match.')).toBeTruthy();
     fireEvent.input(input, { target: { value: 'right' } });
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     await waitFor(() => expect(location.pathname).toBe('/admin/models/downloader'));
@@ -92,7 +92,7 @@ describe('App shell', () => {
     go('/admin/status');
     render(<App base="/admin" />);
     expect(await screen.findByText('Log out')).toBeTruthy();
-    expect(screen.getByTestId('offline')).toBeTruthy();
+    expect(screen.getByTestId('offline-screen')).toBeTruthy();
   });
 
   it('shows the not-found page for unknown routes', async () => {

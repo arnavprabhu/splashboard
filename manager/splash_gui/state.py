@@ -19,11 +19,17 @@ from fastapi import Request
 from .auth.core import AuthManager
 from .engine.discovery import EngineInfo, discover
 from .engine.serve_options import EngineOptionsCache
+from .events.alerts import AlertCenter
+from .events.bus import EventBus
+from .jobs import Jobs
 from .paths import SPLASH_CRASH_TRACE_DIR, Paths
 from .secrets import SecretStore
 from .settings.store import Change, SettingsStore
+from .system.macos import MacOS
+from .usage.db import UsageDB
 
 DISCOVERY_TTL_S = 60.0
+UPDATE_CHECK_ENV = "SPLASH_GUI_UPDATE_CHECK"
 
 
 def _physical_memory() -> int:
@@ -55,12 +61,53 @@ class ManagerState:
     # The address the public port is listening on (set by the runner; None in tests).
     bound: tuple[str, int] | None = None
     settings_listeners: list[Callable[[list[Change], bool], None]] = field(default_factory=list)
+    # Facts about an installed model for summaries (draft, format, …); the models
+    # track replaces it.
+    model_info: Callable[[str], dict[str, Any] | None] = lambda _model: None
+    # Admin clients watching live data outside /events (e.g. /metrics/live streams);
+    # the supervisor polls /status every second while this or /events has a client.
+    watchers: int = 0
+    # Background-check switches (tests turn the network ones off).
+    update_check: bool = field(default_factory=lambda: os.environ.get(UPDATE_CHECK_ENV, "1") != "0")
+    events: EventBus = field(default_factory=EventBus)
+    alerts: AlertCenter = field(init=False)
+    jobs: Jobs = field(init=False)
+    usage: UsageDB = field(init=False)
+    # Subsystems attach themselves here (typed as Any to keep imports acyclic).
+    supervisor: Any = None
+    proxy: Any = None
+    metrics: Any = None
+    models: Any = None
+    downloads: Any = None
+    chats: Any = None
+    mcp: Any = None
+    benchmark: Any = None
+    integrations: Any = None
+    updates: Any = None
+    macos: MacOS = field(default_factory=MacOS)
+    # Called to stop the whole manager (POST /shutdown); the runner sets it.
+    request_shutdown: Callable[[], None] | None = None
+    started_at: float = field(default_factory=time.time)
     _engine: EngineInfo | None = None
     _engine_at: float = 0.0
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def __post_init__(self) -> None:
         self.auth = AuthManager(self.paths, self.secrets)
+        self.alerts = AlertCenter(self.events, self.settings)
+        self.jobs = Jobs(self.events)
+        self.usage = UsageDB(self.paths.usage_db)
+
+    def engine_cached(self) -> EngineInfo:
+        """The last discovery result without refreshing (discovering only if none)."""
+        with self._lock:
+            if self._engine is not None:
+                return self._engine
+        return self.engine()
+
+    def forget_engine(self) -> None:
+        with self._lock:
+            self._engine, self._engine_at = None, 0.0
 
     def engine(self, refresh: bool = False) -> EngineInfo:
         """Discovery result, cached for a minute (cheap enough to call per request)."""

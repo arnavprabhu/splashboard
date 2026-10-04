@@ -1,5 +1,5 @@
 """MCP servers and tools (SPEC §14 MCP, §10.5). Server configs live in settings
-(`global.chat.mcp_servers`), so GET/PUT here are real; tools and calls are not yet."""
+(`global.chat.mcp_servers`)."""
 
 from __future__ import annotations
 
@@ -7,10 +7,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from ..errors import STUB_RESPONSES, error_responses, not_implemented
+from ..errors import error_responses
 from ..schemas import McpCallRequest, McpCallResult, McpServers, McpToolList
 from ..settings.api import save_settings
 from ..state import ManagerState, get_state
+from .manager import McpManager
 
 router = APIRouter()
 State = Annotated[ManagerState, Depends(get_state)]
@@ -31,15 +32,23 @@ def put_servers(state: State, body: McpServers) -> McpServers:
     return McpServers(servers=result.settings.global_.chat.mcp_servers)
 
 
-@router.get("/mcp/tools", response_model=McpToolList, responses=STUB_RESPONSES)
-def tools() -> McpToolList:
-    not_implemented("MCP tools")
+def _manager(state: ManagerState) -> McpManager:
+    if state.mcp is None:
+        state.mcp = McpManager(state)
+    assert isinstance(state.mcp, McpManager)
+    return state.mcp
+
+
+@router.get("/mcp/tools", response_model=McpToolList)
+async def tools(state: State) -> McpToolList:
+    """Tools of every enabled server; a server that fails is listed under `errors`."""
+    return await _manager(state).tools()
 
 
 @router.post(
     "/mcp/call",
     response_model=McpCallResult,
-    responses={**STUB_RESPONSES, **error_responses(403, 404, 409)},
+    responses=error_responses(403, 404, 409),
 )
-def call(body: McpCallRequest) -> McpCallResult:
-    not_implemented("MCP call")
+async def call(state: State, body: McpCallRequest) -> McpCallResult:
+    return await _manager(state).call(body.server, body.tool, body.arguments, body.confirmed)

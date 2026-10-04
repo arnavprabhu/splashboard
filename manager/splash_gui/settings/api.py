@@ -13,7 +13,7 @@ from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from ..engine.flags import LaunchError, build_launch_for_model
 from ..errors import ApiError, error_responses
 from ..net import probe_bind
-from ..paths import SPLASH_CRASH_TRACE_DIR, SPLASH_DATA_DIR
+from ..paths import splash_data_dir
 from ..schemas import (
     ApiKeyOut,
     EffectiveSettings,
@@ -98,8 +98,8 @@ def _settings_response(state: ManagerState) -> SettingsResponse:
             models_dir=str(store.models_dir()),
             cache_dir=str(store.cache_dir()),
             tmp_dir=str(store.tmp_dir()),
-            splash_data_dir=str(SPLASH_DATA_DIR),
-            crash_trace_dir=str(SPLASH_CRASH_TRACE_DIR),
+            splash_data_dir=str(splash_data_dir()),
+            crash_trace_dir=str(state.crash_trace_dir),
         ),
         read_only=store.read_only,
         load_warnings=list(store.load_warnings),

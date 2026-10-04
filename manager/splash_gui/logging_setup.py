@@ -90,3 +90,39 @@ def engine_output_logger() -> logging.LoggerAdapter[logging.Logger]:
     Use `logger.info(line, extra={"stream": "stdout"|"stderr"})`.
     """
     return logging.LoggerAdapter(logging.getLogger(ENGINE_LOGGER), {"stream": "stdout"})
+
+
+SESSION_START = "=== Splash GUI: engine session started"
+SESSION_END = "=== Splash GUI: engine session ended"
+
+
+class EngineLogWriter:
+    """Writes engine stdout/stderr to engine.log (10 MB × 5, 0600, redacted).
+
+    Owned by the supervisor rather than the global logging tree, so each manager
+    (and each test) writes its own file.
+    """
+
+    def __init__(self, path: Path, known: Callable[[], Iterable[str]] = tuple) -> None:
+        ensure_private_dir(path.parent)
+        self._handler = PrivateRotatingFileHandler(
+            str(path), maxBytes=MAX_BYTES, backupCount=BACKUP_COUNT, encoding="utf-8"
+        )
+        self._handler.setFormatter(logging.Formatter(ENGINE_FORMAT))
+        self._handler.addFilter(RedactingFilter(known))
+
+    def write(self, text: str, stream: str = "stdout") -> None:
+        record = logging.makeLogRecord(
+            {
+                "name": ENGINE_LOGGER,
+                "levelno": logging.INFO,
+                "levelname": "INFO",
+                "msg": text,
+                "args": None,
+                "stream": stream,
+            }
+        )
+        self._handler.handle(record)
+
+    def close(self) -> None:
+        self._handler.close()

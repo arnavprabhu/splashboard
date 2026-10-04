@@ -14,7 +14,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..paths import tmp_dir_for
+from ..paths import FAKE_DATA_ENV, tmp_dir_for
 from ..secrets import REDACTED, SecretName, SecretStore
 from ..settings import parsers as p
 from ..settings.effective import EffectiveServe, effective_serve
@@ -141,7 +141,9 @@ def engine_env(
     """The engine's environment and the names of the variables the manager set."""
     base = dict(os.environ if base_env is None else base_env)
     env = {
-        k: v for k, v in base.items() if not k.startswith(_SCRUBBED_PREFIXES) and k not in _SCRUBBED
+        k: v
+        for k, v in base.items()
+        if (not k.startswith(_SCRUBBED_PREFIXES) and k not in _SCRUBBED) or k == FAKE_DATA_ENV
     }
     ours: dict[str, str] = {
         "HF_HUB_CACHE": str(models_dir),

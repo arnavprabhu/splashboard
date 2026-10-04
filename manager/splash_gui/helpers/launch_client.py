@@ -1,0 +1,44 @@
+"""Use Splash's maintained client configurator with an explicit profile model."""
+
+import json
+import os
+import shlex
+import shutil
+
+
+def main() -> None:
+    from install import clients  # type: ignore[import-not-found]
+
+    spec = json.loads(os.environ.pop("SPLASH_GUI_CLIENT_SPEC"))
+    path = shutil.which(spec["client"])
+    if not path and not spec["print"]:
+        raise SystemExit("Install " + spec["client"] + " before launching it")
+    # Hermes/Pi's configurators intentionally write dedicated entries. A preview
+    # describes the invocation without calling those writers.
+    if spec["print"] and spec["client"] in ("hermes", "pi"):
+        print(shlex.join([spec["client"], "--model", spec["model"], *spec["args"]]))
+        print("# Splash creates only its dedicated profile/provider; defaults stay unchanged.")
+        return
+    argv, env = clients.command(
+        spec["client"],
+        path or spec["client"],
+        spec["url"],
+        spec["model"],
+        spec["context"],
+        input_modalities=spec["modalities"],
+        client_args=spec["args"],
+    )
+    if spec["print"]:
+        changed = {key: value for key, value in env.items() if os.environ.get(key) != value}
+        for key in sorted(changed):
+            value = changed[key]
+            if any(secret in key for secret in ("TOKEN", "KEY")):
+                value = "${SPLASH_API_KEY}"
+            print("export " + key + "=" + shlex.quote(value))
+        print(shlex.join(argv))
+    else:
+        os.execvpe(argv[0], argv, env)  # noqa: S606 — Splash builds the client argv, no shell
+
+
+if __name__ == "__main__":
+    main()

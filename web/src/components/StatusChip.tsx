@@ -7,18 +7,20 @@ export interface StatusChipProps {
   label?: string;
   /** Overrides liveness derived from `state`. */
   live?: boolean;
+  /** Announce changes (nav chip only, docs/ui/00 §12.1). */
+  announce?: boolean;
 }
 
 /** Accent fill and a pulsing dot for live states only; an ink outline otherwise. */
-export function StatusChip({ state, label, live }: StatusChipProps) {
+export function StatusChip({ state, label, live, announce = true }: StatusChipProps) {
   const display = stateDisplay(state);
   const isLive = live ?? display.live;
   return (
-    <span class="chip" data-live={String(isLive)} data-state={state ?? 'offline'} role="status">
+    <span class="chip" data-live={String(isLive)} data-state={state ?? 'offline'} role={announce ? 'status' : undefined}>
       <span class="chip-dot" aria-hidden="true">
         ●
       </span>
-      {label ?? display.label}
+      <span class={display.busy && !label ? 'loading-dots' : undefined}>{label ?? display.label}</span>
     </span>
   );
 }

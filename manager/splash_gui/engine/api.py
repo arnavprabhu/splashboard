@@ -1,83 +1,97 @@
-"""Engine routes (SPEC §14 Engine). The supervisor (§6.3–§6.6) fills these in."""
+"""Engine routes (SPEC §14 Engine; state machine §6.3, docs/api.md §3)."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request, Response
 
-from ..errors import STUB_RESPONSES, ApiError, error_responses, not_implemented
-from ..schemas import EngineDiscoveryInfo, EngineView, LoadRequest, RestartInfo
+from ..errors import ApiError, error_responses
+from ..schemas import EngineView, LoadRequest
 from ..state import ManagerState, get_state
 
 router = APIRouter()
 State = Annotated[ManagerState, Depends(get_state)]
 
 
-def stopped_view(state: ManagerState) -> EngineView:
-    """The view while no supervisor is attached: stopped, with discovery facts."""
-    return EngineView(
-        state="stopped",
-        since=datetime.now(UTC).isoformat(),
-        restart=RestartInfo(auto_restart=state.settings.current.global_.lifecycle.auto_restart),
-        engine=EngineDiscoveryInfo.model_validate(state.engine().as_dict()),
-    )
+def get_engine(state: ManagerState) -> EngineView:
+    return state.supervisor.view()  # type: ignore[no-any-return]
+
+
+def load_target(state: ManagerState, model: str) -> str:
+    """`ID:profile` loads ID (profiles are per request, SPEC §7.5)."""
+    installed = state.installed_models()
+    if installed is None or model in installed:
+        return model
+    base, sep, _ = model.rpartition(":")
+    if sep and base in installed:
+        return base
+    return model
 
 
 @router.get("/engine", response_model=EngineView)
-def get_engine(state: State) -> EngineView:
-    return stopped_view(state)
+def engine_view(state: State) -> EngineView:
+    return get_engine(state)
 
 
 @router.post(
     "/engine/load",
     response_model=EngineView,
     status_code=202,
-    responses={**STUB_RESPONSES, **error_responses(400, 404, 409, 503)},
+    responses=error_responses(400, 404, 409, 422, 503),
 )
-def load(body: LoadRequest) -> EngineView:
-    not_implemented("Engine load")
+async def load(state: State, body: LoadRequest) -> EngineView:
+    sup = state.supervisor
+    view: EngineView = await sup.load(load_target(state, body.model), force=body.force)
+    if body.wait:
+        timeout = body.timeout or state.settings.current.global_.routing.load_timeout
+        await sup.wait_ready(timeout)
+        view = sup.view()
+    return view
 
 
-@router.post("/engine/stop", response_model=EngineView, responses=STUB_RESPONSES)
-def stop() -> EngineView:
-    not_implemented("Engine stop")
+@router.post("/engine/stop", response_model=EngineView)
+async def stop(state: State) -> EngineView:
+    return await state.supervisor.stop(reason="stop")  # type: ignore[no-any-return]
 
 
 @router.post(
     "/engine/restart",
     response_model=EngineView,
     status_code=202,
-    responses={**STUB_RESPONSES, **error_responses(409)},
+    responses=error_responses(409),
 )
-def restart() -> EngineView:
-    not_implemented("Engine restart")
+async def restart(state: State, force: bool = False) -> EngineView:
+    return await state.supervisor.restart(force=force)  # type: ignore[no-any-return]
 
 
 @router.get("/engine/status", response_model=dict[str, Any], responses=error_responses(503))
-def raw_status() -> dict[str, Any]:
-    raise ApiError(
-        503, "The engine is not running", "engine_unavailable", headers={"Retry-After": "5"}
-    )
+async def raw_status(state: State) -> dict[str, Any]:
+    sup = state.supervisor
+    status = await sup.poll_now() if sup.accepting else None
+    if status is None:
+        raise ApiError(
+            503, "The engine is not running", "engine_unavailable", headers={"Retry-After": "5"}
+        )
+    return status  # type: ignore[no-any-return]
 
 
-_RAW = {**STUB_RESPONSES, **error_responses(503)}
+_RAW = error_responses(503)
 
 
 @router.post("/engine/raw/{path:path}", responses=_RAW)
-def raw_post(path: str) -> Any:
+async def raw_post(state: State, request: Request, path: str) -> Response:
     """Playground "raw to engine": forwards to the engine with the internal key, no injection."""
-    not_implemented("Raw engine passthrough")
+    return await state.proxy.raw(request, "POST", path)  # type: ignore[no-any-return]
 
 
 @router.get("/engine/raw/{path:path}", responses=_RAW)
-def raw_get(path: str) -> Any:
-    """Raw GET (e.g. `v1/responses/{id}`), as `raw_post`."""
-    not_implemented("Raw engine passthrough")
+async def raw_get(state: State, request: Request, path: str) -> Response:
+    """Raw GET (e.g. `v1/responses/{id}`, `status`, `metrics`), as `raw_post`."""
+    return await state.proxy.raw(request, "GET", path)  # type: ignore[no-any-return]
 
 
 @router.delete("/engine/raw/{path:path}", responses=_RAW)
-def raw_delete(path: str) -> Any:
+async def raw_delete(state: State, request: Request, path: str) -> Response:
     """Raw DELETE (e.g. `v1/responses/{id}`), as `raw_post`."""
-    not_implemented("Raw engine passthrough")
+    return await state.proxy.raw(request, "DELETE", path)  # type: ignore[no-any-return]

@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, Query, Response
 from fastapi.responses import StreamingResponse
 
 from ..engine.api import get_engine
-from ..errors import SSE_RESPONSES, STUB_RESPONSES, ApiError, error_responses, not_implemented
+from ..errors import SSE_RESPONSES, ApiError, error_responses
 from ..schemas import (
     DeletedBytes,
     DiagnosticsBundle,
@@ -204,10 +204,44 @@ def traces(state: State) -> TraceList:
 @router.post(
     "/traces/{name}/replay",
     response_class=StreamingResponse,
-    responses={**SSE_RESPONSES, **STUB_RESPONSES, **error_responses(404)},
+    responses={**SSE_RESPONSES, **error_responses(404)},
 )
-def replay(name: str) -> StreamingResponse:
-    not_implemented("Crash trace replay")
+def replay(state: State, name: str) -> StreamingResponse:
+    if not _is_trace_name(name):
+        raise ApiError(400, "Invalid trace name", "invalid_trace")
+    path = state.crash_trace_dir / name
+    if not path.is_file() or path.is_symlink():
+        raise ApiError(404, "Trace not found", "trace_not_found")
+    engine = state.engine()
+    if not engine.python or not engine.pkg:
+        raise ApiError(503, "Install Splash to replay traces", "engine_unavailable")
+
+    async def output() -> AsyncGenerator[tuple[str, Any], None]:
+        proc = await asyncio.create_subprocess_exec(
+            str(engine.python),
+            "-m",
+            "server.crash_trace",
+            str(path),
+            cwd=engine.pkg,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        try:
+            assert proc.stdout
+            seq = 0
+            async for line in proc.stdout:
+                yield (
+                    "line",
+                    parse_line(seq, line.decode(errors="replace").rstrip(), "engine").model_dump(),
+                )
+                seq += 1
+            yield "exit", {"code": await proc.wait()}
+        finally:
+            if proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+
+    return sse_response(output())
 
 
 @router.delete("/traces/{name}", status_code=204, responses=error_responses(400, 404))

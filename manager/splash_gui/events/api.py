@@ -1,28 +1,56 @@
-"""Events and alerts (SPEC §14 Events, §16.3). SSE event names are in docs/api.md."""
+"""Events and alerts (SPEC §14 Events, §16.3). SSE event names are in docs/api.md §4."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from datetime import UTC, datetime
+from typing import Annotated, Any
+
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
-from ..errors import SSE_RESPONSES, STUB_RESPONSES, not_implemented
-from ..schemas import AlertList, OkResponse
+from ..errors import SSE_RESPONSES, ApiError, error_responses
+from ..schemas import AlertList, HelloEvent, OkResponse
+from ..sse import sse_response
+from ..state import ManagerState, get_state
+from .bus import stream
 
 router = APIRouter()
+State = Annotated[ManagerState, Depends(get_state)]
 
 
-@router.get(
-    "/events", response_class=StreamingResponse, responses={**SSE_RESPONSES, **STUB_RESPONSES}
+def hello(state: ManagerState) -> HelloEvent:
+    downloads = list(state.downloads.items.values()) if state.downloads is not None else []
+    return HelloEvent(
+        server_time=datetime.now(UTC).isoformat(),
+        engine=state.supervisor.view(),
+        alerts=state.alerts.all(),
+        downloads=downloads,
+    )
+
+
+@router.get("/events", response_class=StreamingResponse, responses=SSE_RESPONSES)
+def events(
+    state: State,
+    client: Annotated[str | None, Query(max_length=32, description="`menubar` for the app")] = None,
+) -> StreamingResponse:
+    def snapshot() -> list[tuple[str, Any]]:
+        return [("hello", hello(state))]
+
+    return sse_response(stream(state.events, snapshot, client=client))
+
+
+@router.get("/alerts", response_model=AlertList)
+def alerts(state: State) -> AlertList:
+    return AlertList(alerts=state.alerts.all())
+
+
+@router.post(
+    "/alerts/{alert_id}/dismiss", response_model=OkResponse, responses=error_responses(404, 409)
 )
-def events() -> StreamingResponse:
-    not_implemented("Event stream")
-
-
-@router.get("/alerts", response_model=AlertList, responses=STUB_RESPONSES)
-def alerts() -> AlertList:
-    not_implemented("Alerts")
-
-
-@router.post("/alerts/{alert_id}/dismiss", response_model=OkResponse, responses=STUB_RESPONSES)
-def dismiss(alert_id: str) -> OkResponse:
-    not_implemented("Alerts")
+def dismiss(state: State, alert_id: str) -> OkResponse:
+    outcome = state.alerts.dismiss(alert_id)
+    if outcome == "not_found":
+        raise ApiError(404, f"no alert {alert_id}", "alert_not_found")
+    if outcome == "not_dismissible":
+        raise ApiError(409, "This alert can't be dismissed; resolve it instead", "not_dismissible")
+    return OkResponse()

@@ -1,0 +1,29 @@
+import AppKit
+import SplashGUIKit
+import SwiftUI
+
+/// Splash GUI menu bar app (SPEC §13, docs/ui/10-menubar.md).
+@main
+struct SplashGUIApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+
+    var body: some Scene {
+        MenuBarExtra {
+            MenuContentView(model: delegate.model)
+        } label: {
+            StatusLabel(model: delegate.model)
+        }
+        .menuBarExtraStyle(.menu)
+    }
+}
+
+/// The status item: one template image with the glyph and the optional title items.
+struct StatusLabel: View {
+    let model: MenuBarViewModel
+
+    var body: some View {
+        Image(nsImage: StatusItemRenderer.image(icon: model.icon, title: model.title))
+            .renderingMode(.template)
+            .accessibilityLabel(model.accessibilityLabel)
+    }
+}

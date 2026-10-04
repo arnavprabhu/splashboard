@@ -174,23 +174,17 @@ def test_openapi_covers_every_spec_route(client: TestClient) -> None:
         assert sse_only in spec["components"]["schemas"], sse_only
 
 
-@pytest.mark.parametrize(
-    ("method", "path"),
-    [
-        ("get", "/models"),
-        ("post", "/engine/stop"),
-        ("get", "/chats"),
-        ("get", "/usage/summary"),
-        ("get", "/integrations"),
-        ("get", "/data/sizes"),
-        ("get", "/events"),
-    ],
-)
-def test_stubs_answer_501_in_the_error_shape(client: TestClient, method: str, path: str) -> None:
-    response = client.request(method, f"/api/admin{path}")
-    assert response.status_code == 501
-    assert response.json()["error"]["code"] == "not_implemented"
-    assert set(response.json()["error"]) >= {"message", "type", "code"}
+def test_no_route_is_left_as_a_stub() -> None:
+    """Every SPEC §14 route is implemented: nothing calls `not_implemented` any more."""
+    import splash_gui
+
+    root = Path(splash_gui.__file__).parent
+    offenders = [
+        str(path.relative_to(root))
+        for path in root.rglob("*.py")
+        if path.name != "errors.py" and "not_implemented(" in path.read_text()
+    ]
+    assert offenders == []
 
 
 def test_unknown_admin_route_is_json_404(client: TestClient) -> None:
@@ -388,7 +382,7 @@ def test_profiles_route_is_not_swallowed_by_models(client: TestClient) -> None:
         "qwen-nonthinking",
     ]
     # The bare model route still reaches the models router.
-    assert client.get(f"/api/admin/models/{GGUF}").status_code == 501
+    assert client.get(f"/api/admin/models/{GGUF}").status_code == 404
 
 
 def test_put_profiles(client: TestClient) -> None:
@@ -506,7 +500,7 @@ def test_auth_state_open_by_default(browser: TestClient) -> None:
 def test_storage_info(client: TestClient, paths: Paths) -> None:
     body = client.get("/api/admin/storage").json()
     assert body["models_dir"] == str(paths.models_dir)
-    assert body["splash_data_dir"].endswith("Library/Application Support/Splash")
+    assert body["splash_data_dir"] == str(paths.base / "fake-data")
 
 
 def test_request_validation_error_shape(client: TestClient) -> None:

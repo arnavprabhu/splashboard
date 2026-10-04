@@ -70,6 +70,27 @@ def warn(message: str) -> None:
     print(f"Warning: {message}", file=sys.stderr, flush=True)
 
 
+def is_safe_path(name: str) -> bool:
+    """Whether name is a plain repository-relative file, never a path escape."""
+    return bool(name) and not name.startswith("/") and ".." not in name.split("/")
+
+
+MAX_JSON_BYTES = 8 << 20
+
+
+def read_json(path: Path):
+    """A JSON object read from a path, with the real installer's error wording."""
+    try:
+        if path.stat().st_size > MAX_JSON_BYTES:
+            raise ModelError(f"JSON metadata is too large: {path}")
+        value = json.loads(path.read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ModelError(f"could not read {path}: {error}") from error
+    if not isinstance(value, dict):
+        raise ModelError(f"expected a JSON object in {path}")
+    return value
+
+
 def is_hex_digest(value: object, length: int) -> bool:
     return isinstance(value, str) and re.fullmatch(rf"[0-9a-fA-F]{{{length}}}", value) is not None
 
@@ -359,14 +380,19 @@ def target_repo(selection: Selection, family) -> tuple[RemoteRepo, dict[str, str
     changed = os.environ.get("FAKE_SPLASH_DL_COMMIT_SALT", "").encode()
     assembly: dict[str, str] = {}
     if selection.variant is not None:
-        base = selection.repo_id.split("/", 1)[1].removesuffix("-GGUF")
+        # Publishers name variants after the model, without the repo's own
+        # "-GGUF" suffix in any casing (prism-ml ships "-gguf" lower case).
+        base = re.sub(r"-gguf$", "", selection.repo_id.split("/", 1)[1], flags=re.I)
         weights = f"{base}-{selection.variant}.gguf"
         repo.files.append(RemoteFile(weights, shard_bytes, True, b"GGUF\x03\x00\x00\x00", seed + b"/w" + changed))
         assembly["target/" + weights] = weights
         vision_format = "none"
         if not selection.language_only:
+            # Splash only accepts a clip projector whose tensors are BF16 or F32;
+            # F16 has already rounded small weights, so it is never usable
+            # (splash/install/upstream.py select_vision).
             mmproj = RemoteFile(
-                "mmproj-F16.gguf",
+                "mmproj-BF16.gguf",
                 parse_size(os.environ.get("FAKE_SPLASH_DL_VISION_BYTES"), 512 << 10),
                 True,
                 b"GGUF\x03\x00\x00\x00",

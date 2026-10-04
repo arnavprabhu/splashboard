@@ -14,6 +14,7 @@ dependencies = [
     "aiosqlite>=0.20",
     "pydantic>=2.9",
     "anyio>=4.6",
+    "tomlkit>=0.15.1",
 ]
 
 [project.scripts]
@@ -39,7 +40,12 @@ packages = ["splash_gui"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-addopts = "-q"
+# Real-engine contract tests need the installed Splash and the network, so they
+# are excluded here; `make test-real` passes `-m real`, which overrides this.
+addopts = "-q -m 'not real'"
+markers = [
+    "real: contract tests against the installed Homebrew Splash and the live Hub (make test-real)",
+]
 
 [tool.ruff]
 line-length = 100
@@ -56,8 +62,10 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S105", "S106", "S108", "S311"]
+"tests/**" = ["S105", "S106", "S108", "S311", "S310"]
 "splash_gui/helpers/**" = ["PTH"]
+# Queries are composed from fixed column names; every value is a ? parameter.
+"splash_gui/usage/db.py" = ["S608"]
 
 [tool.mypy]
 python_version = "3.12"

@@ -4,6 +4,8 @@
  */
 
 import { computed, signal } from '@preact/signals';
+import { useEffect, useRef } from 'preact/hooks';
+import type { DownloadItem } from '../api/models';
 import { ADMIN, api, request, setUnauthorizedHandler } from '../api/client';
 import { subscribe, type Subscription } from '../api/sse';
 import {
@@ -23,6 +25,8 @@ import {
 import { adoptThemeDefault } from './theme';
 
 export * from './theme';
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 // ---------- engine ----------
 
@@ -195,14 +199,116 @@ export const wizardCompleted = computed<boolean | null>(() => {
   return wizard && typeof wizard.completed === 'boolean' ? wizard.completed : null;
 });
 
-// ---------- event stream ----------
+// ---------- downloads (SPEC §9.4; nav "MODELS 42%", page titles) ----------
 
-/** Event names on GET /api/admin/events that the shell consumes. */
-export const EVENT_NAMES = ['engine', 'alert', 'alert_cleared', 'alerts', 'settings', 'auth'] as const;
+export const downloads = signal<DownloadItem[]>([]);
+
+const ACTIVE_DOWNLOAD: ReadonlySet<string> = new Set(['queued', 'running', 'verifying', 'paused']);
+
+export function upsertDownload(item: DownloadItem): void {
+  const rest = downloads.value.filter((d) => d.id !== item.id);
+  downloads.value = [...rest, item].sort((a, b) => a.created_at.localeCompare(b.created_at));
+}
+
+/** Overall progress (0–1) of running downloads, or null when none run. */
+export const downloadProgress = computed<number | null>(() => {
+  const running = downloads.value.filter((d) => d.state === 'running' || d.state === 'verifying');
+  if (running.length === 0) return null;
+  const total = running.reduce((sum, d) => sum + (d.bytes_total ?? 0), 0);
+  if (total > 0) return running.reduce((sum, d) => sum + d.bytes_done, 0) / total;
+  const ps = running.map((d) => d.progress ?? 0);
+  return ps.reduce((a, b) => a + b, 0) / ps.length;
+});
+
+export const activeDownloads = computed(() => downloads.value.filter((d) => ACTIVE_DOWNLOAD.has(d.state)));
+
+function readDownload(v: unknown): DownloadItem | null {
+  return isRecord(v) && typeof v.id === 'string' && typeof v.model === 'string' && typeof v.state === 'string'
+    ? ({ files: [], log_tail: [], bytes_done: 0, created_at: '', ...v } as unknown as DownloadItem)
+    : null;
+}
+
+export async function refreshDownloads(): Promise<void> {
+  try {
+    const body = await api.get<{ items?: unknown[] }>('/downloads');
+    if (Array.isArray(body?.items)) downloads.value = body.items.map(readDownload).filter((d): d is DownloadItem => d !== null);
+  } catch {
+    /* the event stream delivers them too */
+  }
+}
+
+// ---------- event bus ----------
+
+/**
+ * Event names on GET /api/admin/events (docs/api.md §4). The older names (`engine`,
+ * `alerts`, `alert_cleared`, `settings`, `auth`) are still accepted.
+ */
+export const EVENT_NAMES = [
+  'hello',
+  'engine.state',
+  'alert',
+  'alert.cleared',
+  'notification',
+  'download.progress',
+  'download.state',
+  'models.changed',
+  'settings.changed',
+  'integration.state',
+  'engine.upgrade',
+  'job',
+  'benchmark.progress',
+  'usage.request',
+  // legacy names
+  'engine',
+  'alerts',
+  'alert_cleared',
+  'settings',
+  'auth',
+] as const;
+
+export type EventName = (typeof EVENT_NAMES)[number];
+type Listener = (data: unknown) => void;
+const listeners = new Map<string, Set<Listener>>();
+
+/** Subscribes to one event on the shared stream; returns the unsubscribe function. */
+export function onEvent(name: EventName, fn: Listener): () => void {
+  let set = listeners.get(name);
+  if (!set) listeners.set(name, (set = new Set()));
+  set.add(fn);
+  return () => set.delete(fn);
+}
+
+/** Hook form of onEvent; the latest handler is always used. */
+export function useEvent(name: EventName, fn: Listener): void {
+  const ref = useRef(fn);
+  ref.current = fn;
+  useEffect(() => onEvent(name, (d) => ref.current(d)), [name]);
+}
+
+function emit(name: string, data: unknown): void {
+  for (const fn of listeners.get(name) ?? []) {
+    try {
+      fn(data);
+    } catch (err) {
+      console.error(`[events] ${name} listener failed`, err);
+    }
+  }
+}
 
 export function handleEvent(event: string, data: unknown): void {
   switch (event) {
+    case 'hello': {
+      if (isRecord(data)) {
+        setEngine(data.engine);
+        const list = readAlertList(data.alerts ?? []);
+        if (list) alerts.value = list;
+        if (Array.isArray(data.downloads)) downloads.value = data.downloads.map(readDownload).filter((d): d is DownloadItem => d !== null);
+      }
+      managerReachable.value = true;
+      break;
+    }
     case 'engine':
+    case 'engine.state':
       setEngine(data);
       managerReachable.value = true;
       break;
@@ -212,6 +318,7 @@ export function handleEvent(event: string, data: unknown): void {
       break;
     }
     case 'alert_cleared':
+    case 'alert.cleared':
       if (typeof data === 'string') clearAlert(data);
       else if (data && typeof (data as { id?: unknown }).id === 'string') clearAlert((data as { id: string }).id);
       break;
@@ -220,8 +327,15 @@ export function handleEvent(event: string, data: unknown): void {
       if (list) alerts.value = list;
       break;
     }
+    case 'download.progress':
+    case 'download.state': {
+      const item = readDownload(data);
+      if (item) upsertDownload(item);
+      break;
+    }
     case 'settings':
-      settings.value = null;
+    case 'settings.changed':
+      void loadSettings(true);
       break;
     case 'auth':
       setAuth(data);
@@ -229,21 +343,67 @@ export function handleEvent(event: string, data: unknown): void {
     default:
       break;
   }
+  emit(event, data);
 }
 
 let events: Subscription | null = null;
+/** Attempt counter for the offline screen's countdown. */
+export const eventsAttempt = signal(0);
+export const lastSeen = signal<string | null>(null);
+
+/** True while the event stream is connected; when it is not, the shell polls (below). */
+export const eventsConnected = signal(false);
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+export const POLL_MS = 3000;
+
+function startPolling(): void {
+  if (pollTimer !== null) return;
+  pollTimer = setInterval(() => {
+    void refreshEngine();
+    void refreshAlerts();
+    void refreshDownloads();
+  }, POLL_MS);
+}
+
+function stopPolling(): void {
+  if (pollTimer !== null) clearInterval(pollTimer);
+  pollTimer = null;
+}
+
+/**
+ * The manager is reachable when any admin request answers, even if the event stream fails
+ * (e.g. a 501 while the backend is incomplete, or a proxy that drops SSE). Only a network
+ * failure of the probe marks it offline (docs/ui/01 §5.1).
+ */
+async function probeManager(): Promise<void> {
+  try {
+    await request('/health', { method: 'GET' });
+    if (managerReachable.value !== true) managerReachable.value = true;
+    void refreshEngine();
+    startPolling();
+  } catch {
+    // /health only fails when the manager (or the dev proxy's target) is down.
+    managerReachable.value = false;
+  }
+}
 
 export function connectEvents(): () => void {
   events?.close();
   events = subscribe('/api/admin/events', {
     events: EVENT_NAMES,
     onOpen: () => {
+      eventsAttempt.value = 0;
+      eventsConnected.value = true;
+      stopPolling();
       managerReachable.value = true;
       void refreshEngine();
       void refreshAlerts();
     },
     onError: (attempt) => {
-      if (attempt > 1) managerReachable.value = false;
+      eventsAttempt.value = attempt;
+      eventsConnected.value = false;
+      if (managerReachable.value) lastSeen.value = new Date().toLocaleTimeString('en-GB');
+      void probeManager();
     },
     onMessage: ({ event, data }) => {
       if (event === 'message' && data && typeof data === 'object' && 'type' in data) {
@@ -257,7 +417,13 @@ export function connectEvents(): () => void {
   return () => {
     events?.close();
     events = null;
+    stopPolling();
   };
+}
+
+/** Reconnects the event stream now (offline screen "Retry"). */
+export function reconnectEvents(): void {
+  connectEvents();
 }
 
 /** Refetches everything the shell shows, e.g. after signing in. */
@@ -268,14 +434,17 @@ export function refreshAll(): void {
 }
 
 /** Boot-time wiring used by main.tsx. */
-export function startStore(onUnauthorized: () => void): () => void {
+export function startStore(onUnauthorized: (expired: boolean) => void): () => void {
   setUnauthorizedHandler(() => {
+    // A 401 after a browser session was established means the session expired (docs/ui/01 §6).
+    const expired = auth.value.method === 'session';
     auth.value = { ...auth.value, authenticated: false, method: null };
-    onUnauthorized();
+    onUnauthorized(expired);
   });
   void refreshAuth();
   void refreshEngine();
   void refreshAlerts();
+  void refreshDownloads();
   void loadSettings();
   return connectEvents();
 }

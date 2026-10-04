@@ -26,7 +26,8 @@
   --mute: #8d8d88;
   --rule: #ecebe7;
   --acc: oklch(0.7 0.19 32);
-  --on-acc: #ffffff;
+  /* Drift #3: ink on the dark accent (6.7:1); white is 2.9:1 and fails WCAG AA. */
+  --on-acc: #0e0e0e;
   color-scheme: dark;
 }
 
@@ -37,7 +38,7 @@
     --mute: #8d8d88;
     --rule: #ecebe7;
     --acc: oklch(0.7 0.19 32);
-    --on-acc: #ffffff;
+    --on-acc: #0e0e0e;
     color-scheme: dark;
   }
 }

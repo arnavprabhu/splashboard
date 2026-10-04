@@ -1,9 +1,14 @@
 import type { ComponentChildren } from 'preact';
 
-/** Small outlined label: source chips, Restart badges, fit badges. */
-export function Tag({ children, tone = 'ink', title }: { children: ComponentChildren; tone?: 'ink' | 'mute'; title?: string }) {
+export type TagTone = 'ink' | 'mute' | 'acc';
+
+/**
+ * Small outlined label: source chips, Restart badges, fit badges. `acc` keeps ink text with an
+ * accent border (decision F6: 12px accent text fails AA in light).
+ */
+export function Tag({ children, tone = 'ink', title, dots }: { children: ComponentChildren; tone?: TagTone; title?: string; dots?: boolean }) {
   return (
-    <span class="tag" data-tone={tone} title={title}>
+    <span class={dots ? 'tag loading-dots' : 'tag'} data-tone={tone} data-accent={tone === 'acc' ? 'true' : undefined} title={title}>
       {children}
     </span>
   );

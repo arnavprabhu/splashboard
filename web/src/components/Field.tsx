@@ -21,12 +21,18 @@ export interface FieldProps {
   /** Deeper explanation behind the "?" disclosure. */
   more?: ComponentChildren;
   error?: string | null;
+  /** Restart badge text when `restart` is set ("Restart", "Next load", "Rebind"). */
+  restartLabel?: string;
+  /** Extra Tags after the source and Restart badges (e.g. a disabled-with-reason Tag). */
+  badges?: ComponentChildren;
+  /** Advisory lines shown with a `!` prefix; they never block saving (docs/ui/05 §2). */
+  warnings?: readonly string[];
   /** Render prop receives the control id and describedby ids. */
   children: (ids: { id: string; describedBy: string }) => ComponentChildren;
 }
 
 /** Settings field row (SPEC §10.9): label, help, flag, source chip, Restart badge, "?" disclosure, inline error. */
-export function Field({ label, help, flag, source, restart, more, error, children }: FieldProps) {
+export function Field({ label, help, flag, source, restart, more, error, restartLabel, badges, warnings, children }: FieldProps) {
   const id = useId();
   const [open, setOpen] = useState(false);
   const helpId = `${id}-help`;
@@ -54,10 +60,11 @@ export function Field({ label, help, flag, source, restart, more, error, childre
           )}
         </div>
         {flag && <code class="meta flag">{flag}</code>}
-        {(source || restart) && (
+        {(source || restart || badges) && (
           <div class="field-badges">
             {source && <Tag tone={source === 'default' ? 'mute' : 'ink'}>{SOURCE_LABEL[source]}</Tag>}
-            {restart && <Tag title="Changing this restarts the engine">Restart</Tag>}
+            {restart && <Tag title="Changing this restarts the engine">{restartLabel ?? 'Restart'}</Tag>}
+            {badges}
           </div>
         )}
       </div>
@@ -73,6 +80,11 @@ export function Field({ label, help, flag, source, restart, more, error, childre
             {error}
           </p>
         )}
+        {warnings?.map((w) => (
+          <p class="field-help field-warning" key={w}>
+            {`! ${w}`}
+          </p>
+        ))}
         {more && open && (
           <div class="field-more" id={moreId}>
             {more}

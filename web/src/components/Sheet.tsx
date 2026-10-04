@@ -1,5 +1,6 @@
 import type { ComponentChildren } from 'preact';
-import { useEffect, useId, useRef } from 'preact/hooks';
+import { useId, useLayoutEffect, useRef } from 'preact/hooks';
+import { t } from '../strings/en';
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -10,28 +11,40 @@ export interface SheetProps {
   onClose: () => void;
   children: ComponentChildren;
   footer?: ComponentChildren;
+  /** While busy, Esc and the backdrop do not close the sheet. */
+  busy?: boolean | undefined;
+  /** `alertdialog` for confirmations. */
+  role?: 'dialog' | 'alertdialog';
+  /** Width: 640px (default) or 720px for the model drawer (decision M1). */
+  width?: 'm' | 'l';
+  /** Extra content in the head, left of CLOSE (e.g. a COPY ID button). */
+  headActions?: ComponentChildren;
+  testId?: string;
 }
 
 /** Full-height sheet from the right: 2px left rule, page dimmed with --bg at 80%, focus trapped, Esc closes. */
-export function Sheet({ open, title, onClose, children, footer }: SheetProps) {
+export function Sheet({ open, title, onClose, children, footer, busy, role = 'dialog', width = 'm', headActions, testId }: SheetProps) {
   const panel = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
 
-  useEffect(() => {
+  // Layout effect: the Esc/Tab handler must exist as soon as the sheet is on screen.
+  useLayoutEffect(() => {
     if (!open) return;
     const previous = document.activeElement as HTMLElement | null;
     const node = panel.current;
-    const first = node?.querySelector<HTMLElement>(FOCUSABLE);
-    (first ?? node)?.focus();
+    // Focus moves to the title (docs/ui/00 §4.3); Tab then reaches the controls.
+    node?.querySelector<HTMLElement>('.sheet-title')?.focus();
     const overflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
-        closeRef.current();
+        if (!busyRef.current) closeRef.current();
         return;
       }
       if (e.key !== 'Tab' || !node) return;
@@ -65,20 +78,23 @@ export function Sheet({ open, title, onClose, children, footer }: SheetProps) {
     <div
       class="sheet-backdrop"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget && !busy) onClose();
       }}
     >
-      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby={titleId} ref={panel} tabIndex={-1}>
+      <div class="sheet" data-width={width} role={role} aria-modal="true" aria-labelledby={titleId} ref={panel} tabIndex={-1} data-testid={testId}>
         <div class="sheet-head">
-          <h2 class="heading" id={titleId}>
+          <h2 class="heading sheet-title" id={titleId} tabIndex={-1}>
             {title}
           </h2>
-          <button type="button" class="btn" data-variant="text" onClick={onClose}>
-            Close
-          </button>
+          <div class="cluster" style={{ gap: '16px', flexWrap: 'nowrap' }}>
+            {headActions}
+            <button type="button" class="btn" data-variant="text" onClick={onClose} disabled={busy}>
+              {t('common.close')}
+            </button>
+          </div>
         </div>
         <div class="sheet-body">{children}</div>
-        {footer && <div class="savebar">{footer}</div>}
+        {footer && <div class="sheet-foot">{footer}</div>}
       </div>
     </div>
   );

@@ -1,47 +1,7 @@
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
-/** Manager-shaped answers (manager/splash_gui/schemas.py) for a stopped engine with auth off. */
-const ENGINE = {
-  state: 'stopped',
-  model: null,
-  since: '2026-10-03T12:00:00+00:00',
-  restart: { auto_restart: true },
-  engine: { found: true, version: '1.2.0', support: 'supported' },
-};
-const SETTINGS = { settings: { version: 1, global: { ui: { theme: 'light' }, wizard: { completed: true } }, models: {} } };
-
-interface MockOptions {
-  alerts?: unknown[];
-  auth?: { admin_requires_key: boolean; authenticated: boolean; method: string | null };
-}
-
-async function mockManager(page: Page, opts: MockOptions = {}) {
-  const calls: string[] = [];
-  const auth = { ...(opts.auth ?? { admin_requires_key: false, authenticated: true, method: 'open' }) };
-  await page.route('**/api/admin/**', async (route) => {
-    const req = route.request();
-    const path = new URL(req.url()).pathname.replace('/api/admin', '');
-    calls.push(`${req.method()} ${path}`);
-    if (path === '/auth/state') return route.fulfill({ json: auth });
-    if (path === '/auth/login') {
-      const ok = (req.postDataJSON() as { key?: string }).key === 'secret';
-      if (!ok) return route.fulfill({ status: 401, json: { error: { message: 'invalid key', type: 'authentication_error', code: 'invalid_key' } } });
-      auth.authenticated = true;
-      auth.method = 'session';
-      return route.fulfill({ json: auth });
-    }
-    if (auth.admin_requires_key && !auth.authenticated) {
-      return route.fulfill({ status: 401, json: { error: { message: 'Sign in required', type: 'authentication_error', code: 'unauthorized' } } });
-    }
-    if (path === '/engine') return route.fulfill({ json: ENGINE });
-    if (path === '/settings') return route.fulfill({ json: SETTINGS });
-    if (path === '/alerts') return route.fulfill({ json: { alerts: opts.alerts ?? [] } });
-    if (path.endsWith('/dismiss') || path === '/engine/restart') return route.fulfill({ json: { ok: true } });
-    return route.fulfill({ status: 501, json: { error: { message: 'not in smoke tests', type: 'not_implemented', code: 'not_implemented' } } });
-  });
-  return calls;
-}
+import { mockManager, USAGE } from './fixtures';
 
 const ROUTES = [
   '/admin/status',
@@ -134,8 +94,47 @@ test.describe('shell', () => {
     for (const path of ROUTES) {
       await page.goto(path);
       await page.waitForLoadState('networkidle');
-      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      // `overflow-x: hidden` on body is a safety net, not a strategy
+      // (docs/ui/00-foundations.md §2.3): neutralise it so a regression cannot
+      // hide behind it, then measure what the layout really wants.
+      const overflow = await page.evaluate(() => {
+        const style = document.createElement('style');
+        style.textContent = 'html,body{overflow-x:visible !important}';
+        document.head.append(style);
+        return document.body.scrollWidth - document.documentElement.clientWidth;
+      });
       expect(overflow, `on ${path}`).toBeLessThanOrEqual(0);
+    }
+  });
+
+  test('no horizontal scroll with populated data', async ({ page }) => {
+    // An empty heatmap and an empty request-log table never exercise the widest
+    // boxes, so the sweep above cannot see them.
+    await mockManager(page, { usage: USAGE });
+    await page.setViewportSize({ width: 360, height: 780 });
+    await page.goto('/admin/status/history');
+    await expect(page.locator('.heat-cell').first()).toBeVisible();
+    await expect(page.locator('.table-scroll tbody tr')).toHaveCount(50);
+    const overflow = await page.evaluate(() => {
+      const style = document.createElement('style');
+      style.textContent = 'html,body{overflow-x:visible !important}';
+      document.head.append(style);
+      return document.body.scrollWidth - document.documentElement.clientWidth;
+    });
+    expect(overflow).toBeLessThanOrEqual(0);
+
+    // Wide content must scroll inside its own container, never the page.
+    const contained = await page.evaluate(() => {
+      const scrollable = ['.table-scroll', '.heatmap'].map((sel) => {
+        const el = document.querySelector<HTMLElement>(sel);
+        if (!el) return { sel, missing: true };
+        return { sel, clientWidth: el.clientWidth, scrollWidth: el.scrollWidth };
+      });
+      return scrollable;
+    });
+    for (const box of contained) {
+      expect(box, JSON.stringify(box)).not.toHaveProperty('missing');
+      expect((box as { clientWidth: number }).clientWidth).toBeLessThanOrEqual(360);
     }
   });
 
@@ -168,10 +167,10 @@ test.describe('shell', () => {
     await mockManager(page, { auth: { admin_requires_key: true, authenticated: false, method: null } });
     await page.goto('/admin/models/downloader');
     await expect(page).toHaveURL(/\/admin\/login\?next=%2Fmodels%2Fdownloader$/);
-    await page.getByLabel('API key').fill('nope');
+    await page.getByLabel('Admin key', { exact: true }).fill('nope');
     await page.getByRole('button', { name: 'Sign in' }).click();
-    await expect(page.getByText("That key didn't match.")).toBeVisible();
-    await page.getByLabel('API key').fill('secret');
+    await expect(page.getByText('That key didn’t match.')).toBeVisible();
+    await page.getByLabel('Admin key', { exact: true }).fill('secret');
     await page.getByRole('button', { name: 'Sign in' }).click();
     await expect(page).toHaveURL(/\/admin\/models\/downloader$/);
     await expect(page.getByRole('button', { name: 'Log out' })).toBeVisible();

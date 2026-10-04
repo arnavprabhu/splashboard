@@ -1,6 +1,7 @@
 import { Link, useLocation } from 'wouter-preact';
 import type { EngineState } from '../api/types';
 import { effectiveTheme, toggleTheme } from '../store/theme';
+import { t } from '../strings/en';
 import { StatusChip } from './StatusChip';
 
 export interface NavItem {
@@ -11,13 +12,13 @@ export interface NavItem {
 }
 
 export const NAV_ITEMS: readonly NavItem[] = [
-  { href: '/status', label: 'Status' },
-  { href: '/models', label: 'Models' },
-  { href: '/chat', label: 'Chat' },
-  { href: '/tools/playground', label: 'Tools', match: '/tools' },
-  { href: '/integrations', label: 'Integrations' },
-  { href: '/logs', label: 'Logs' },
-  { href: '/settings', label: 'Settings' },
+  { href: '/status', label: t('nav.status') },
+  { href: '/models', label: t('nav.models') },
+  { href: '/chat', label: t('nav.chat') },
+  { href: '/tools/playground', label: t('nav.tools'), match: '/tools' },
+  { href: '/integrations', label: t('nav.integrations') },
+  { href: '/logs', label: t('nav.logs') },
+  { href: '/settings', label: t('nav.settings') },
 ];
 
 export function isActive(location: string, item: Pick<NavItem, 'href' | 'match'>): boolean {
@@ -31,6 +32,14 @@ export interface NavBandProps {
   state?: EngineState | null;
   authEnabled?: boolean;
   onLogout?: () => void;
+  /** "74 tok/s" while busy (decision S1). */
+  tokps?: string | null;
+  /** "42%" while a download runs (decision S2). */
+  modelsProgress?: string | null;
+  /** Splash is not installed: show only Settings (docs/ui/01 §1.3). */
+  engineMissing?: boolean;
+  /** Logged out: no links, only the toggle (docs/ui/01 §6). */
+  linksHidden?: boolean;
 }
 
 export function ThemeToggle() {
@@ -40,47 +49,57 @@ export function ThemeToggle() {
       type="button"
       class="theme-toggle nav"
       onClick={toggleTheme}
-      aria-label={dark ? 'Switch to light theme' : 'Switch to dark theme'}
+      aria-label={dark ? t('nav.theme_to_light') : t('nav.theme_to_dark')}
       data-testid="theme-toggle"
     >
-      {dark ? '☀ Light' : '☾ Dark'}
+      {dark ? t('nav.theme_light') : t('nav.theme_dark')}
     </button>
   );
 }
 
 /** Wordmark · meta (engine version · model · state chip) · text links · theme toggle. */
-export function NavBand({ engineVersion, model, state, authEnabled, onLogout }: NavBandProps) {
+export function NavBand({ engineVersion, model, state, authEnabled, onLogout, tokps, modelsProgress, engineMissing, linksHidden }: NavBandProps) {
   const [location] = useLocation();
+  const items = linksHidden ? [] : engineMissing ? NAV_ITEMS.filter((i) => i.href === '/settings') : NAV_ITEMS;
   return (
     <header class="navband">
       <Link href="/status" class="navband-mark" aria-label="Splash GUI, status">
         Splash GUI
       </Link>
       <div class="navband-meta meta" aria-label="Engine">
-        <span>{engineVersion ? `Splash ${engineVersion}` : 'Splash —'}</span>
+        <span>{engineMissing ? t('nav.engine_missing') : engineVersion ? t('nav.engine', { version: engineVersion }) : t('nav.engine_unknown')}</span>
         <span aria-hidden="true">·</span>
         <span class="mono" style={{ overflowWrap: 'anywhere' }}>
-          {model ?? 'No model'}
+          {model ?? t('nav.no_model')}
         </span>
         <span aria-hidden="true">·</span>
         <StatusChip state={state ?? null} />
+        {tokps && (
+          <>
+            <span aria-hidden="true">·</span>
+            <span class="tnum" data-testid="nav-tokps">
+              {tokps}
+            </span>
+          </>
+        )}
       </div>
-      <nav aria-label="Main">
+      <nav aria-label={t('nav.main')}>
         <ul class="navband-links">
-          {NAV_ITEMS.map((item) => {
+          {items.map((item) => {
             const active = isActive(location, item);
             return (
               <li key={item.href}>
                 <Link href={item.href} class="navlink nav" aria-current={active ? 'page' : undefined}>
                   {item.label}
+                  {item.href === '/models' && modelsProgress && <span class="tnum navlink-meta"> {modelsProgress}</span>}
                 </Link>
               </li>
             );
           })}
-          {authEnabled && (
+          {authEnabled && !linksHidden && (
             <li>
               <button type="button" class="navlink nav" onClick={onLogout}>
-                Log out
+                {t('nav.logout')}
               </button>
             </li>
           )}

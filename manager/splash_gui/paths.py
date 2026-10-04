@@ -22,6 +22,21 @@ SPLASH_DATA_DIR = Path.home() / "Library" / "Application Support" / "Splash"
 # Splash writes crash traces here and nowhere else (server/crash_trace.py,
 # DEFAULT_TRACE_DIRECTORY); there is no environment override.
 SPLASH_CRASH_TRACE_DIR = Path.home() / "Library" / "Logs" / "Splash" / "crash"
+# The fake engine (scripts/fake_splash) reads its stand-in for SPLASH_DATA_DIR from
+# this variable; when it is set the manager reads the same directory, so tests never
+# touch ~/Library/Application Support/Splash. The real engine ignores it.
+FAKE_DATA_ENV = "SPLASH_GUI_FAKE_DATA"
+
+
+def splash_data_dir() -> Path:
+    """Splash's per-user data directory (selection links, assemblies, runtime locks)."""
+    override = os.environ.get(FAKE_DATA_ENV)
+    return Path(override).expanduser().absolute() if override else SPLASH_DATA_DIR
+
+
+def splash_models_dir() -> Path:
+    """Where Splash keeps its selection links (`install/paths.py` MODELS)."""
+    return splash_data_dir() / "models"
 
 
 def default_base() -> Path:

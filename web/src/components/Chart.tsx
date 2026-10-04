@@ -12,6 +12,7 @@ export interface ChartSeries {
 
 export interface ChartProps {
   title?: string;
+  ariaLabel?: string;
   /** x values (unix seconds) first, then one array per series. */
   data: uPlot.AlignedData;
   series: readonly ChartSeries[];
@@ -19,12 +20,28 @@ export interface ChartProps {
   yFormat?: (value: number) => string;
   /** Accessible summary of the latest values. */
   summary?: string;
+  /** Shown over empty axes when there are no samples ("No samples yet"). */
+  empty?: string;
+  /** Formats a sample for the hidden values table (defaults to yFormat). */
+  valueFormat?: (value: number) => string;
+  /** x is unix seconds and the axis shows time (default); false for category/ordinal x. */
+  time?: boolean;
+  /** Bars instead of lines (usage history). */
+  bars?: boolean;
 }
 
 let loader: Promise<typeof uPlot> | null = null;
+let bars: uPlot.Series.PathBuilder | null = null;
+let UPlotRef: typeof uPlot | null = null;
+
+function barsPath(): uPlot.Series.PathBuilder | undefined {
+  if (!UPlotRef) return undefined;
+  bars ??= UPlotRef.paths.bars?.({ size: [0.7, 64] }) ?? null;
+  return bars ?? undefined;
+}
 /** uPlot is code-split and only fetched by pages that draw a chart. */
 export function loadUPlot(): Promise<typeof uPlot> {
-  loader ??= import('uplot').then((m) => m.default);
+  loader ??= import('uplot').then((m) => (UPlotRef = m.default));
   return loader;
 }
 
@@ -50,7 +67,7 @@ function buildOptions(el: HTMLElement, props: ChartProps, width: number): uPlot.
     height: props.height ?? 180,
     legend: { show: false },
     cursor: { y: false, points: { show: false } },
-    scales: { x: { time: true } },
+    scales: { x: { time: props.time !== false } },
     axes: [axis(), axis(yFormat ? (_u, splits) => splits.map((v) => (v === null ? '' : yFormat(v))) : undefined)],
     series: [
       {},
@@ -59,6 +76,7 @@ function buildOptions(el: HTMLElement, props: ChartProps, width: number): uPlot.
         stroke: s.primary ? acc : ink,
         width: s.primary ? 2 : 1,
         ...(s.dashed ? { dash: [4, 4] } : {}),
+        ...(props.bars ? { paths: barsPath(), fill: s.primary ? acc : ink } : {}),
         points: { show: false },
       })),
     ],
@@ -100,12 +118,16 @@ export function Chart(props: ChartProps) {
     };
     // Rebuild only when the shape or theme changes; data updates go through setData.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [theme, seriesKey, props.height]);
+  }, [theme, seriesKey, props.height, props.bars, props.time]);
 
   useEffect(() => {
     plot.current?.setData(props.data);
   }, [props.data]);
 
+  const xs = props.data[0] ?? [];
+  const hasData = xs.length > 0 && props.data.slice(1).some((col) => (col ?? []).some((v) => v !== null && v !== undefined));
+  const fmt = props.valueFormat ?? props.yFormat ?? ((v: number) => String(Math.round(v * 100) / 100));
+  const lastRows = Array.from({ length: Math.min(10, xs.length) }, (_, k) => xs.length - Math.min(10, xs.length) + k);
   return (
     <figure class="chart" style={{ margin: 0 }}>
       {props.title && (
@@ -117,7 +139,36 @@ export function Chart(props: ChartProps) {
       {failed ? (
         <p class="meta">Chart unavailable</p>
       ) : (
-        <div ref={host} role="img" aria-label={props.summary ?? props.title ?? 'Chart'} style={{ minHeight: `${props.height ?? 180}px` }} />
+        <div class="chart-host">
+          <div ref={host} role="img" aria-label={props.ariaLabel ?? props.summary ?? props.title ?? 'Chart'} style={{ minHeight: `${props.height ?? 180}px` }} />
+          {!hasData && props.empty && <p class="chart-empty meta">{props.empty}</p>}
+        </div>
+      )}
+      {hasData && (
+        <table class="visually-hidden">
+          <caption>{props.title ?? 'Chart'} — last samples</caption>
+          <thead>
+            <tr>
+              <th scope="col">Time</th>
+              {props.series.map((s) => (
+                <th key={s.label} scope="col">
+                  {s.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {lastRows.map((i) => (
+              <tr key={i}>
+                <td>{props.time === false ? String(xs[i]) : new Date((xs[i] ?? 0) * 1000).toLocaleTimeString('en-GB')}</td>
+                {props.series.map((s, si) => {
+                  const v = props.data[si + 1]?.[i];
+                  return <td key={s.label}>{v === null || v === undefined ? '—' : fmt(v)}</td>;
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
     </figure>
   );

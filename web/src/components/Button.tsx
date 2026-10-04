@@ -5,14 +5,24 @@ export type ButtonVariant = 'outline' | 'text' | 'solid' | 'accent';
 export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'size'> {
   variant?: ButtonVariant;
   size?: 'm' | 's';
+  /** Busy: label gets animated dots, aria-busy, disabled. */
+  loading?: boolean | undefined;
   children: ComponentChildren;
 }
 
 /** Square text button. `accent` is for the one important action on screen. */
-export function Button({ variant = 'outline', size = 'm', type = 'button', class: cls, children, ...rest }: ButtonProps) {
+export function Button({ variant = 'outline', size = 'm', type = 'button', class: cls, loading, disabled, children, ...rest }: ButtonProps) {
   return (
-    <button type={type} class={['btn', cls].filter(Boolean).join(' ')} data-variant={variant} data-size={size} {...rest}>
-      {children}
+    <button
+      type={type}
+      class={['btn', cls].filter(Boolean).join(' ')}
+      data-variant={variant}
+      data-size={size}
+      aria-busy={loading ? 'true' : undefined}
+      disabled={Boolean(disabled) || Boolean(loading)}
+      {...rest}
+    >
+      {loading ? <span class="loading-dots">{children}</span> : children}
     </button>
   );
 }

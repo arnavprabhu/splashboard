@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const dist = join(root, 'dist');
+const dist = process.env.SPLASH_GUI_DIST ? join(root, process.env.SPLASH_GUI_DIST) : join(root, 'dist');
 const manifestPath = join(dist, '.vite', 'manifest.json');
 const KB = 1024;
 const BUDGETS = { initialJs: 60 * KB, chatExtra: 80 * KB, css: 20 * KB, font: 90 * KB };
@@ -74,5 +74,7 @@ if (fonts.length === 0) {
   console.log('FAIL  no font files in dist/assets');
   failed = true;
 }
+const uplot = Object.values(manifest).find((c) => /uPlot/i.test(c.file));
+if (uplot) console.log(`info  Status charts add uPlot lazily: ${kb(gz(uplot.file))} (initial + uPlot = ${kb(initialJs + gz(uplot.file))})`);
 console.log(`\nInitial set: ${[...initial].join(', ')}`);
 process.exit(failed ? 1 : 0);

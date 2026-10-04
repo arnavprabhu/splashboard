@@ -115,7 +115,7 @@ describe('AlertBand', () => {
       />,
     );
     expect(screen.getByText('Engine stopped.')).toBeTruthy();
-    expect(screen.getByText('×3')).toBeTruthy();
+    expect(screen.getByText(/×3 · last/)).toBeTruthy();
     fireEvent.click(screen.getByText('Restart engine'));
     expect(onAction).toHaveBeenCalledWith(expect.objectContaining({ id: 'engine_failed' }), restart);
     const dismiss = screen.getAllByText('Dismiss');
@@ -215,7 +215,9 @@ describe('Sheet', () => {
     expect(dialog.getAttribute('aria-modal')).toBe('true');
     const close = screen.getByText('Close');
     const inner = screen.getByLabelText('inner');
-    expect(document.activeElement).toBe(close);
+    // Focus moves to the sheet title first (docs/ui/00 §4.3).
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Details' }));
+    close.focus();
     inner.focus();
     fireEvent.keyDown(document, { key: 'Tab' });
     expect(document.activeElement).toBe(close);

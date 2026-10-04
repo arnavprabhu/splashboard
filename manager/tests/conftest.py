@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
+import socket
 import stat
+import sys
 from collections.abc import Iterator
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from fastapi import FastAPI
@@ -19,6 +23,9 @@ SPLASH_PKG = Path("/opt/homebrew/opt/splash/libexec")
 SPLASH_PYTHON = SPLASH_PKG / "python" / "bin" / "python3"
 HAVE_SPLASH = SPLASH_PYTHON.exists() and (SPLASH_PKG / "server" / "serve_options.py").exists()
 
+REPO = Path(__file__).resolve().parents[2]
+FAKE_SPLASH = REPO / "scripts" / "fake_splash"
+
 
 @pytest.fixture(autouse=True)
 def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -26,9 +33,63 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "splash-home"
     monkeypatch.setenv("SPLASH_GUI_HOME", str(home))
     monkeypatch.setenv("SPLASH_GUI_SECRETS", "memory")
+    monkeypatch.setenv("SPLASH_GUI_FAKE_DATA", str(home / "fake-data"))
+    monkeypatch.setenv("SPLASH_GUI_UPDATE_CHECK", "0")
     monkeypatch.delenv("SPLASH_GUI_REAL_SPLASH", raising=False)
     monkeypatch.delenv("SPLASH_GUI_WEB_DIST", raising=False)
+    # The developer's own `hf auth login` token must never be visible to a test
+    # (D10 reads ~/.cache/huggingface/token), or a gated-repository test would
+    # pass or fail depending on whose machine it runs on.
+    monkeypatch.setenv("HF_HOME", str(home / "hf-home"))
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
     return home
+
+
+_LOOPBACK = {"127.0.0.1", "::1", "localhost", "0.0.0.0", ""}  # noqa: S104 - matched, never bound
+
+
+@pytest.fixture
+def allow_network() -> Iterator[None]:
+    """Opt back in to the real internet for one test.
+
+    Only for the real-engine contract tests (SPEC §20.2), which check our
+    assumptions against the installed Splash and the live Hub. Mark them with
+    `@pytest.mark.real` so `make test` stays offline.
+    """
+    yield
+
+
+@pytest.fixture(autouse=True)
+def no_external_network(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
+    """Fail loudly if a test reaches the real Hugging Face or GitHub.
+
+    The suite is meant to run offline against the fake engine and the fake Hub.
+    A test that silently queries the live Hub passes for the wrong reason and
+    fails on someone else's machine, so only loopback may resolve.
+    """
+    if "allow_network" in request.fixturenames:
+        return
+    real_create_connection = socket.create_connection
+
+    def guarded(address, *args, **kwargs):
+        host = address[0] if isinstance(address, tuple) else address
+        if str(host) not in _LOOPBACK:
+            raise AssertionError(
+                f"test tried to reach {host!r}; point hf.endpoint at the fake Hub "
+                "(the `fake_hub` fixture) or inject a transport"
+            )
+        return real_create_connection(address, *args, **kwargs)
+
+    real_getaddrinfo = socket.getaddrinfo
+
+    def guarded_dns(host, *args, **kwargs):
+        if host is not None and str(host) not in _LOOPBACK:
+            raise AssertionError(f"test tried to resolve {host!r}; this suite is offline")
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "create_connection", guarded)
+    monkeypatch.setattr(socket, "getaddrinfo", guarded_dns)
 
 
 @pytest.fixture
@@ -110,3 +171,31 @@ def mode(path: Path) -> int:
 
 def which(name: str) -> str | None:
     return shutil.which(name, path=os.environ.get("PATH"))
+
+
+def fake_hub_module() -> ModuleType:
+    """Import scripts/fake_splash/hub.py by path, as an out-of-package script."""
+    if str(FAKE_SPLASH) not in sys.path:
+        sys.path.insert(0, str(FAKE_SPLASH))
+    spec = importlib.util.find_spec("hub")
+    assert spec and spec.origin, "scripts/fake_splash/hub.py not importable"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
+    return module
+
+
+@pytest.fixture
+def fake_hub() -> Iterator[str]:
+    """A running fake Hugging Face API; yields its base URL.
+
+    The manager reaches it through the `hf.endpoint` setting and the
+    engine-side compatibility helper through `HF_ENDPOINT`.
+    """
+    hub = fake_hub_module().FakeHub().start()
+    try:
+        yield hub.url
+    finally:
+        hub.stop()
+
+
+from .fakeengine import harness_factory  # noqa: E402, F401  (fixture)
