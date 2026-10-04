@@ -95,3 +95,12 @@ struct AdminRoutesTests {
         #expect(!Self.isRoute("/admin/settings/nope"))
     }
 }
+
+@Suite("Project links (D40)")
+struct ProjectLinksTests {
+    @Test func repositoryAndIssues() {
+        #expect(ProjectLinks.repository.absoluteString == "https://github.com/arnavprabhu/splash-gui")
+        #expect(ProjectLinks.issues.absoluteString == "https://github.com/arnavprabhu/splash-gui/issues")
+        #expect(ProjectLinks.engineRepository.host == "github.com")
+    }
+}

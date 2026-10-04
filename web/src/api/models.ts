@@ -36,7 +36,10 @@ export type ChatMessageMeta = Schemas['ChatMessageMeta'];
 export type ChatSettings = Schemas['ChatSettings'];
 export type ChatSummary = Schemas['ChatSummary'];
 export type ClaudeDesktopSettings = Schemas['ClaudeDesktopSettings'];
-export type CliIntegration = Schemas['CliIntegration'];
+export type CliIntegration = Schemas['CliIntegration'] & {
+  /** Hermes only: our profile stores the API key in plain text (SPEC D44). */
+  plaintext_key_warning?: boolean;
+};
 export type CodexAppSettings = Schemas['CodexAppSettings'];
 export type ConnectRequest = Schemas['ConnectRequest'];
 export type DataClearRequest = Schemas['DataClearRequest'];
@@ -114,6 +117,15 @@ export type LoginRequest = Schemas['LoginRequest'];
 export type McpCallRequest = Schemas['McpCallRequest'];
 export type McpCallResult = Schemas['McpCallResult'];
 export type McpServer = Schemas['McpServer'];
+/** A Keychain-held MCP `env`/`headers` value as the manager returns it (SPEC D43). */
+export interface MaskedSecret {
+  secret: true;
+  masked: string;
+}
+/** Send a `MaskedSecret` back unchanged to keep a value, or a plain string to set a new one. */
+export type McpValue = string | MaskedSecret;
+/** `McpServer` with D43 values, whatever schema.d.ts says until it is regenerated. */
+export type McpServerView = Omit<McpServer, 'env' | 'headers'> & { env?: Record<string, McpValue>; headers?: Record<string, McpValue> };
 export type McpServerError = Schemas['McpServerError'];
 export type McpServers = Schemas['McpServers'];
 export type McpTool = Schemas['McpTool'];
@@ -176,7 +188,11 @@ export type SettingsValidation = Schemas['SettingsValidation'];
 export type ShimInstallRequest = Schemas['ShimInstallRequest'];
 export type ShimStatus = Schemas['ShimStatus'];
 export type StageLatency = Schemas['StageLatency'];
-export type StorageInfo = Schemas['StorageInfo'];
+export type StorageInfo = Schemas['StorageInfo'] & {
+  /** The models folder is the user's own Hugging Face cache (SPEC D44). */
+  models_shared_with_hf_cache?: boolean;
+  hf_cache_path?: string | null;
+};
 export type StorageMoveRequest = Schemas['StorageMoveRequest'];
 export type StorageSettings = Schemas['StorageSettings'];
 export type SystemDisks = Schemas['SystemDisks'];

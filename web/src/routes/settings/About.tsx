@@ -12,6 +12,10 @@ import { t } from '../../strings/settings';
 import { settingsApi } from './api';
 
 export const LINKS = {
+  /** Splash GUI itself (D40; private for now, D26). */
+  guiRepo: 'https://github.com/arnavprabhu/splash-gui',
+  guiIssues: 'https://github.com/arnavprabhu/splash-gui/issues',
+  /** The engine. */
   repo: 'https://github.com/incoai/splash',
   issue: 'https://github.com/incoai/splash/issues/new',
 } as const;
@@ -153,7 +157,13 @@ export function About() {
       </LabelRow>
       <LabelRow label={t('settings.about.links')}>
         <div class="stack">
+          <p class="cluster" data-testid="about-gui-links">
+            <span class="meta">{t('settings.about.app')}</span>
+            <ExternalLink href={LINKS.guiRepo}>{t('settings.about.gui_repo')}</ExternalLink>
+            <ExternalLink href={LINKS.guiIssues}>{t('settings.about.gui_issues')}</ExternalLink>
+          </p>
           <p class="cluster">
+            <span class="meta">{t('settings.about.engine')}</span>
             <ExternalLink href={LINKS.repo}>{t('settings.about.repo')}</ExternalLink>
             <ExternalLink href={LINKS.issue}>{t('settings.about.issue')}</ExternalLink>
           </p>

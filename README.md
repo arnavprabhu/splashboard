@@ -6,6 +6,8 @@ A macOS app for serving, monitoring and chatting with models on the [Splash](htt
 - **One active model, quick switching.** Install supported Qwen3.8-27B / Qwen3.6-35B-A3B builds (MLX 4-bit group 64, or GGUF), load one, switch from the menu bar or the admin.
 - **Everything in the GUI.** Welcome wizard (Homebrew, Splash, storage, presets, first model), live status and usage history, model downloads with compatibility checks, settings for every `splash serve` option with Splash's own validation, chat with tools and MCP, a playground, tokenizer, judgments and benchmarks, session-only agent launchers (`splash launch claude`) and desktop-app integrations.
 
+> Repository: <https://github.com/arnavprabhu/splash-gui> (private for now) · [issues](https://github.com/arnavprabhu/splash-gui/issues).
+>
 > Status: v1 is built and run **from the source tree**. Packaging (signed app bundle, DMG, Sparkle, Homebrew cask) is on the [roadmap](docs/roadmap.md) (D30).
 
 ## Requirements
@@ -15,7 +17,7 @@ A macOS app for serving, monitoring and chatting with models on the [Splash](htt
 
 ## Quick start (from source)
 ```sh
-git clone <this repo> splash-gui && cd splash-gui
+git clone https://github.com/arnavprabhu/splash-gui.git && cd splash-gui
 make web          # build the web admin into web/dist (checks the bundle budget)
 make manager      # start the manager on http://127.0.0.1:8000 → open /admin
 ```

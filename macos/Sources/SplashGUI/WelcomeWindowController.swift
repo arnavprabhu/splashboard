@@ -269,7 +269,11 @@ struct PlaceholderView: View {
                     SquareButton("Try Again", action: tryAgain)
                 }
             } else {
-                ProgressView().controlSize(.small)
+                // Text, not a spinner (SPEC D44): no system controls in our windows.
+                Text("Starting…")
+                    .font(FontLoader.body())
+                    .foregroundStyle(Tokens.mute(dark: dark))
+                    .accessibilityAddTraits(.updatesFrequently)
             }
             Spacer()
         }

@@ -9,8 +9,25 @@ export const ENGINE = {
   engine: { found: true, version: '1.2.0', support: 'supported' },
 };
 
+/** MCP servers as the manager returns them: every env/header value is a Keychain reference (D43). */
+export const MCP_SERVERS = {
+  github: {
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-github'],
+    env: { GITHUB_TOKEN: { secret: true, masked: 'ghp_…••••a1b2' } },
+    enabled: true,
+    always_allow: false,
+  },
+  search: {
+    url: 'https://mcp.example.com/mcp',
+    headers: { Authorization: { secret: true, masked: 'Bearer…••••9f3c' } },
+    enabled: true,
+    always_allow: true,
+  },
+};
+
 export const SETTINGS = {
-  settings: { version: 1, global: { ui: { theme: 'light' }, wizard: { completed: true } }, models: {} },
+  settings: { version: 1, global: { ui: { theme: 'light' }, wizard: { completed: true }, chat: { mcp_servers: MCP_SERVERS } }, models: {} },
 };
 
 const MODEL = 'mlx-community/Qwen3.6-35B-A3B-4bit';
@@ -251,6 +268,8 @@ export async function mockManager(page: Page, opts: MockOptions = {}): Promise<s
     if (path.endsWith('/reveal-backup')) {
       return route.fulfill({ status: 404, json: { error: { message: 'No backup yet', type: 'not_found', code: 'no_backup' } } });
     }
+    if (path === '/mcp/servers' && req.method() === 'GET') return route.fulfill({ json: { servers: MCP_SERVERS } });
+    if (path === '/mcp/tools') return route.fulfill({ json: { tools: [{ server: 'github', name: 'search_issues' }], errors: [] } });
     if (/^\/integrations\/[^/]+\/open$/.test(path)) return route.fulfill({ json: { ok: true, path: '/Applications/App.app' } });
     if (path === '/usage/summary') {
       return usage ? route.fulfill({ json: usage.summary }) : route.fulfill({ status: 501, json: NOT_IMPLEMENTED });

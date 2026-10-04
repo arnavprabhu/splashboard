@@ -113,10 +113,10 @@ describe('other engine options (docs/ui/05 §7)', () => {
   });
 });
 
-import { draftError, draftServer, importMcpJson, parsePairs } from '../src/routes/settings/McpServers';
+import { EMPTY, draftError, draftServer, editDraft, importMcpJson, mergeSecrets, parsePairs, secretRows } from '../src/routes/settings/McpServers';
 
 describe('MCP servers editor (docs/ui/05 §3.11)', () => {
-  const base = { name: 'weather', transport: 'stdio' as const, command: 'npx', args: 'weather-mcp\n--port\n9', env: 'KEY=v', url: '', headers: '' };
+  const base = { ...EMPTY, name: 'weather', transport: 'stdio' as const, command: 'npx', args: 'weather-mcp\n--port\n9', env: 'KEY=v', url: '', headers: '' };
   it('validates names, commands and URLs', () => {
     expect(draftError(base, [])).toBeNull();
     expect(draftError(base, ['weather'])).toBe('A server with this name exists.');
@@ -131,6 +131,34 @@ describe('MCP servers editor (docs/ui/05 §3.11)', () => {
   it('imports a Claude-style mcp.json', () => {
     expect(importMcpJson('{"mcpServers":{"w":{"command":"npx","args":["a"]}}}')).toEqual({ w: { command: 'npx', args: ['a'], env: {}, enabled: true, always_allow: false } });
     expect(importMcpJson('nope')).toBeNull();
+  });
+});
+
+describe('MCP secrets are write-only (D43)', () => {
+  const key = { secret: true as const, masked: 'sk-…••••a1b2' };
+  const server = { command: 'npx', args: ['gh-mcp'], env: { GITHUB_TOKEN: key, ORG: { secret: true as const, masked: '••••corp' } }, enabled: false, always_allow: true };
+  it('sends untouched values back as the same object, replaced ones as plain strings', () => {
+    const rows = secretRows(server.env);
+    expect(mergeSecrets(rows, {})).toEqual(server.env);
+    rows[0]!.replace = 'ghp_new';
+    rows[1]!.removed = true;
+    expect(mergeSecrets(rows, { EXTRA: 'x' })).toEqual({ GITHUB_TOKEN: 'ghp_new', EXTRA: 'x' });
+  });
+  it('never sends masked text as a value', () => {
+    const rows = secretRows(server.env);
+    rows[0]!.replace = key.masked;
+    expect(mergeSecrets(rows, { NEW: '••••' })).toEqual(server.env);
+    const d = editDraft('gh', server);
+    d.envRows[0]!.replace = key.masked;
+    expect(draftError(d, ['gh'])).toBe('That is the masked value. Paste the real value, or keep the saved one.');
+  });
+  it('edits keep the name, flags and saved secrets', () => {
+    const d = editDraft('gh', server);
+    expect(draftError(d, ['gh'])).toBeNull();
+    expect(draftServer(d)).toEqual(server);
+  });
+  it('import drops masked objects and masked text', () => {
+    expect(importMcpJson(JSON.stringify({ mcpServers: { w: { command: 'x', env: { A: key, B: 'b', C: 'x••••y' } } } }))!.w!.env).toEqual({ B: 'b' });
   });
 });
 

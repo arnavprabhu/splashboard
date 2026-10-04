@@ -608,6 +608,9 @@ textarea.input {
 .table-wrap {
   overflow-x: auto;
   max-width: 100%;
+  /* Contains absolutely positioned visually-hidden labels; without it a hidden header in a
+     scrolled-wide table widens the whole page on phones. */
+  position: relative;
 }
 
 .table {
@@ -1578,3 +1581,11 @@ textarea.input {
 .strong { font-weight: 700; }
 .integration-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 16px; }
 .integration-steps > li[data-state='failed'] { color: var(--acc); }
+
+/* MCP secrets (D43): masked values, write-only replace. */
+.mcp-secrets { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--rule); }
+.mcp-secret { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--rule); }
+.mcp-secret > .input { grid-column: 1 / -1; }
+.mcp-secret[data-removed] > .mono:first-child { text-decoration: line-through; color: var(--mute); }
+.mcp-secret > .mono { overflow-wrap: anywhere; }
+.mcp-secret-summary { white-space: pre-line; overflow-wrap: anywhere; }

@@ -11,13 +11,14 @@ import type {
   EffectiveSettings,
   HfTokenTestOut,
   LaunchPreview,
-  McpServer,
+  McpServerView,
   ModelDetail,
   ProfilesView,
   SamplingOverlay,
   SecretMeta,
   SecretsState,
   SettingsResetResult,
+  StorageInfo,
   HfWhoami,
   SettingsSaveResult,
   SettingsSchema,
@@ -81,8 +82,8 @@ export const settingsApi = {
   model: (model: string, signal?: AbortSignal) => api.get<ModelDetail>(`/models/${modelPath(model)}`, undefined, signal),
   models: (signal?: AbortSignal) => api.get<{ models: Array<{ id: string; legacy?: boolean; status?: string }> }>('/models', undefined, signal),
 
-  mcpServers: (signal?: AbortSignal) => api.get<{ servers: Record<string, McpServer> }>('/mcp/servers', undefined, signal),
-  saveMcpServers: (servers: Record<string, McpServer>) => api.put<{ servers: Record<string, McpServer> }>('/mcp/servers', { servers }),
+  mcpServers: (signal?: AbortSignal) => api.get<{ servers: Record<string, McpServerView> }>('/mcp/servers', undefined, signal),
+  saveMcpServers: (servers: Record<string, McpServerView>) => api.put<{ servers: Record<string, McpServerView> }>('/mcp/servers', { servers }),
   mcpTools: (signal?: AbortSignal) =>
     api.get<{ tools: Array<{ server: string; name: string }>; errors: Array<{ server: string; message: string }> }>('/mcp/tools', undefined, signal),
 
@@ -103,6 +104,7 @@ export const settingsApi = {
   /** Native Sparkle check through the menu bar app (docs/ui/05 §3.17; not in the manager yet). */
   checkAppUpdate: () => api.post<unknown>('/app/check-updates'),
   reveal: (target: string, id: string | null = null) => api.post<unknown>('/system/reveal', { target, id }),
+  storage: (signal?: AbortSignal) => api.get<StorageInfo>('/storage', undefined, signal),
   moveStorage: (target: 'models' | 'cache', path: string) => api.post<unknown>('/storage/move', { target, path, move_files: true }),
 };
 

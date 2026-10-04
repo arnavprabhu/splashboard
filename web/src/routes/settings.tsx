@@ -3,6 +3,7 @@ import { Link, Redirect, useLocation } from "wouter-preact";
 import type { SchemaField } from "../api/models";
 import { ApiError } from "../api/client";
 import {
+  Banner,
   Button,
   ConfirmSheet,
   ExternalLink,
@@ -206,6 +207,20 @@ function ResetSettings({ form }: { form: SettingsForm }) {
   );
 }
 
+/** D44: deleting a model can remove files from the user's own Hugging Face cache. */
+function SharedHfCacheNotice() {
+  const storage = useApi((s) => settingsApi.storage(s));
+  const info = storage.data;
+  if (!info?.models_shared_with_hf_cache) return null;
+  return (
+    <Banner tone="warn" title={t("settings.storage.shared_title")}>
+      <span data-testid="storage-shared-hf">
+        {t("settings.storage.shared_body", { path: info.hf_cache_path ?? info.models_dir })}
+      </span>
+    </Banner>
+  );
+}
+
 function SectionExtras({ slug, form }: { slug: SettingsSlug; form: SettingsForm }) {
   switch (slug) {
     case "security":
@@ -366,6 +381,7 @@ export default function SettingsPage({ params }: { params?: { section?: string }
                   {w}
                 </p>
               ))}
+              {current.slug === "storage" && <SharedHfCacheNotice />}
               {fields.map((field) => (
                 <FieldFor key={field.key} field={field} form={form} models={modelIds} hash={hash} />
               ))}

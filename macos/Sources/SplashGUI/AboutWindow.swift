@@ -80,9 +80,9 @@ struct AboutView: View {
             Spacer(minLength: 16)
             Rule(width: 1, color: ink)
             HStack(spacing: 16) {
-                LinkText("Splash repository ↗") {
-                    if let u = URL(string: "https://github.com/incoai/splash") { NSWorkspace.shared.open(u) }
-                }
+                LinkText("Repository ↗") { NSWorkspace.shared.open(ProjectLinks.repository) }
+                LinkText("Issues ↗") { NSWorkspace.shared.open(ProjectLinks.issues) }
+                LinkText("Splash engine ↗") { NSWorkspace.shared.open(ProjectLinks.engineRepository) }
                 LinkText("Licenses ↗") { model.openAdmin("/admin/settings/about#licenses") }
             }
             .foregroundStyle(ink)
