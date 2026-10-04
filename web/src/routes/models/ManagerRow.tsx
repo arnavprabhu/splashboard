@@ -82,14 +82,14 @@ export function ManagerRow(props: ManagerRowProps) {
     <span class="mrow-meta">
       <span class="mono">{id}</span>
       {model?.family && <span>{model.family}</span>}
-      {model?.commit && <span class="mono">{t('models.row.rev', { sha: sha7(model.commit)! })}</span>}
+      {model?.commit && <span class="mono">{t('models.row.rev', { rev: sha7(model.commit)! })}</span>}
       {model?.pinned && (
         <Tag tone="mute" title={t('models.row.pinned_title', { sha: sha7(model.revision ?? model.commit) ?? '' })}>
           {t('models.status.pinned')}
         </Tag>
       )}
       {model?.language_only && <Tag tone="ink">{t('models.row.language_only')}</Tag>}
-      {model && <span>{model.last_used_at ? t('models.row.used', { when: formatRelativeTime(model.last_used_at) }) : t('models.row.never_used')}</span>}
+      {model && <span>{model.last_used_at ? t('models.row.used', { time: formatRelativeTime(model.last_used_at) }) : t('models.row.never_used')}</span>}
       {model && model.unique_bytes !== model.size_bytes && <span class="tnum">{t('models.row.unique', { size: formatBytes(model.unique_bytes) })}</span>}
       {dlActive && <span class="tnum">{downloadMeta(download)}</span>}
     </span>

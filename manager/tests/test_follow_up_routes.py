@@ -190,6 +190,8 @@ def test_print_runs_splash_s_configurator(
     assert claude["command"].startswith("claude ") and claude["files"] == []
     codex = client.get("/api/admin/integrations/codex/print", params={"model": model}).json()
     assert codex["exact"] is True and f'model="{model}"' in codex["args"]
+    assert "-c features.apps=false" in codex["command"], "D46 shows in the preview"
+    assert "features.apps=false" not in claude["command"]
     opencode = client.get("/api/admin/integrations/opencode/print", params={"model": model}).json()
     assert f"splash/{model}" in opencode["env"]["OPENCODE_CONFIG_CONTENT"]
 
@@ -222,6 +224,10 @@ def test_print_falls_back_to_a_description(svc: Any, client: TestClient, home: P
     assert hermes["args"] == ["--provider", "custom", "--model", MODEL]
     pi = client.get("/api/admin/integrations/pi/print").json()
     assert pi["model"] is None and pi["files"][0]["change"]
+    codex = client.get("/api/admin/integrations/codex/print", params={"model": MODEL}).json()
+    assert codex["exact"] is False
+    assert codex["args"][-2:] == ["-c", "features.apps=false"], "D46 in the static description"
+    assert any("64 characters" in n for n in codex["notes"])
 
 
 # --- Settings: reset and secret meta ---------------------------------------------------

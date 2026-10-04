@@ -120,9 +120,9 @@ export function fieldError(rule: FieldRule, value: unknown): string | null {
     if (value === null || value === undefined) return rule.control === 'duration' ? null : t('settings.validation.required');
     if (typeof value !== 'number' || !Number.isFinite(value)) return t('settings.validation.number');
     if (rule.min !== null && rule.min !== undefined && rule.max !== null && rule.max !== undefined && (value < rule.min || value > rule.max))
-      return t('settings.validation.between', { min: rule.min, max: rule.max });
-    if (rule.min !== null && rule.min !== undefined && value < rule.min) return t('settings.validation.at_least', { min: rule.min });
-    if (rule.max !== null && rule.max !== undefined && value > rule.max) return t('settings.validation.at_most', { max: rule.max });
+      return t('settings.validation.between', { label: rule.label ?? rule.key, min: rule.min, max: rule.max });
+    if (rule.min !== null && rule.min !== undefined && value < rule.min) return t('settings.validation.at_least', { label: rule.label ?? rule.key, min: rule.min });
+    if (rule.max !== null && rule.max !== undefined && value > rule.max) return t('settings.validation.at_most', { label: rule.label ?? rule.key, max: rule.max });
   }
   if (rule.control === 'url' && !isBlank(value)) return urlError(s);
   return null;

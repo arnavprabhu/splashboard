@@ -26,6 +26,22 @@ test.describe('pages against the real manager', () => {
     await expect(page.getByRole('link', { name: 'Re-run welcome wizard' })).toBeVisible();
   });
 
+  test('memory and context: Auto toggles are named after the field, one size line (acceptance 2026-10-04)', async ({ page, manager }) => {
+    await manager.patchSettings((doc) => {
+      doc.global.serve = { ...doc.global.serve, max_memory: '40G', max_context: '128K' };
+    });
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto('/admin/settings/memory');
+    const memory = page.locator('[data-key="serve.max_memory"]');
+    await expect(memory.getByRole('switch', { name: 'Auto (Memory ceiling)' })).toBeVisible();
+    await expect(page.locator('[data-key="serve.max_context"]').getByRole('switch', { name: 'Auto (Context limit)' })).toBeVisible();
+    await expect(page.getByRole('switch', { name: /\{value\}/ })).toHaveCount(0);
+    // The parsed size was printed twice: once by SizeInput, once by the memory footnote.
+    await expect(memory.getByText(/^= 40 GB/)).toHaveCount(1);
+    // ...and that one line carries the share of this Mac's RAM (docs/ui/05).
+    await expect(memory.getByText(/^= 40 GB · \d+% of \d+ GB$/)).toBeVisible();
+  });
+
   test('saving one global field adds no per-model keys (acceptance 2026-10-04)', async ({ page, manager }) => {
     const model = 'unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q2_K_XL';
     await manager.patchSettings((doc) => {

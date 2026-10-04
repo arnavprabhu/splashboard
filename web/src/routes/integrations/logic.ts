@@ -194,6 +194,14 @@ export function removableEntries(cli: Pick<CliIntegration, 'name' | 'entries'>):
   return cli.entries ?? [];
 }
 
+/** D47: profile fields are defaults only (D12), so a client that sends a field
+ * itself overrides the profile's value. Verified in the real-engine pass for these
+ * three clients; Hermes and Pi were not run, so they get no line. */
+export type ProfileNoteClient = 'claude' | 'codex' | 'opencode';
+export function profileNoteClient(name: string): ProfileNoteClient | null {
+  return name === 'claude' || name === 'codex' || name === 'opencode' ? name : null;
+}
+
 /** Where the removable entry lives, for the confirmation sheet (docs/ui/09 §3.4). */
 export function entryFile(name: 'hermes' | 'pi', entry: string): string {
   return name === 'hermes' ? `~/.hermes/profiles/${entry}/config.yaml` : '~/.pi/agent/models.json';

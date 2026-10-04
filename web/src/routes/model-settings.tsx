@@ -52,6 +52,8 @@ export default function ModelSettingsPage({ params = {} }: { params?: Record<str
     );
   const profiles = useApi((s) => settingsApi.profiles(id, s), [id]);
   const detail = useApi((s) => settingsApi.model(id, s), [id]);
+  // RAM for the Memory ceiling's "= 40 GB · 63% of 64 GB" line (docs/ui/05).
+  const system = useApi(settingsApi.system);
   useEffect(() => {
     void form.load();
     void loadSchema();
@@ -95,6 +97,7 @@ export default function ModelSettingsPage({ params = {} }: { params?: Record<str
                   field={field}
                   form={form}
                   model={id}
+                  memoryBytes={system.data?.memory_bytes ?? null}
                   disabledReason={field.disabled_for_legacy && detail.data?.legacy ? t("settings.legacy") : null}
                 />
               ))}

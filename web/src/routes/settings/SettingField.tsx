@@ -117,16 +117,15 @@ export function MoreText({ field, version }: { field: SchemaField; version?: str
   );
 }
 
-function memoryFootnote(value: string, memoryBytes: number | null | undefined): string | null {
-  const r = parseMaxMemory(value || 'auto');
-  if (!r.ok) return null;
-  if (r.bytes === null) return t('settings.memory.auto_note');
-  if (!memoryBytes) return `= ${formatBytes(r.bytes, { digits: 1 })}`;
-  return t('settings.memory.footnote', { size: formatBytes(r.bytes), pct: formatPercent(r.bytes / memoryBytes, 0), ram: formatBytes(memoryBytes, { digits: 0 }) });
+/** The share of this Mac's RAM, on the SizeInput's own "= 40 GB" line (docs/ui/05:
+ * one line, `= 34.4 GB · 54% of 64 GB`). The parsed size itself is the SizeInput's. */
+export function memoryShare(bytes: number, memoryBytes: number | null | undefined): string | null {
+  if (!memoryBytes) return null;
+  return t('settings.memory.footnote', { pct: formatPercent(bytes / memoryBytes, 0), ram: formatBytes(memoryBytes, { digits: 0 }) });
 }
 
 /** Auto + slider + text for `serve.max_context` (docs/ui/05 §3.4). */
-function ContextControl({ id, describedBy, value, set, disabled }: { id: string; describedBy: string; value: unknown; set: (v: unknown) => void; disabled: boolean }) {
+function ContextControl({ id, describedBy, label, value, set, disabled }: { id: string; describedBy: string; label: string; value: unknown; set: (v: unknown) => void; disabled: boolean }) {
   const text = value === undefined || value === null ? 'auto' : String(value);
   const auto = text.trim().toLowerCase() === 'auto';
   const parsed = parseMaxContext(text);
@@ -139,7 +138,7 @@ function ContextControl({ id, describedBy, value, set, disabled }: { id: string;
         <span class="meta">{t('settings.auto')}</span>
         <Toggle
           checked={auto}
-          label={t('settings.auto_for', { label: t('settings.field.serve.max_context.label') })}
+          label={t('settings.auto_for', { label })}
           disabled={disabled}
           onChange={(on) => set(on ? 'auto' : (draft ?? '128K'))}
         />
@@ -147,7 +146,7 @@ function ContextControl({ id, describedBy, value, set, disabled }: { id: string;
       {!auto && (
         <>
           <Slider
-            label={t('settings.field.serve.max_context.label')}
+            label={label}
             min={12}
             max={18}
             step={0.5}
@@ -184,7 +183,7 @@ function ContextControl({ id, describedBy, value, set, disabled }: { id: string;
 }
 
 /** Auto + slider (GB) + size input for `serve.max_memory`. */
-function MemoryControl({ id, describedBy, value, set, disabled, memoryBytes }: { id: string; describedBy: string; value: unknown; set: (v: unknown) => void; disabled: boolean; memoryBytes: number | null | undefined }) {
+function MemoryControl({ id, describedBy, label, value, set, disabled, memoryBytes }: { id: string; describedBy: string; label: string; value: unknown; set: (v: unknown) => void; disabled: boolean; memoryBytes: number | null | undefined }) {
   const text = value === undefined || value === null ? 'auto' : String(value);
   const auto = text.trim().toLowerCase() === 'auto';
   const ramGb = memoryBytes ? Math.round(memoryBytes / GiB) : 64;
@@ -194,12 +193,12 @@ function MemoryControl({ id, describedBy, value, set, disabled, memoryBytes }: {
     <div class="stack settings-auto" style={{ gap: '10px' }}>
       <div class="cluster" style={{ gap: '12px', alignItems: 'center' }}>
         <span class="meta">{t('settings.auto')}</span>
-        <Toggle checked={auto} label={t('settings.auto_for', { label: t('settings.field.serve.max_memory.label') })} disabled={disabled} onChange={(on) => set(on ? 'auto' : `${gb}G`)} />
+        <Toggle checked={auto} label={t('settings.auto_for', { label })} disabled={disabled} onChange={(on) => set(on ? 'auto' : `${gb}G`)} />
       </div>
       {!auto && (
         <>
           <Slider
-            label={t('settings.field.serve.max_memory.label')}
+            label={label}
             min={4}
             max={Math.max(8, ramGb)}
             step={1}
@@ -212,13 +211,19 @@ function MemoryControl({ id, describedBy, value, set, disabled, memoryBytes }: {
             ]}
             onChange={(v) => set(`${v}G`)}
           />
-          <SizeInput id={id} aria-describedby={describedBy} kind="max-memory" class="mono settings-short" value={text} disabled={disabled} onChange={(v) => set(v)} />
+          <SizeInput
+            id={id}
+            aria-describedby={describedBy}
+            kind="max-memory"
+            class="mono settings-short"
+            value={text}
+            disabled={disabled}
+            suffix={(bytes) => memoryShare(bytes, memoryBytes)}
+            onChange={(v) => set(v)}
+          />
         </>
       )}
-      {(() => {
-        const note = memoryFootnote(text, memoryBytes);
-        return note ? <p class="meta tnum">{note}</p> : null;
-      })()}
+      {auto && <p class="meta">{t('settings.memory.auto_note')}</p>}
     </div>
   );
 }
@@ -349,12 +354,12 @@ export function SettingField(props: SettingFieldProps) {
       case 'size': {
         const kind = SIZE_KIND[field.key] ?? 'request-size';
         if (field.key === 'serve.max_memory')
-          return <MemoryControl id={ids.id} describedBy={ids.describedBy} value={shown} set={set} disabled={disabled} memoryBytes={memoryBytes} />;
+          return <MemoryControl id={ids.id} describedBy={ids.describedBy} label={label} value={shown} set={set} disabled={disabled} memoryBytes={memoryBytes} />;
         if (field.key === 'serve.max_cache_disk') return <CacheDiskControl id={ids.id} describedBy={ids.describedBy} value={shown} set={set} disabled={disabled} />;
         return <SizeInput {...common} kind={kind} class="mono settings-short" value={String(shown ?? '')} onChange={(v) => set(v)} />;
       }
       case 'context':
-        return <ContextControl id={ids.id} describedBy={ids.describedBy} value={shown} set={set} disabled={disabled} />;
+        return <ContextControl id={ids.id} describedBy={ids.describedBy} label={label} value={shown} set={set} disabled={disabled} />;
       case 'tags': {
         const list = Array.isArray(shown) ? (shown as string[]) : [];
         return <TagList id={ids.id} label={label} values={list} validate={tagValidator(field.key)} onChange={(v) => set(v)} />;

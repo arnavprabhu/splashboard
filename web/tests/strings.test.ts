@@ -56,3 +56,64 @@ describe('string table', () => {
     }
   });
 });
+
+describe('placeholders at call sites', () => {
+  it('every t(key, {…}) call passes each {placeholder} its template uses', async () => {
+    // Regression: `settings.auto_for` read "Auto ({value})" while every caller passed
+    // {label}, so the Auto toggles' accessible names were literally "Auto ({value})".
+    const ts = (await import('typescript')).default;
+    const { readFileSync, readdirSync, statSync } = await import('node:fs');
+    const { join, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const table: Record<string, string> = { ...en };
+    for (const [path, mod] of Object.entries(modules)) {
+      const area = path.split('/').pop()!.replace(/\.ts$/, '');
+      Object.assign(table, (mod[`${area}Strings`] as Record<string, string> | undefined) ?? {});
+    }
+    const src = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const full = join(dir, name);
+        if (statSync(full).isDirectory()) walk(full);
+        else if (/\.tsx?$/.test(name)) files.push(full);
+      }
+    };
+    walk(src);
+    const problems: string[] = [];
+    let checked = 0;
+    for (const file of files) {
+      const sf = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+      const visit = (node: import('typescript').Node) => {
+        const [first, second] = ts.isCallExpression(node) ? node.arguments : [];
+        if (
+          ts.isCallExpression(node) &&
+          ts.isIdentifier(node.expression) &&
+          node.expression.text === 't' &&
+          first !== undefined &&
+          ts.isStringLiteralLike(first) &&
+          (node.arguments.length === 1 || (node.arguments.length === 2 && second !== undefined && ts.isObjectLiteralExpression(second)))
+        ) {
+          const key = first.text;
+          const params = second as import('typescript').ObjectLiteralExpression | undefined;
+          if (params?.properties.some((p) => ts.isSpreadAssignment(p))) return;
+          // `t('login.help').split('{cmd}')` puts markup in the placeholder on purpose.
+          const parent = node.parent;
+          if (!params && ts.isPropertyAccessExpression(parent) && parent.name.text === 'split') return;
+          const passed = new Set((params?.properties ?? []).map((p) => (p.name && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) ? p.name.text : '')));
+          const templates = [table[key], table[`${key}.one`], table[`${key}.other`]].filter((v): v is string => v !== undefined);
+          for (const template of templates) {
+            checked++;
+            for (const [, name = ''] of template.matchAll(/\{(\w+)\}/g)) {
+              if (!passed.has(name)) problems.push(`${file.slice(src.length)}: t('${key}') uses {${name}}, passes {${[...passed].join(', ')}}`);
+            }
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sf);
+    }
+    expect(checked).toBeGreaterThan(50);
+    expect(problems).toEqual([]);
+  });
+});

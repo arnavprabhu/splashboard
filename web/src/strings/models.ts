@@ -123,7 +123,7 @@ export const modelsStrings = {
   "models.dl.offline_failed": "Could not enable offline mode.",
   "models.dl.offline_on": "Offline mode enabled.",
   "models.dl.overall": "Overall progress",
-  "models.dl.overall_text": "{done} of {total}",
+  "models.dl.overall_text": "{pct} overall",
   "models.dl.parallel": "Parallel downloads",
   "models.dl.parallel_failed": "Could not save the download limit.",
   "models.dl.parallel_saved": "Download limit saved.",

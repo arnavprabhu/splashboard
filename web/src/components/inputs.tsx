@@ -181,12 +181,15 @@ export function TagList({ values, onChange, placeholder, validate, label, id }: 
 
 export interface SizeInputProps extends Omit<TextInputProps, 'invalid'> {
   kind: SizeKind;
+  /** Appended to the parsed size on the same line (`= 34.4 GB · 54% of 64 GB`). */
+  suffix?: (bytes: number) => string | null;
 }
 
 /** Byte-size field validated like Splash's parsers (K/M/G = 1024). Shows the parsed size. */
-export function SizeInput({ kind, value, onChange, id, ...rest }: SizeInputProps) {
+export function SizeInput({ kind, value, onChange, id, suffix, 'aria-describedby': describedBy, ...rest }: SizeInputProps) {
   const result = parseSize(kind, value);
   const hintId = id ? `${id}-size` : undefined;
+  const extra = result.ok && result.bytes ? suffix?.(result.bytes) : null;
   return (
     <div class="stack" style={{ gap: '6px' }}>
       <TextInput
@@ -197,7 +200,7 @@ export function SizeInput({ kind, value, onChange, id, ...rest }: SizeInputProps
         invalid={!result.ok}
         spellcheck={false}
         autocomplete="off"
-        aria-describedby={hintId}
+        aria-describedby={[hintId, describedBy].filter(Boolean).join(' ') || undefined}
       />
       <p id={hintId} class={result.ok ? 'meta tnum' : 'field-error'}>
         {result.ok
@@ -205,7 +208,7 @@ export function SizeInput({ kind, value, onChange, id, ...rest }: SizeInputProps
             ? 'Automatic'
             : result.bytes === 0
               ? 'Disabled'
-              : `= ${formatBytes(result.bytes, { digits: 2 })}`
+              : `= ${formatBytes(result.bytes, { digits: 2 })}${extra ? ` · ${extra}` : ''}`
           : result.error}
       </p>
     </div>

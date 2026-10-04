@@ -6,6 +6,22 @@ import shlex
 import shutil
 import sys
 
+# D46: Codex sends the user's ChatGPT Apps connectors as namespace tools, and
+# Splash 1.2.0 rejects any tool name over 64 characters ("invalid namespace tool
+# name", server/api_shapes.py:471). Turning the `apps` feature off is a `-c`
+# override, so it applies to this session only; plain `codex` keeps it (D18).
+CODEX_SESSION_ARGS = ("-c", "features.apps=false")
+
+
+def session_args(client: str, args: list[str]) -> list[str]:
+    """The client arguments plus Splash GUI's own session overrides. Ours go
+    first: Splash keeps user `-c` overrides in order after its defaults
+    (install/clients.py _codex_config_args), so a user's own
+    `-c features.apps=true` still wins."""
+    if client == "codex":
+        return [*CODEX_SESSION_ARGS, *args]
+    return list(args)
+
 
 def main() -> None:
     # Splash's package comes in through sys.path, not PYTHONPATH, as Splash's own
@@ -40,7 +56,7 @@ def main() -> None:
         spec["model"],
         spec["context"],
         input_modalities=spec["modalities"],
-        client_args=spec["args"],
+        client_args=session_args(spec["client"], spec["args"]),
         client_version=client_version,
     )
     if spec.get("format") == "json":

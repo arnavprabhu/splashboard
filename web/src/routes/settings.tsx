@@ -250,9 +250,16 @@ function SectionExtras({ slug, form }: { slug: SettingsSlug; form: SettingsForm 
   }
 }
 
+/** Memory ceiling with this Mac's RAM, for "= 40 GB · 63% of 64 GB" (docs/ui/05). */
+function MemoryField({ field, form, models, hash }: { field: SchemaField; form: SettingsForm; models?: string[] | undefined; hash: string }) {
+  const system = useApi(settingsApi.system);
+  return <SettingField field={field} form={form} models={models} memoryBytes={system.data?.memory_bytes ?? null} highlight={hash === field.key} />;
+}
+
 function FieldFor({ field, form, models, hash }: { field: SchemaField; form: SettingsForm; models?: string[] | undefined; hash: string }) {
   if (field.key === "advanced.crash_trace") return <CrashTraceField field={field} form={form} />;
   if (field.key === "chat.mcp_servers") return <McpServers />;
+  if (field.key === "serve.max_memory") return <MemoryField field={field} form={form} models={models} hash={hash} />;
   if (field.key === "engine.extra_flags")
     return <ExtraFlags form={form} options={schema.value?.engine_options.unknown ?? []} version={schema.value?.engine_options.version ?? null} />;
   return <SettingField field={field} form={form} models={models} highlight={hash === field.key} />;

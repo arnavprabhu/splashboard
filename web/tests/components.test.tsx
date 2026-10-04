@@ -172,6 +172,20 @@ describe('SizeInput', () => {
   });
 });
 
+describe('SizeInput suffix and description', () => {
+  it('puts the suffix on the parsed-size line and keeps the field description', () => {
+    render(
+      <>
+        <p id="help">Help</p>
+        <SizeInput kind="max-memory" value="40G" onChange={() => {}} id="m" aria-describedby="help" suffix={() => '63% of 64 GB'} />
+      </>,
+    );
+    expect(screen.getAllByText(/= 40/)).toHaveLength(1);
+    expect(screen.getByText('= 40 GB · 63% of 64 GB')).toBeTruthy();
+    expect(screen.getByRole('textbox').getAttribute('aria-describedby')).toBe('m-size help');
+  });
+});
+
 describe('TagList', () => {
   it('adds on Enter, rejects duplicates and invalid values, removes', () => {
     function Harness() {

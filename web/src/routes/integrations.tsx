@@ -46,6 +46,7 @@ import {
   isLoopbackHost,
   launchCommand,
   normaliseSlots,
+  profileNoteClient,
   removableEntries,
   sdkSnippet,
   slotsSwitchModels,
@@ -297,6 +298,7 @@ function CliRow({
       : t("integrations.cli.installed_unknown")
     : null;
   const kind = cli.name === "hermes" || cli.name === "pi" ? cli.name : null;
+  const profileNote = profileNoteClient(cli.name);
   return (
     <article class="integration-row stack" aria-labelledby={`cli-${cli.name}`}>
       <div class="integration-head">
@@ -346,6 +348,11 @@ function CliRow({
           </MacOnly>
         </span>
       </div>
+      {profileNote && (
+        <p class="meta" data-testid={`profiles-${cli.name}`}>
+          <span class="label">{t("integrations.cli.profiles")}</span> {t(`integrations.cli.profiles.${profileNote}`)}
+        </p>
+      )}
       {!engine.value?.model && pick && (
         <p class="meta">{t("integrations.cli.will_load", { model: pick })}</p>
       )}

@@ -114,7 +114,7 @@ export const welcomeStrings = {
   "welcome.engine.installed": "Splash is installed.",
   "welcome.engine.lead": "Check this Mac and install the Splash engine.",
   "welcome.engine.log_waiting": "Waiting for installer output…",
-  "welcome.engine.mac_value": "{chip} · macOS {version}",
+  "welcome.engine.mac_value": "{chip} · {memory} · macOS {macos}",
   "welcome.engine.needs_brew": "Install Homebrew first.",
   "welcome.engine.open_terminal_cmd": "Open in Terminal",
   "welcome.engine.perms_ok": "Private data directory",

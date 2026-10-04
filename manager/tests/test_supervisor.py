@@ -119,6 +119,39 @@ def test_crash_restarts_with_backoff_then_fails(
     # Restart from failed works and clears the history.
     h.client.post("/api/admin/engine/restart")
     assert h.wait_state("ready", timeout=20)["restart"]["crashes_in_window"] == 0
+    # ...and the crash-loop alert, whose condition is gone (acceptance 2026-10-04).
+    alerts = h.client.get("/api/admin/alerts").json()["alerts"]
+    assert not any(a["condition"] == "crash_loop" for a in alerts), alerts
+
+
+def test_crash_loop_alert_clears_when_a_reload_reaches_ready(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """The band kept showing "Splash crashed 3× in 5 min" after a successful
+    manual reload (real-engine acceptance, item 8)."""
+    h = harness_factory()
+    cleared: list[object] = []
+    bus = h.state.events
+    real = bus.publish
+
+    def spy(event: str, data: object) -> None:
+        if event == "alert.cleared":
+            cleared.append(getattr(data, "id", None))
+        real(event, data)
+
+    bus.publish = spy
+    h.load()
+    for _ in range(2):
+        h.fake("POST", "/_fake/crash", {"signal": "SIGKILL"})
+        h.wait_state("crashed", "starting", timeout=10)
+        h.wait_state("ready", timeout=20)
+    h.fake("POST", "/_fake/crash", {"signal": "SIGKILL"})
+    h.wait_state("failed", timeout=10)
+    assert h.state.alerts.active("crash_loop"), "still failed: the alert stays"
+    response = h.client.post("/api/admin/engine/load", json={"model": MODEL, "wait": True})
+    assert response.status_code == 202 and response.json()["state"] == "ready"
+    assert not h.state.alerts.active("crash_loop")
+    assert "crash_loop" in cleared, "clients drop the band on alert.cleared"
 
 
 def test_crash_without_auto_restart_fails(harness_factory: Callable[..., EngineHarness]) -> None:

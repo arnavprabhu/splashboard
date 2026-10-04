@@ -16,7 +16,7 @@ import { shortName } from './logic';
 export async function loadModel(id: string): Promise<boolean> {
   try {
     await models.loadEngine(id);
-    toast(t('models.toast.loading', { short: shortName(id) }));
+    toast(t('models.toast.loading', { model: shortName(id) }));
     return true;
   } catch (err) {
     if (err instanceof ApiError && err.code === 'model_switch_busy') toast(t('models.toast.busy'), { tone: 'error', detail: err.message });
@@ -58,7 +58,7 @@ export async function startDownload(req: models.StartDownload, sizeBytes?: numbe
     if (item && typeof item === 'object' && typeof item.id === 'string') upsertDownload({ files: [], log_tail: [], ...item });
     void refreshDownloads();
     const size = typeof sizeBytes === 'number' ? formatBytes(sizeBytes, { base: 1000 }) : null;
-    toast(size ? t('models.toast.queued_size', { short: shortName(req.id), size }) : t('models.toast.queued', { short: shortName(req.id) }));
+    toast(size ? t('models.toast.queued_size', { model: shortName(req.id), size }) : t('models.toast.queued', { model: shortName(req.id) }));
     scrollToDownloads();
     return item;
   } catch (err) {

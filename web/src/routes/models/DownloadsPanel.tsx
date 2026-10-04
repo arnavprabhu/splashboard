@@ -157,7 +157,7 @@ export function downloadMeta(d: DownloadItem): string {
   else if (d.bytes_done) parts.push(formatBytes(d.bytes_done, HUB));
   if (d.state === 'running') {
     if (typeof d.speed_bps === 'number') parts.push(formatBytesPerSecond(d.speed_bps, HUB));
-    if (typeof d.eta_s === 'number') parts.push(t('models.dl.eta', { eta: formatDuration(d.eta_s) }));
+    if (typeof d.eta_s === 'number') parts.push(t('models.dl.eta', { time: formatDuration(d.eta_s) }));
   }
   if (d.state === 'paused') return t('models.dl.paused_kept', { size: formatBytes(d.bytes_done ?? 0, HUB) });
   if (d.state === 'verifying') return d.verify && globalSetting('downloads', 'full_verify', false) ? t('models.dl.full_verify') : t('models.dl.quick_verify');
@@ -221,7 +221,7 @@ function DownloadRow({ item: d, installed, onCancel, onDismiss }: { item: Downlo
             size="s"
             onClick={() =>
               void verifyModel(d.model, true).then(
-                () => toast(t('models.toast.verifying', { short })),
+                () => toast(t('models.toast.verifying', { model: short })),
                 (e: unknown) => toastError(t('models.toast.verify_failed', { short }), e),
               )
             }

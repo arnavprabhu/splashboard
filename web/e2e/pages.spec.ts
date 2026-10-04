@@ -106,6 +106,11 @@ test.describe('integrations', () => {
     // a missing client links to Splash's INSTALL_URLS entry
     const opencode = page.locator('.integration-row', { has: page.getByRole('heading', { name: /OpenCode/ }) });
     await expect(opencode.getByRole('link', { name: /Install/ })).toHaveAttribute('href', 'https://opencode.ai/docs/');
+    // D47: which clients override which profile fields
+    await expect(page.getByTestId('profiles-claude')).toContainText('sends its own thinking, so :no-think has no effect');
+    await expect(page.getByTestId('profiles-codex')).toContainText('sends its own reasoning effort');
+    await expect(opencode.getByTestId('profiles-opencode')).toContainText('Honoured');
+    await expect(page.getByTestId('profiles-hermes')).toHaveCount(0);
     // picking a profile adds --model to every command
     await page.getByRole('combobox', { name: 'Model for every command and snippet on this page' }).selectOption(`${CHAT.model}:no-think`);
     await expect(page.getByText(`$ splash launch claude --model ${CHAT.model}:no-think`)).toBeVisible();

@@ -165,7 +165,7 @@ export default function ModelsManager() {
     try {
       const item = await updateModel(m.id);
       if (item && typeof item.id === "string") void flows.startDownload; // queued by the manager
-      toast(t("models.toast.updating", { short: shortName(m.id) }));
+      toast(t("models.toast.updating", { model: shortName(m.id) }));
     } catch (err) {
       toastError(
         t("models.toast.update_failed", { short: shortName(m.id) }),

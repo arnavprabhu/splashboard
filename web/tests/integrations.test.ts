@@ -9,6 +9,7 @@ import {
   launchCommand,
   normaliseSlots,
   parseVersion,
+  profileNoteClient,
   removableEntries,
   sdkSnippet,
   slotsSwitchModels,
@@ -18,6 +19,7 @@ import {
   tauriOriginState,
   withTauriOrigin,
 } from '../src/routes/integrations/logic';
+import { integrationsStrings } from '../src/strings/integrations';
 
 const MODEL = 'mlx-community/Qwen3.6-35B-A3B-4bit';
 
@@ -133,5 +135,21 @@ describe('gateway /v1/models preview', () => {
     expect(out.data[1]!.display_name).toBe(MODEL);
     expect(out).toMatchObject({ first_id: 'claude-sonnet-5', last_id: 'claude-opus-5', has_more: false });
     expect((gatewayModels({ 'claude-haiku-5': '' }, null) as { data: Array<Record<string, unknown>> }).data[0]!.display_name).toBe('Splash');
+  });
+});
+
+describe('profile overrides per client (D47)', () => {
+  it('names the fields Claude Code and Codex send themselves, and that OpenCode honours profiles', () => {
+    expect(profileNoteClient('claude')).toBe('claude');
+    expect(profileNoteClient('codex')).toBe('codex');
+    expect(profileNoteClient('opencode')).toBe('opencode');
+    expect(integrationsStrings['integrations.cli.profiles.claude']).toMatch(/thinking.*:no-think has no effect/);
+    expect(integrationsStrings['integrations.cli.profiles.codex']).toMatch(/reasoning effort.*:no-think has no effect/);
+    expect(integrationsStrings['integrations.cli.profiles.opencode']).toMatch(/Honoured/);
+  });
+
+  it('claims nothing for clients the real-engine pass did not run', () => {
+    expect(profileNoteClient('hermes')).toBeNull();
+    expect(profileNoteClient('pi')).toBeNull();
   });
 });

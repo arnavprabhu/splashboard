@@ -763,6 +763,9 @@ class Supervisor:
                 identity=(self.status or {}).get("identity"),
             )
         log.info("engine ready: %s", run.model)
+        # The crash-loop alert's condition is "the engine is down after repeated
+        # crashes"; a start that reaches ready clears it (docs/api.md `alert.cleared`).
+        self.app.alerts.clear_condition("crash_loop")
         self._set("ready")
 
     async def _refresh_models(self, run: _Run) -> None:

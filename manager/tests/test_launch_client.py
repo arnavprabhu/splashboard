@@ -93,6 +93,56 @@ def test_codex_print_uses_only_overrides(tmp_path: Path) -> None:
     assert files_under(tmp_path / "home") == []
 
 
+def test_codex_session_turns_apps_off(tmp_path: Path) -> None:
+    """D46: Splash rejects tool names over 64 characters and Codex sends ChatGPT
+    Apps connectors as tools, so the session runs with `features.apps=false`."""
+    result = run(tmp_path, "codex", print_only=True, args=["exec", "hi"])
+    assert result.returncode == 0, result.stderr
+    assert "-c features.apps=false exec hi" in result.stdout
+    assert files_under(tmp_path / "home") == [], "a -c override, never config.toml (D18)"
+
+
+def test_a_user_s_own_apps_override_still_wins(tmp_path: Path) -> None:
+    """Codex applies `-c` left to right (last wins); ours goes before the user's."""
+    result = run(tmp_path, "codex", print_only=True, args=["-c", "features.apps=true", "exec"])
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    assert out.index("features.apps=false") < out.index("features.apps=true")
+
+
+@pytest.mark.parametrize("client", ["claude", "opencode"])
+def test_other_clients_get_no_codex_override(tmp_path: Path, client: str) -> None:
+    result = run(tmp_path, client, print_only=True)
+    assert result.returncode == 0, result.stderr
+    assert "features.apps" not in result.stdout
+
+
+def test_codex_launch_execs_with_apps_off(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    record = tmp_path / "record.json"
+    write_script(
+        bin_dir / "codex",
+        f'"{sys.executable}" -c \'import json,sys; '
+        f'json.dump(sys.argv[1:], open("{record}", "w"))\' "$@"\n',
+    )
+    result = run(tmp_path, "codex", print_only=False, args=["exec", "hi"], path_dirs=[bin_dir])
+    assert result.returncode == 0, result.stderr
+    argv = json.loads(record.read_text())
+    i = argv.index("features.apps=false")
+    assert argv[i - 1] == "-c" and argv[-2:] == ["exec", "hi"]
+    assert files_under(tmp_path / "home") == []
+
+
+def test_session_args_only_touch_codex() -> None:
+    sys.path.insert(0, str(HELPER.parent))
+    try:
+        import launch_client  # type: ignore[import-not-found]
+    finally:
+        sys.path.remove(str(HELPER.parent))
+    assert launch_client.session_args("codex", ["exec"]) == ["-c", "features.apps=false", "exec"]
+    assert launch_client.session_args("claude", ["-p", "x"]) == ["-p", "x"]
+
+
 def test_opencode_print_is_inline_config(tmp_path: Path) -> None:
     result = run(tmp_path, "opencode", print_only=True)
     assert result.returncode == 0, result.stderr
