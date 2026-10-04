@@ -1,0 +1,8 @@
+Splash GUI
+Copyright 2026 The Splash GUI authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It bundles the Archivo typeface (SIL Open Font License 1.1) and drives the
+Splash inference engine (incoai/splash, Apache-2.0), which is not bundled.
+Splash GUI is not an official inco.ai product.
