@@ -248,6 +248,26 @@ def test_extra_flags_cannot_repeat_managed_flags() -> None:
     assert errors(doc_with("engine.extra_flags", [{"flag": "--future-thing", "value": "1"}])) == []
 
 
+@pytest.mark.parametrize(
+    ("flag", "managed"),
+    [
+        ("--hos", "--host"),
+        ("--api-k", "--api-key"),
+        ("--cache-d", "--cache-dir"),
+        ("--h", "--help"),
+    ],
+)
+def test_extra_flags_cannot_abbreviate_managed_flags(flag: str, managed: str) -> None:
+    # Splash's argparse keeps allow_abbrev=True: `--hos 0.0.0.0` would rebind the engine.
+    raw = doc_with("engine.extra_flags", [{"flag": flag, "value": "0.0.0.0"}])  # noqa: S104
+    assert errors(raw) == [
+        (
+            "engine.extra_flags.0.flag",
+            f"{flag} abbreviates {managed}, which is set through its own setting",
+        )
+    ]
+
+
 def test_announce_requires_alias() -> None:
     raw = doc_with("serve", {"announce_served_name": True}, model=MLX)
     assert errors(raw) == [

@@ -212,6 +212,19 @@ def test_upgrade_failure_is_reported(
     assert job["state"] == "failed" and "exited 3" in job["message"]
 
 
+def test_a_failed_upgrade_brings_the_model_back(
+    harness_factory: Callable[..., EngineHarness], tmp_path: Path
+) -> None:
+    h = harness_factory()
+    h.load()
+    brew = write_script(tmp_path / "brew", 'if [ "$1" = upgrade ]; then echo boom; exit 3; fi\n')
+    h.state.updates.find_brew = lambda: str(brew)
+    job = wait_job(h.client, h.client.post("/api/admin/engine/upgrade").json()["job_id"])
+    assert job["state"] == "failed"
+    view = h.wait_state("ready")
+    assert view["model"] == MODEL
+
+
 def test_upgrade_without_homebrew(app: FastAPI, client: TestClient) -> None:
     app.state.manager.updates.find_brew = lambda: None
     job = wait_job(client, client.post("/api/admin/engine/upgrade").json()["job_id"])

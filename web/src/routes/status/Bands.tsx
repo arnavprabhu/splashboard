@@ -9,7 +9,7 @@ import { Link } from 'wouter-preact';
 import { Banner } from '../../components/Banner';
 import { CodeBlock } from '../../components/CodeBlock';
 import { copyText } from '../../components/CopyButton';
-import { toast } from '../../components/Toast';
+import { toast, toastError } from '../../components/Toast';
 import { Disclosure } from '../../components/Disclosure';
 import { Select } from '../../components/inputs';
 import { KeyValue, MeterBar, type KeyValueItem } from '../../components/KeyValue';
@@ -432,6 +432,9 @@ export function LatencyBand({ raw, stopped }: BandsProps) {
 
 // ---------- §9 Claude Code ----------
 
+/** A revealed key re-masks after 30 s, as in Settings → Security (docs/ui/05 decision G5). */
+export const CLAUDE_KEY_REMASK_MS = 30_000;
+
 export function ClaudeBand({ models }: { models: readonly string[] }) {
   const e = engine.value;
   const active = e?.model ?? null;
@@ -441,6 +444,11 @@ export function ClaudeBand({ models }: { models: readonly string[] }) {
   const profiles = useApi((s) => modelProfiles(active!, s), [active], !!active);
   const [pick, setPick] = useState<string>('');
   const [key, setKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (key === null) return;
+    const id = setTimeout(() => setKey(null), CLAUDE_KEY_REMASK_MS);
+    return () => clearTimeout(id);
+  }, [key]);
   const options = useMemo(() => {
     const out: { value: string; label: string }[] = [];
     if (active) {
@@ -482,7 +490,14 @@ export function ClaudeBand({ models }: { models: readonly string[] }) {
                 class="btn"
                 data-variant="text"
                 data-size="s"
-                onClick={async () => setKey(key === null ? await fetchApiKey() : null)}
+                onClick={async () => {
+                  if (key !== null) return setKey(null);
+                  try {
+                    setKey(await fetchApiKey());
+                  } catch (err) {
+                    toastError(t('bands.claude.key_failed'), err);
+                  }
+                }}
               >
                 {key === null ? t('bands.claude.reveal') : t('bands.claude.hide')}
               </button>
@@ -493,9 +508,13 @@ export function ClaudeBand({ models }: { models: readonly string[] }) {
                   data-variant="text"
                   data-size="s"
                   onClick={async () => {
-                    const real = await fetchApiKey();
-                    const text = claudeEnv({ baseUrl: location.origin, model: model || '<model>', key: real, context: e?.maximum_context_tokens ?? null });
-                    if (await copyText(text)) toast(t('bands.claude.copied'));
+                    try {
+                      const real = await fetchApiKey();
+                      const text = claudeEnv({ baseUrl: location.origin, model: model || '<model>', key: real, context: e?.maximum_context_tokens ?? null });
+                      if (await copyText(text)) toast(t('bands.claude.copied'));
+                    } catch (err) {
+                      toastError(t('bands.claude.key_failed'), err);
+                    }
                   }}
                 >
                   {t('bands.claude.copy_env')}

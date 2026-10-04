@@ -221,11 +221,17 @@ def launch(client: Client, args: argparse.Namespace, passthrough: list[str]) -> 
     data = client.http.get("/v1/models", headers=client.headers()).json()["data"]
     entry = next((m for m in data if m["id"] == model), data[0])
     environment = dict(os.environ)
-    environment["PYTHONPATH"] = str(engine.pkg)
+    # Not PYTHONPATH: the helper puts it on sys.path, so the client's own
+    # environment stays the user's (D18).
+    environment["SPLASH_GUI_ENGINE_PKG"] = str(engine.pkg)
     environment["SPLASH_PORT"] = str(client.port)
-    key = SecretStore(backend_from_env(client.paths)).get(SecretName.API_KEY)
-    if key:
-        environment["SPLASH_API_KEY"] = key
+    # SPEC §11.2 step 3: the key only when the public port requires it. Splash's
+    # Hermes configurator writes whatever key it gets into the profile's
+    # config.yaml (install/clients.py _write_hermes_profile).
+    if client.settings.current.global_.security.api_key_required:
+        key = SecretStore(backend_from_env(client.paths)).get(SecretName.API_KEY)
+        if key:
+            environment["SPLASH_API_KEY"] = key
     environment["SPLASH_GUI_CLIENT_SPEC"] = json.dumps(
         {
             "client": args.client,

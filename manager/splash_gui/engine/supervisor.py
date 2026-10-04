@@ -26,7 +26,7 @@ import signal
 import socket
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -183,6 +183,8 @@ class Supervisor:
         self._last_build_id: str | None = None
         self._last_submitted: int | None = None
         self._shutting_down = False
+        # Operations that must not race an engine start (a model delete, a KV clear).
+        self._holds: list[str] = []
 
     # Lifecycle of the supervisor itself -------------------------------------------
 
@@ -385,6 +387,28 @@ class Supervisor:
 
     # Load / stop / restart ---------------------------------------------------------------
 
+    @contextlib.asynccontextmanager
+    async def hold(self, reason: str) -> AsyncIterator[None]:
+        """Refuse every engine start until the block ends.
+
+        A model delete or KV-cache clear stops the engine and then removes files; an
+        auto-load request arriving in between would start the engine on files that
+        are being deleted."""
+        self._holds.append(reason)
+        try:
+            yield
+        finally:
+            self._holds.remove(reason)
+
+    def _check_hold(self) -> None:
+        if self._holds:
+            raise ApiError(
+                503,
+                f"Splash GUI is busy ({self._holds[0].replace('_', ' ')}); try again shortly",
+                "engine_held",
+                headers={"Retry-After": "5"},
+            )
+
     async def load(self, model: str, *, force: bool = False, reason: str = "load") -> EngineView:
         try:
             p.parse_model_id(model)
@@ -402,10 +426,12 @@ class Supervisor:
         if jobs is not None and (jobs.running("storage_move") or jobs.running("import")):
             # The models or cache directory is being moved under the engine's feet.
             raise ApiError(409, "Wait for the storage operation to finish", "storage_busy")
+        self._check_hold()
         engine = await asyncio.to_thread(self.app.engine)
         if not engine.found or engine.cli is None:
             raise ApiError(503, engine.error or "Splash is not installed", "engine_not_found")
         async with self._op:
+            self._check_hold()
             if (
                 self.model == model
                 and self.state in RUNNING_STATES
@@ -442,6 +468,7 @@ class Supervisor:
         if model is None:
             raise ApiError(409, "No model is loaded; load one first", "engine_not_loaded")
         async with self._op:
+            self._check_hold()
             if self._run is not None and self.busy() and not force:
                 raise ApiError(
                     409,
@@ -867,7 +894,7 @@ class Supervisor:
     async def _restart_after(self, model: str, delay: float) -> None:
         await asyncio.sleep(delay)
         async with self._op:
-            if self.state != "crashed" or self._run is not None:
+            if self.state != "crashed" or self._run is not None or self._holds:
                 return
             self._next_retry_at = None
             self._backoff = None

@@ -9,10 +9,11 @@ from typing import Any
 
 import pytest
 
-from splash_gui.engine.flags import LaunchError, LaunchSpec, build_launch_for_model
+from splash_gui.engine.flags import LaunchError, LaunchSpec, build_launch_for_model, serve_flags
 from splash_gui.paths import Paths
 from splash_gui.secrets import REDACTED, MemoryBackend, SecretName, SecretStore
-from splash_gui.settings.model import SettingsDocument
+from splash_gui.settings.effective import effective_serve
+from splash_gui.settings.model import ExtraFlag, SettingsDocument
 from splash_gui.settings.store import SettingsStore
 
 from .conftest import HAVE_SPLASH, SPLASH_PKG, SPLASH_PYTHON
@@ -184,6 +185,21 @@ def test_appendix_a_rows(
     expected: list[str],
 ) -> None:
     assert extra(launch(paths, glob, model_serve)) == expected
+
+
+def test_extra_flag_abbreviating_a_managed_flag_is_refused_at_launch(paths: Paths) -> None:
+    # A hand-edited settings.json skips validation; the launch must still refuse
+    # `--hos 0.0.0.0`, which Splash's argparse reads as `--host 0.0.0.0`.
+    serve = effective_serve(SettingsDocument(), MLX)
+    with pytest.raises(LaunchError, match="overrides --host"):
+        serve_flags(
+            serve,
+            cache_dir=paths.cache_dir,
+            extra_flags=[ExtraFlag(flag="--hos", value="0.0.0.0")],  # noqa: S104
+        )
+    assert serve_flags(
+        serve, cache_dir=paths.cache_dir, extra_flags=[ExtraFlag(flag="--future")]
+    ) == ["--future"]
 
 
 def test_persistent_cache_passes_cache_dir(paths: Paths) -> None:

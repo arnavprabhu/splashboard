@@ -205,6 +205,34 @@ def test_cli_token_only_from_loopback(app: FastAPI) -> None:
     assert wrong.post("/api/admin/settings/secrets/api-key").status_code == 403
 
 
+def test_open_admin_refuses_network_clients(app: FastAPI, client: TestClient) -> None:
+    # A LAN bind needs an API key (SPEC §17.1). With admin auth off, a LAN machine
+    # forging the CSRF headers must not be able to read that key or change settings.
+    client.post("/api/admin/settings/secrets/api-key")
+    doc = client.get("/api/admin/settings").json()["settings"]
+    doc["global"]["server"]["allowed_hosts"] = ["mymac.local"]
+    assert client.put("/api/admin/settings", json=doc).status_code == 200
+    lan = TestClient(
+        app,
+        base_url="http://mymac.local:8000",
+        client=("192.168.1.20", 50000),
+        headers={"Origin": "http://mymac.local:8000", "Sec-Fetch-Site": "same-origin"},
+    )
+    for response in (
+        lan.get("/api/admin/settings/secrets/api-key"),
+        lan.post("/api/admin/mcp/servers"),
+        lan.get("/api/admin/settings"),
+    ):
+        assert response.status_code == 403
+        assert response.json()["error"]["code"] == "admin_remote_refused"
+    # The SPA itself (no data) still loads, so the page can explain the refusal.
+    assert lan.get("/admin/").status_code == 200
+    # With admin auth on, a LAN browser may log in as before.
+    key = _require_admin_key(client)
+    assert lan.post("/api/admin/auth/login", json={"key": key}).status_code == 200
+    assert lan.get("/api/admin/settings").status_code == 200
+
+
 # Admin auth ------------------------------------------------------------------------
 
 
@@ -263,3 +291,58 @@ def test_login_rate_limited(client: TestClient, browser: TestClient) -> None:
     assert response.status_code == 429
     assert response.json()["error"]["type"] == "rate_limit_error"
     assert response.headers["retry-after"] == "60"
+
+
+def _require_api_key(client: TestClient) -> None:
+    client.post("/api/admin/settings/secrets/api-key")
+    doc = client.get("/api/admin/settings").json()["settings"]
+    doc["global"]["security"]["api_key_required"] = True
+    assert client.put("/api/admin/settings", json=doc).status_code == 200
+
+
+def test_admin_pages_reach_the_api_with_admin_sign_in_off(
+    app: FastAPI, client: TestClient, browser: TestClient
+) -> None:
+    # The wizard's key toggle (or a LAN bind) turns api_key_required on with admin
+    # sign-in off: the web Chat/Playground then has no cookie and was refused (401).
+    _require_api_key(client)
+    assert browser.get("/v1/models").status_code == 200
+    # A same-origin GET carries no Origin header, only Sec-Fetch-Site.
+    plain_get = TestClient(
+        app, base_url=ORIGIN, client=LOOPBACK_CLIENT, headers={"Sec-Fetch-Site": "same-origin"}
+    )
+    assert plain_get.get("/v1/models").status_code == 200
+    evil = plain_get.get("/v1/models", headers={"Origin": "http://evil.example"})
+    assert evil.status_code == 403
+    cross = TestClient(app, base_url=ORIGIN, client=LOOPBACK_CLIENT)
+    assert cross.get("/v1/models").status_code == 401, "no same-origin headers, no pass"
+    lan = TestClient(
+        app,
+        base_url="http://127.0.0.1:8000",
+        client=("192.168.1.20", 50000),
+        headers={"Origin": "http://127.0.0.1:8000", "Sec-Fetch-Site": "same-origin"},
+    )
+    assert lan.get("/v1/models").status_code == 401, "forged headers from the LAN"
+    # With admin sign-in on, the page needs its session cookie again.
+    _require_admin_key(client)
+    assert browser.get("/v1/models").status_code == 401
+
+
+def test_cli_token_from_the_macs_own_lan_address(app: FastAPI) -> None:
+    # server.host = 192.168.1.5: the menu bar app and the shim connect to that
+    # address, so the peer is the Mac itself, not loopback.
+    token = app.state.manager.auth.cli_token()
+    own = TestClient(
+        app,
+        base_url="http://192.168.1.5:8000",
+        client=("192.168.1.5", 50000),
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert own.post("/api/admin/settings/secrets/api-key").status_code == 200
+    other = TestClient(
+        app,
+        base_url="http://192.168.1.5:8000",
+        client=("192.168.1.20", 50000),
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert other.post("/api/admin/settings/secrets/api-key").status_code == 403

@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import fcntl
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+from splash_gui.data import api as data_api
 
 from .fakeengine import MODEL, EngineHarness
 
@@ -48,6 +52,8 @@ def test_clear_logs(app: FastAPI, client: TestClient) -> None:
 
 def test_clear_traces_only_deletes_splash_traces(app: FastAPI, client: TestClient) -> None:
     directory = app.state.manager.crash_trace_dir
+    # Never the developer's real ~/Library/Logs/Splash/crash (it once was).
+    assert Path.home() / "Library" not in directory.parents
     directory.mkdir(parents=True, exist_ok=True)
     trace = directory / "splash-crash-g1-123.json"
     trace.write_text("{}" * 100)
@@ -70,17 +76,60 @@ def test_clear_kv_cache_stops_the_engine_and_keeps_tmp(
     h = harness_factory()
     cache = h.state.settings.cache_dir()
     h.load()
-    (cache / "namespace-1").mkdir(parents=True, exist_ok=True)
-    (cache / "namespace-1" / "blocks").write_bytes(b"k" * 4096)
-    (cache / "stray-file").write_bytes(b"s" * 10)
+    namespace = cache / ("0123456789abcdef" * 2)  # Splash names namespaces in hex
+    namespace.mkdir(parents=True, exist_ok=True)
+    (namespace / "kv.slots").write_bytes(b"k" * 4096)
+    (namespace / "lock").write_bytes(b"")
     (cache / "tmp").mkdir(exist_ok=True)
     (cache / "tmp" / "slot").write_bytes(b"t")
-    assert sizes(h.client)["kv_cache"]["bytes"] >= 4106
+    assert sizes(h.client)["kv_cache"]["bytes"] >= 4096
     result = h.client.post("/api/admin/data/clear", json={"target": "kv_cache"}).json()
-    assert result["engine_stopped"] is True and result["freed_bytes"] >= 4106
+    assert result["engine_stopped"] is True and result["freed_bytes"] >= 4096
     assert h.engine()["state"] == "stopped"
-    assert not (cache / "namespace-1").exists() and not (cache / "stray-file").exists()
+    assert not namespace.exists()
     assert (cache / "tmp" / "slot").exists(), "the session-only SSD tier directory stays"
+
+
+def test_clear_kv_cache_clears_what_the_engine_actually_wrote(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    # End to end with the fake engine's persistent cache, whose namespace is named
+    # as Splash names it (32 hex digits); it used to be `fake-…`, which Clear skips.
+    h = harness_factory()
+    h.patch_settings({"global": {"serve": {"max_cache_disk": "4G", "persistent_cache": True}}})
+    h.load()
+    cache = h.state.settings.cache_dir()
+    written = [p for p in cache.iterdir() if p.is_dir() and p.name != "tmp"]
+    assert written, "the engine opened a persistent cache namespace"
+    h.client.post("/api/admin/data/clear", json={"target": "kv_cache"})
+    assert h.engine()["state"] == "stopped"
+    assert not any(p.exists() for p in written)
+
+
+def test_clear_kv_cache_only_touches_splash_namespaces(tmp_path: Path) -> None:
+    """`storage.cache_dir` may be any directory the user picks; clearing must
+    delete only Splash's namespaces (CacheDirectory.cpp plainName), and not one
+    another engine still holds."""
+    cache = tmp_path / "Documents"
+    cache.mkdir()
+    (cache / "thesis.docx").write_bytes(b"precious")
+    (cache / "Projects").mkdir()
+    (cache / "Projects" / "main.py").write_text("print(1)")
+    (cache / "cafe").symlink_to(cache / "Projects")  # hex name, but a symlink
+    free = cache / ("a" * 32)
+    free.mkdir()
+    (free / "kv.records").write_bytes(b"r" * 10)
+    (free / "lock").write_bytes(b"")
+    held = cache / ("b" * 32)
+    held.mkdir()
+    (held / "lock").write_bytes(b"")
+    assert data_api._cache_bytes(cache) == 10
+    with (held / "lock").open("rb") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)  # a `splash serve` in a terminal
+        assert data_api.clear_kv_cache(cache) == [held.name]
+    assert not free.exists() and held.is_dir()
+    assert (cache / "thesis.docx").read_bytes() == b"precious"
+    assert (cache / "Projects" / "main.py").exists() and (cache / "cafe").is_symlink()
 
 
 def test_clear_responses_restarts_the_engine(harness_factory: Callable[..., EngineHarness]) -> None:

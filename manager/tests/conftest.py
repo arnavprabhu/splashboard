@@ -14,6 +14,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from splash_gui import paths as paths_module
 from splash_gui.app import AppConfig, create_app
 from splash_gui.engine.discovery import EngineInfo
 from splash_gui.paths import Paths
@@ -46,6 +47,9 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("HF_HOME", str(home / "hf-home"))
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+    # Splash's crash-trace directory is hardcoded to ~/Library/Logs/Splash/crash. A
+    # test that clears traces must never delete (or litter) the developer's real ones.
+    monkeypatch.setattr(paths_module, "SPLASH_CRASH_TRACE_DIR", home / "splash-crash")
     return home
 
 
@@ -133,9 +137,14 @@ LOOPBACK_CLIENT = ("127.0.0.1", 50000)
 
 
 @pytest.fixture
-def app(paths: Paths, secrets: SecretStore, web_dist: Path) -> FastAPI:
+def app(paths: Paths, secrets: SecretStore, web_dist: Path, tmp_path: Path) -> FastAPI:
     application = create_app(AppConfig(paths=paths, web_dist=web_dist, secrets=secrets))
     application.state.manager.discover_engine = fake_engine
+    # Never the developer's real home: the shim routes edit shell rc files there,
+    # and integrations read ~/.hermes, ~/.pi and desktop-app configs.
+    home = tmp_path / "user-home"
+    home.mkdir(exist_ok=True)
+    application.state.manager.user_home = home
     return application
 
 

@@ -142,14 +142,17 @@ class Downloads:
                     item.files.append(DownloadFile(name=name, repo_id=repo_id, size_bytes=size))
         except HubError as error:
             raise ApiError(error.status, error.message, "hub_unreachable") from None
-        self.blobs[item.id] = blob_map
         item.bytes_total = sum(f.size_bytes or 0 for f in item.files) or None
+        self.blobs[item.id] = blob_map
         self.progress(item)
         directory = self.state.settings.models_dir()
         directory.mkdir(parents=True, exist_ok=True)
         free = shutil.disk_usage(directory).free
         required = (item.bytes_total or 0) - item.bytes_done + 2 * 1024**3
         if free < required:
+            # Not queued: forget its blob map too, or every later cancel would look up
+            # an item that does not exist.
+            self.blobs.pop(item.id, None)
             raise ApiError(
                 507, f"Not enough disk space: need {required} bytes, have {free}", "disk_full"
             )
@@ -348,7 +351,9 @@ class Downloads:
             shared = {
                 blob
                 for key, mapping in self.blobs.items()
-                if key != dl and self.items[key].state not in ("cancelled", "done", "failed")
+                if key != dl
+                and key in self.items
+                and self.items[key].state not in ("cancelled", "done", "failed")
                 for blob in mapping.values()
             }
             for file in item.files:

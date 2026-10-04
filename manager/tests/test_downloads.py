@@ -227,6 +227,46 @@ def test_cancel_does_not_delete_a_blob_another_download_shares(hub_harness):
     harness.client.delete(f"/api/admin/downloads/{second['id']}")
 
 
+def test_cancel_spares_shared_blobs_and_tolerates_orphan_blob_maps(hub_harness):
+    """The test above passes vacuously when the two models share no blob (their
+    drafts differ), so the rule is pinned here with a blob two entries claim, plus
+    a blob map left behind by a refused queue request (it once raised KeyError)."""
+    from splash_gui.schemas import DownloadFile, DownloadItem
+
+    harness = hub_harness()
+    downloads = harness.state.downloads
+    blobs = harness.state.settings.models_dir() / "models--o--r" / "blobs"
+    blobs.mkdir(parents=True)
+    (blobs / "shared.incomplete").write_bytes(b"x")
+    (blobs / "own.incomplete").write_bytes(b"y")
+    files = [DownloadFile(name="a.safetensors", repo_id="o/r")]
+    for dl in ("first", "second"):
+        downloads.items[dl] = DownloadItem(
+            id=dl, model="o/r", state="paused", created_at="2026-10-04T00:00:00Z", files=files
+        )
+    downloads.items["first"].files = [*files, DownloadFile(name="b.safetensors", repo_id="o/r")]
+    downloads.blobs = {
+        "first": {"o/r/a.safetensors": "shared", "o/r/b.safetensors": "own"},
+        "second": {"o/r/a.safetensors": "shared"},
+        "refused-before-queueing": {"o/r/c.safetensors": "other"},
+    }
+    response = harness.client.delete("/api/admin/downloads/first")
+    assert response.status_code == 204, response.text
+    assert (blobs / "shared.incomplete").exists(), "still claimed by the second download"
+    assert not (blobs / "own.incomplete").exists()
+
+
+def test_a_refused_queue_request_leaves_no_blob_map(hub_harness, monkeypatch):
+    import shutil
+
+    harness = hub_harness()
+    usage = shutil.disk_usage(harness.home)
+    monkeypatch.setattr(shutil, "disk_usage", lambda _path: usage._replace(free=10**9))
+    response = harness.client.post("/api/admin/downloads", json={"id": f"{GGUF}:UD-Q4_K_M"})
+    assert response.status_code == 507, response.text
+    assert harness.state.downloads.blobs == {}
+
+
 def test_a_gated_repository_fails_with_an_actionable_code(hub_harness, monkeypatch):
     """A gated repo with no token is reported as an auth problem, not a crash."""
     monkeypatch.delenv("HF_TOKEN", raising=False)
@@ -263,7 +303,8 @@ def test_a_disk_full_failure_is_classified(hub_harness):
     harness = hub_harness({"FAKE_SPLASH_DL_FAIL": "disk_full"})
     started = queue(harness, MODEL)
     failed = wait_for(harness, started["id"], "failed")
-    assert failed["error"]["code"] in ("disk_full", "installer_failed")
+    # ENOSPC ("No space left on device") must not fall through to installer_failed.
+    assert failed["error"]["code"] == "disk_full"
 
 
 def test_a_failed_download_raises_an_alert(hub_harness):

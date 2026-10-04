@@ -4,9 +4,17 @@ import json
 import os
 import shlex
 import shutil
+import sys
 
 
 def main() -> None:
+    # Splash's package comes in through sys.path, not PYTHONPATH, as Splash's own
+    # launcher does (install/launcher.py puts its root on sys.path): PYTHONPATH
+    # would reach the client and every tool it runs, which plain `claude` never
+    # sees (D18).
+    pkg = os.environ.pop("SPLASH_GUI_ENGINE_PKG", None)
+    if pkg:
+        sys.path.insert(0, pkg)
     from install import clients  # type: ignore[import-not-found]
 
     spec = json.loads(os.environ.pop("SPLASH_GUI_CLIENT_SPEC"))

@@ -16,13 +16,14 @@ from typing import Any
 
 from fastapi import Request
 
+from . import paths as _paths
 from .auth.core import AuthManager
 from .engine.discovery import EngineInfo, discover
 from .engine.serve_options import EngineOptionsCache
 from .events.alerts import AlertCenter
 from .events.bus import EventBus
 from .jobs import Jobs
-from .paths import SPLASH_CRASH_TRACE_DIR, Paths
+from .paths import Paths
 from .secrets import SecretStore
 from .settings.store import Change, SettingsStore
 from .system.macos import MacOS
@@ -55,8 +56,9 @@ class ManagerState:
     memory_bytes: Callable[[], int] = _physical_memory
     # The engine's raw /status JSON, or None while it isn't running (the supervisor sets it).
     raw_status: Callable[[], dict[str, Any] | None] = lambda: None
-    # Where Splash writes crash traces (hardcoded by Splash; overridable for tests).
-    crash_trace_dir: Path = SPLASH_CRASH_TRACE_DIR
+    # Where Splash writes crash traces (hardcoded by Splash). Read from the module at
+    # construction so the test suite can point it away from ~/Library/Logs.
+    crash_trace_dir: Path = field(default_factory=lambda: _paths.SPLASH_CRASH_TRACE_DIR)
     # Called after every successful settings save with (changes, restart_required).
     # The address the public port is listening on (set by the runner; None in tests).
     bound: tuple[str, int] | None = None

@@ -250,12 +250,14 @@ class Models:
             raise ApiError(409, "Stop the active model before deleting it", "model_active")
         if self.state.downloads and self.state.downloads.active_model(model):
             raise ApiError(409, "Cancel the download before deleting this model", "download_active")
-        if active:
-            await self.state.supervisor.stop(reason="delete")
-        plan = plan_delete(read_all(splash_models_dir()), {model})
-        freed = await asyncio.to_thread(
-            execute_delete, splash_models_dir(), self.state.settings.models_dir(), plan
-        )
+        # No auto-load may start the engine between the stop and the deletion.
+        async with self.state.supervisor.hold("model_delete"):
+            if active:
+                await self.state.supervisor.stop(reason="delete")
+            plan = plan_delete(read_all(splash_models_dir()), {model})
+            freed = await asyncio.to_thread(
+                execute_delete, splash_models_dir(), self.state.settings.models_dir(), plan
+            )
         self.state.events.publish(
             "models.changed", ModelsChangedEvent(reason="deleted", model=model)
         )

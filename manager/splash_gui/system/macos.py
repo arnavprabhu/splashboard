@@ -14,6 +14,11 @@ from pathlib import Path
 TIMEOUT_S = 15
 
 
+def applescript_string(text: str) -> str:
+    """`text` as an AppleScript string literal."""
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 @dataclass
 class CommandResult:
     returncode: int
@@ -62,14 +67,20 @@ class MacOS:
 
     def open_in_terminal(self, command: str) -> CommandResult:
         """Run `command` in the user's default terminal (SPEC §10.7 "Open in Terminal")."""
-        escaped = command.replace("\\", "\\\\").replace('"', '\\"')
         if self.default_terminal() == "iTerm":
+            # `command` is already shell-quoted; it has to be quoted once more as the
+            # one argument of `zsh -lc`, or a double quote inside it (shlex.join
+            # writes `'"'"'`) would end that argument early.
+            inner = shlex.join(["/bin/zsh", "-lc", f"{command}; exec /bin/zsh -l"])
             script = (
                 'tell application "iTerm" to create window with default profile command '
-                f'"/bin/zsh -lc \\"{escaped}; exec /bin/zsh -l\\""'
+                f"{applescript_string(inner)}"
             )
         else:
-            script = f'tell application "Terminal"\n activate\n do script "{escaped}"\nend tell'
+            script = (
+                f'tell application "Terminal"\n activate\n do script '
+                f"{applescript_string(command)}\nend tell"
+            )
         return self.osascript(script)
 
     def quit_app(self, name: str | None = None, bundle_id: str | None = None) -> CommandResult:

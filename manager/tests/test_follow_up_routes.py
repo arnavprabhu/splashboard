@@ -511,3 +511,21 @@ def test_pieces_from_the_model_s_tokenizer(harness_factory: H) -> None:
             {"id": 2, "piece": "[UNK]", "text": "[UNK]"},
         ],
     }
+
+
+def test_open_in_terminal_accepts_ids_and_profiles_only(svc: Any, client: TestClient) -> None:
+    """The model is typed into a Terminal command line, so only a model ID or
+    `<id>:<profile>` gets that far (D22, §7.5)."""
+    for model in (MODEL, f"{MODEL}:no-think", "mlx-community/Qwen3.6-35B-A3B-4bit"):
+        response = client.post(
+            "/api/admin/integrations/claude/open-terminal", json={"model": model}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["command"].endswith(f"launch claude --model {model}")
+    calls = len(svc.state.macos.calls)
+    for bad in ('o/r"; touch /tmp/x; "', "o/r:p q", "not-an-id", "o/r:Bad Profile"):
+        response = client.post("/api/admin/integrations/claude/open-terminal", json={"model": bad})
+        assert response.status_code == 400 and response.json()["error"]["code"] == (
+            "invalid_model_id"
+        )
+    assert len(svc.state.macos.calls) == calls, "nothing reached osascript"

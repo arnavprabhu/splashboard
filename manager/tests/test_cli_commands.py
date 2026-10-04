@@ -123,6 +123,34 @@ def test_launch_hands_the_profile_to_splash_s_configurator_and_records_it(
     assert json.loads(calls[-1][2]["SPLASH_GUI_CLIENT_SPEC"])["print"] is True
 
 
+def test_launch_keeps_pythonpath_and_sends_the_key_only_when_required(
+    h: EngineHarness, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from splash_gui.secrets import SecretName, SecretStore, backend_from_env
+
+    calls: list[dict[str, str]] = []
+    monkeypatch.setattr(os, "execve", lambda path, argv, env: calls.append(env))
+    monkeypatch.setattr(cli_module, "discover", lambda *a, **k: h.state.engine_cached())
+    monkeypatch.setenv("PYTHONPATH", "/user/own/path")
+    # A backend the CLI process reads back (memory would be a fresh store).
+    monkeypatch.setenv("SPLASH_GUI_SECRETS", "file")
+    SecretStore(backend_from_env(h.state.paths)).set(SecretName.API_KEY, "sk-splash-test-key-123")
+    assert run(capsys, "launch", "claude", "--model", MODEL)[0] == 0
+    env = calls[-1]
+    assert env["PYTHONPATH"] == "/user/own/path", "the client keeps the user's PYTHONPATH"
+    assert env["SPLASH_GUI_ENGINE_PKG"] == str(h.state.engine_cached().pkg)
+    # Auth is off: the key is not handed to the configurators (Hermes would
+    # write it into its profile's config.yaml).
+    assert "SPLASH_API_KEY" not in env
+
+    settings = h.state.paths.settings_file
+    document = json.loads(settings.read_text()) if settings.exists() else {}
+    document.setdefault("global", {}).setdefault("security", {})["api_key_required"] = True
+    settings.write_text(json.dumps(document))
+    assert run(capsys, "launch", "claude", "--model", MODEL)[0] == 0
+    assert calls[-1]["SPLASH_API_KEY"] == "sk-splash-test-key-123"
+
+
 def test_serve_passthrough_warns_when_the_manager_has_the_port(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

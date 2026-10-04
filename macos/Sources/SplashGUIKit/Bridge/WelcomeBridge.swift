@@ -141,6 +141,12 @@ public enum WelcomeBridge {
         return hostOK && p == mPort
     }
 
+    /// Links that leave the manager's origin open in the default browser only for web and mail
+    /// schemes; anything else (`file:`, `smb:`, app URL schemes) is dropped.
+    public static func canOpenExternally(_ url: URL) -> Bool {
+        ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "")
+    }
+
     /// The welcome URL: `/admin/welcome?host=app[&theme=…]`.
     public static func welcomeURL(manager: URL, theme: String?) -> URL {
         var s = manager.absoluteString

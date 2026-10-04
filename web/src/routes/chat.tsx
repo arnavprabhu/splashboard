@@ -632,7 +632,8 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
     await generate(next);
   }
 
-  async function runMcp(call: ToolCall, server: string, always: boolean) {
+  /** `always` also saves "always allow" for the server; `auto` marks a call that ran without a click. */
+  async function runMcp(call: ToolCall, server: string, always: boolean, auto = always) {
     setRunning((s) => new Set(s).add(call.id));
     try {
       if (always) {
@@ -656,7 +657,7 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
       const started = Date.now();
       const res = await api.post<McpCallResult>("/mcp/call", { server, tool: call.function.name, arguments: args, confirmed: true });
       const text = res.content.map((c) => (typeof (c as { text?: unknown }).text === "string" ? (c as { text: string }).text : JSON.stringify(c))).join("\n");
-      setDrafts((d) => ({ ...d, [call.id]: { text, source: "mcp", server, duration_ms: res.duration_ms ?? Date.now() - started, is_error: res.is_error, auto: always } }));
+      setDrafts((d) => ({ ...d, [call.id]: { text, source: "mcp", server, duration_ms: res.duration_ms ?? Date.now() - started, is_error: res.is_error, auto } }));
     } catch (err) {
       toastError(t("chat.tool.mcp_failed"), err);
     } finally {
@@ -673,7 +674,7 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
     if (mode !== "mcp" || pendingCalls.length === 0) return;
     for (const c of pendingCalls) {
       const srv = enabledMcp.find((x) => x.name === c.function.name);
-      if (srv && srv.always_allow && !drafts[c.id] && !running.has(c.id)) void runMcp(c, srv.server, false);
+      if (srv && srv.always_allow && !drafts[c.id] && !running.has(c.id)) void runMcp(c, srv.server, false, true);
     }
     if (pendingCalls.every((c) => drafts[c.id]) && pendingCalls.some((c) => drafts[c.id]?.source === "mcp")) void continueWithTools();
   }, [drafts, pendingCalls.length, mode]);

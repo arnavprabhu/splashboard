@@ -1,5 +1,5 @@
 import AppKit
-import CoreText
+import SplashGUIKit
 import SwiftUI
 
 /// DESIGN.md tokens for the app's own surfaces (About window, welcome placeholder).
@@ -25,20 +25,12 @@ enum FontLoader {
         guard let dir = Bundle.main.resourceURL?.appendingPathComponent("Fonts"),
               let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
         else { return }
-        for url in files where ["ttf", "otf", "woff2", "woff"].contains(url.pathExtension.lowercased()) {
-            CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
-        }
+        ArchivoFont.register(files)
     }
 
     /// Archivo at a weight/width (variable axes `wght`, `wdth`), else the system font.
     static func archivo(size: CGFloat, weight: CGFloat, width: CGFloat = 100) -> Font {
-        let wght = 0x7767_6874  // 'wght'
-        let wdth = 0x7764_7468  // 'wdth'
-        let descriptor = NSFontDescriptor(fontAttributes: [
-            .family: "Archivo",
-            .variation: [NSNumber(value: wght): weight, NSNumber(value: wdth): width],
-        ])
-        if let font = NSFont(descriptor: descriptor, size: size), font.familyName == "Archivo" {
+        if let font = ArchivoFont.registeredFont(size: size, weight: weight, width: width) {
             return Font(font)
         }
         let systemWeight: NSFont.Weight = weight >= 800 ? .black : (weight >= 600 ? .semibold : .regular)

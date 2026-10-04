@@ -8,8 +8,9 @@ A pure ASGI middleware, so streaming (SSE) responses pass through unbuffered.
 - **CSRF** (mutating `/api/admin/*`): a same-origin `Origin` **and**
   `Sec-Fetch-Site: same-origin`, or the CLI token. Applies even with admin auth off.
 - **Auth** (`/api/admin/*` except `/auth/*`): when `security.admin_requires_key` is
-  on, a valid session cookie or the CLI token. The SPA's static files stay public so
-  the login page can load; they hold no data.
+  on, a valid session cookie or the CLI token. When it is off, only loopback clients
+  are served (a LAN bind must not expose an unauthenticated admin). The SPA's static
+  files stay public so the login page can load; they hold no data.
 
 `check_host` and `allowed_hosts` are reused by the proxy for `/v1/*`.
 """
@@ -94,6 +95,26 @@ def is_loopback_client(client: Any) -> bool:
         return False
 
 
+def is_local_client(scope: Scope) -> bool:
+    """A client on this Mac: loopback, or the address the connection arrived on.
+
+    With `server.host` set to one LAN address, the menu bar app and the CLI shim
+    connect to that address, so their peer address is the Mac's own, not loopback.
+    A remote host cannot complete a TCP handshake from our own address.
+    """
+    if is_loopback_client(scope.get("client")):
+        return True
+    client, server = scope.get("client"), scope.get("server")
+    if not client or not server:
+        return False
+    try:
+        peer = ipaddress.ip_address(str(client[0]).split("%")[0])
+        local = ipaddress.ip_address(str(server[0]).split("%")[0])
+    except ValueError:
+        return False
+    return peer == local and not local.is_unspecified
+
+
 def bearer(headers: Headers) -> str | None:
     values = headers.getlist("authorization")
     if len(values) != 1:
@@ -142,7 +163,7 @@ class AdminGuard:
         path: str = scope["path"]
         if not (path == ADMIN_API or path.startswith(f"{ADMIN_API}/")):
             return None
-        cli = is_loopback_client(scope.get("client")) and self.auth.check_cli_token(bearer(headers))
+        cli = is_local_client(scope) and self.auth.check_cli_token(bearer(headers))
         if scope["method"] not in SAFE_METHODS and not cli:
             same_origin = is_same_origin(headers.get("origin"), headers.get("host"))
             if not same_origin or headers.get("sec-fetch-site") != "same-origin":
@@ -155,6 +176,20 @@ class AdminGuard:
         if cli:
             return "cli_token"
         if not g.security.admin_requires_key:
+            if not is_local_client(scope):
+                # With admin auth off the admin is open, and the CSRF headers above
+                # are trivially forged by a non-browser client. On a LAN bind that
+                # would hand any machine on the network the API key
+                # (GET /settings/secrets/api-key) and command execution (MCP stdio
+                # servers), defeating the key a LAN bind requires (SPEC §17.1).
+                raise ApiError(
+                    403,
+                    "The admin is reachable from other machines only with Settings → "
+                    "Security → Require the API key for the admin "
+                    "(security.admin_requires_key)",
+                    "admin_remote_refused",
+                    details={"setting": "security.admin_requires_key"},
+                )
             return "open"
         cookie = cookie_parser(headers.get("cookie", "")).get(SESSION_COOKIE)
         if self.auth.verify_session(cookie):

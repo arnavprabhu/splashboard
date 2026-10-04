@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import base64
 import json
+import stat
 from pathlib import Path
 from typing import Any
 
 import tomlkit
 
-from ..paths import write_atomic
+from ..paths import FILE_MODE, write_atomic
 
 
 def read_document(path: Path) -> dict[str, Any]:
@@ -25,14 +26,28 @@ def encode_document(path: Path, data: dict[str, Any]) -> bytes:
     ).encode()
 
 
+def target_of(path: Path) -> Path:
+    """The file actually edited for `path`. A symlinked config (dotfile managers
+    link `~/.codex/config.toml` and friends) is written through, as Splash's own
+    launcher writes Pi's models.json (`install/clients.py` `_write_pi_provider`),
+    so the link itself survives connect and restore."""
+    return path.resolve() if path.is_symlink() else path
+
+
 def snapshot(path: Path, new: bytes, keys: list[str] | None = None) -> dict[str, Any]:
-    old = path.read_bytes() if path.exists() else None
-    return {
+    target = target_of(path)
+    old = target.read_bytes() if target.exists() else None
+    record: dict[str, Any] = {
         "existed": old is not None,
         "before": base64.b64encode(old).decode() if old is not None else None,
         "after": base64.b64encode(new).decode(),
         "keys": keys,
+        # The original permission bits come back with the original bytes.
+        "mode": stat.S_IMODE(target.stat().st_mode) if old is not None else FILE_MODE,
     }
+    if target != path:
+        record["target"] = str(target)
+    return record
 
 
 def restore(path: Path, record: dict[str, Any]) -> None:
@@ -49,14 +64,20 @@ def restore(path: Path, record: dict[str, Any]) -> None:
       `deploymentMode: "1p"`), otherwise it is removed. In `_meta.json`, only our
       `entries` items (`entry_ids`) are taken out of the current list.
     """
+    path = Path(record.get("target") or path)
+    mode = int(record.get("mode", FILE_MODE))
     old = base64.b64decode(record["before"]) if record["existed"] else None
     after = base64.b64decode(record["after"])
     current = path.read_bytes() if path.exists() else None
+    if old is not None and current == old:
+        # Never written (a crash or failure before this file's turn), or
+        # already put back: leave the original exactly as it is.
+        return
     if current == after or current is None:
         if old is None:
             path.unlink(missing_ok=True)
         else:
-            write_atomic(path, old)
+            write_atomic(path, old, mode)
         return
     if record.get("owned"):
         path.unlink(missing_ok=True)
@@ -90,4 +111,4 @@ def restore(path: Path, record: dict[str, Any]) -> None:
             document[key] = defaults[key]
         else:
             document.pop(key, None)
-    write_atomic(path, encode_document(path, document))
+    write_atomic(path, encode_document(path, document), mode)

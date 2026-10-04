@@ -64,6 +64,31 @@ struct AdminRoutesTests {
         }
     }
 
+    /// The two lists above are copies; keep them honest against the web sources so a renamed or
+    /// removed web route fails here instead of passing against a stale list.
+    @Test func listsMatchTheWebSources() throws {
+        let web = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("web/src")
+        let routes = try String(contentsOf: web.appendingPathComponent("routes.tsx"), encoding: .utf8)
+        let tabs = try String(contentsOf: web.appendingPathComponent("routes/tabs.ts"), encoding: .utf8)
+        func captures(_ pattern: String, in text: String) throws -> Set<String> {
+            let re = try NSRegularExpression(pattern: pattern)
+            let range = NSRange(text.startIndex..., in: text)
+            return Set(re.matches(in: text, range: range).compactMap { m in
+                Range(m.range(at: 1), in: text).map { String(text[$0]) }
+            })
+        }
+        let webPaths = try captures(#"\{\s*path:\s*'([^']+)'"#, in: routes)
+            .map { $0.replacingOccurrences(of: "/:cid?", with: "") }
+        let webSlugs = try captures(#"slug:\s*'([^']+)'"#, in: tabs)
+        #expect(!webPaths.isEmpty && !webSlugs.isEmpty)
+        #expect(webSlugs == Self.settingsSlugs)
+        for page in Self.pages where page != "/admin" {
+            #expect(webPaths.contains(String(page.dropFirst("/admin".count))), "\(page) is not in web/src/routes.tsx")
+        }
+    }
+
     @Test func guardRejectsFragmentOnSettingsRoot() {
         #expect(!Self.isRoute("/admin/settings#about"))
         #expect(Self.isRoute("/admin/settings/about#licenses"))

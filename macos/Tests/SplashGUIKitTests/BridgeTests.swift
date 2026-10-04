@@ -59,6 +59,15 @@ struct BridgeTests {
         #expect(!WelcomeBridge.isAllowedOrigin(scheme: nil, host: nil, port: nil, manager: manager))
     }
 
+    @Test func externalLinksAreWebOrMailOnly() {
+        #expect(WelcomeBridge.canOpenExternally(URL(string: "https://huggingface.co/settings/tokens")!))
+        #expect(WelcomeBridge.canOpenExternally(URL(string: "HTTP://example.com")!))
+        #expect(WelcomeBridge.canOpenExternally(URL(string: "mailto:a@b.c")!))
+        #expect(!WelcomeBridge.canOpenExternally(URL(string: "file:///Applications/Calculator.app")!))
+        #expect(!WelcomeBridge.canOpenExternally(URL(string: "smb://host/share")!))
+        #expect(!WelcomeBridge.canOpenExternally(URL(string: "javascript:alert(1)")!))
+    }
+
     @Test func welcomeURLAndTheme() {
         let m = URL(string: "http://127.0.0.1:8000")!
         #expect(WelcomeBridge.welcomeURL(manager: m, theme: nil).absoluteString == "http://127.0.0.1:8000/admin/welcome?host=app")

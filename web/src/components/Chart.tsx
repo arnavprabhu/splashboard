@@ -92,6 +92,10 @@ function buildOptions(el: HTMLElement, props: ChartProps, width: number): uPlot.
 export function Chart(props: ChartProps) {
   const host = useRef<HTMLDivElement>(null);
   const plot = useRef<uPlot | null>(null);
+  // uPlot loads asynchronously: build it from the props current at load time, not at effect time,
+  // or data that arrived while the chunk was loading would never be drawn.
+  const latest = useRef(props);
+  latest.current = props;
   const [failed, setFailed] = useState(false);
   const theme = effectiveTheme.value;
   const seriesKey = props.series.map((s) => `${s.label}:${s.primary ? 1 : 0}:${s.dashed ? 1 : 0}:${s.tone ?? ''}`).join('|');
@@ -105,11 +109,12 @@ export function Chart(props: ChartProps) {
       .then((UPlot) => {
         if (cancelled) return;
         const width = Math.max(200, el.clientWidth);
-        plot.current = new UPlot(buildOptions(el, props, width), props.data, el);
+        const now = latest.current;
+        plot.current = new UPlot(buildOptions(el, now, width), now.data, el);
         if (typeof ResizeObserver !== 'undefined') {
           observer = new ResizeObserver(([entry]) => {
             const w = Math.max(200, Math.floor(entry?.contentRect.width ?? width));
-            plot.current?.setSize({ width: w, height: props.height ?? 180 });
+            plot.current?.setSize({ width: w, height: latest.current.height ?? 180 });
           });
           observer.observe(el);
         }

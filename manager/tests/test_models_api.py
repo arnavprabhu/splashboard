@@ -180,3 +180,45 @@ def test_a_pinned_model_cannot_be_updated(harness_factory: Callable[..., EngineH
     assert row["pinned"] is True
     response = h.client.post(f"/api/admin/models/{MODEL}/update")
     assert response.status_code == 409 and response.json()["error"]["code"] == "model_pinned"
+
+
+def test_no_auto_load_can_start_the_engine_while_a_model_is_deleted(
+    harness_factory: Callable[..., EngineHarness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Delete stops the engine, then removes files. A request arriving in between
+    used to auto-load the model straight back onto the files being deleted."""
+    from splash_gui.models.layout import execute_delete as real
+
+    h = harness_factory(installed=(MODEL,))
+    h.load()
+    seen: dict[str, Any] = {}
+
+    def deleting(*args: Any) -> int:
+        # Runs in a worker thread while the delete holds the engine.
+        seen["holds"] = list(h.state.supervisor._holds)
+        return int(real(*args))
+
+    monkeypatch.setattr("splash_gui.models.service.execute_delete", deleting)
+    deleted = h.client.delete(f"/api/admin/models/{MODEL}", params={"confirm_active": True})
+    assert deleted.status_code == 200, deleted.text
+    assert seen["holds"] == ["model_delete"]
+    assert h.state.supervisor._holds == []
+
+
+def test_a_held_engine_refuses_loads_and_auto_loads(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    h = harness_factory(installed=(MODEL,))
+    h.state.supervisor._holds.append("cache_clear")
+    try:
+        load = h.client.post("/api/admin/engine/load", json={"model": MODEL})
+        assert load.status_code == 503 and load.json()["error"]["code"] == "engine_held"
+        auto = h.client.post(
+            "/v1/chat/completions",
+            json={"model": MODEL, "messages": [{"role": "user", "content": "hi"}]},
+        )
+        assert auto.status_code == 503 and auto.headers["retry-after"] == "5"
+        assert h.engine()["state"] == "stopped"
+    finally:
+        h.state.supervisor._holds.clear()
+    assert h.client.post("/api/admin/engine/load", json={"model": MODEL}).status_code == 202

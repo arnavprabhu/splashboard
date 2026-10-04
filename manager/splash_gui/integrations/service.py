@@ -36,6 +36,7 @@ from ..schemas import (
     PrintedFile,
     RestoreAllResult,
 )
+from ..settings import parsers
 from ..usage.db import iso
 from .snapshots import encode_document, read_document, restore, snapshot
 
@@ -579,7 +580,9 @@ class IntegrationsService:
                     await self.start_gateway()
                 self.progress(name, "connecting", "writing_config", "Writing the configuration…")
                 for path, data, _ in plans:
-                    write_atomic(path, data)
+                    # Through a symlink, with the file's own mode (snapshots.snapshot).
+                    record = records[str(path)]
+                    write_atomic(Path(record.get("target") or path), data, int(record["mode"]))
                 app = self.app(name)
                 assert app
                 self.progress(name, "connecting", "opening_app", f"Opening {label}…")
@@ -836,7 +839,7 @@ class IntegrationsService:
         env = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "HOME": str(self.home),
-            "PYTHONPATH": str(engine.pkg),
+            "SPLASH_GUI_ENGINE_PKG": str(engine.pkg),
             "SPLASH_GUI_CLIENT_SPEC": json.dumps(spec),
             # Present so the output shows that Splash removes it for the session.
             "ANTHROPIC_API_KEY": "(yours)",
@@ -887,6 +890,20 @@ class IntegrationsService:
         return ""
 
     def open_terminal(self, name: str, model: str | None) -> OpenTerminalResult:
+        if model is not None:
+            # A model ID or `<id>:<profile>` (D22, §7.5). The command is typed into a
+            # terminal, so refuse anything else rather than rely on quoting alone.
+            base, _, profile = model.rpartition(":")
+            try:
+                parsers.parse_model_id(model)
+            except ValueError:
+                try:
+                    parsers.parse_model_id(base)
+                except ValueError:
+                    base = ""
+                if not base or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,31}", profile):
+                    message = f"{model!r} is not a model ID"
+                    raise ApiError(400, message, "invalid_model_id") from None
         command = shlex.join(
             [str(self.state.paths.shim), "launch", name] + (["--model", model] if model else [])
         )

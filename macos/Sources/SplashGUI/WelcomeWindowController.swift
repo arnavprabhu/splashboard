@@ -183,14 +183,14 @@ final class WelcomeWindowController: NSObject, NSWindowDelegate, WKNavigationDel
         {
             return .allow
         }
-        NSWorkspace.shared.open(url)
+        if WelcomeBridge.canOpenExternally(url) { NSWorkspace.shared.open(url) }
         return .cancel
     }
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView?
     {
-        if let url = navigationAction.request.url { NSWorkspace.shared.open(url) }
+        if let url = navigationAction.request.url, WelcomeBridge.canOpenExternally(url) { NSWorkspace.shared.open(url) }
         return nil
     }
 

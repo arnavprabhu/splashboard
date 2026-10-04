@@ -20,6 +20,7 @@ from ..settings import parsers as p
 from ..settings.effective import EffectiveServe, effective_serve
 from ..settings.model import ExtraFlag
 from ..settings.store import SettingsStore
+from ..settings.validation import managed_flag_for
 
 ENGINE_HOST = "127.0.0.1"
 INTERNAL_PORT_RANGE = range(18000, 19000)
@@ -123,6 +124,12 @@ def serve_flags(
     if p.parse_queue_size(str(serve.queue_size)) != p.DEFAULT_QUEUE_SIZE:
         argv += ["--queue-size", str(serve.queue_size)]
     for extra in extra_flags:
+        # Validation refuses these on save; refuse here too so a hand-edited
+        # settings.json cannot rebind the engine (`--hos 0.0.0.0`) or put a key on
+        # its command line (`--api-k …`) through an argparse abbreviation.
+        managed = managed_flag_for(extra.flag)
+        if managed is not None:
+            raise LaunchError(f"{extra.flag} in engine.extra_flags overrides {managed}")
         argv += [extra.flag] if extra.value is None else _opt(extra.flag, extra.value)
     return argv
 

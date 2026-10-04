@@ -11,7 +11,6 @@ from __future__ import annotations
 import os
 import stat
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -231,8 +230,7 @@ def test_deleting_the_shim_removes_it_and_the_path_block(client, paths, monkeypa
     home.mkdir()
     rc = home / ".zprofile"
     rc.write_text("# user content\n")
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    client.app.state.manager.user_home = home
 
     client.post("/api/admin/cli/shim", json={"add_to_path": True})
     assert BEGIN in rc.read_text()
@@ -320,10 +318,129 @@ def test_main_errors_are_reported_without_a_traceback(monkeypatch, capsys):
     assert "Traceback" not in capsys.readouterr().err
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="launchctl is macOS only")
-def test_the_shim_path_is_not_written_without_being_asked(client, tmp_path):
-    """The PATH block is opt-in: starting the manager must not edit rc files."""
-    assert shim.rc_report(tmp_path) == [
-        {"file": str(tmp_path / ".zprofile"), "present": False, "managed": False},
-        {"file": str(tmp_path / ".bash_profile"), "present": False, "managed": False},
-    ]
+def test_the_shim_path_is_not_written_without_being_asked(app, tmp_path, monkeypatch):
+    """The PATH block is opt-in: starting the manager, reading the status and
+    repairing the shim never edit rc files; only `add_to_path: true` does."""
+    from fastapi.testclient import TestClient
+
+    home = tmp_path / "rc-home"
+    home.mkdir()
+    zprofile = home / ".zprofile"
+    zprofile.write_bytes(b"# mine\n")
+    app.state.manager.user_home = home
+    calls: list[Path] = []
+    real_add = shim.add_to_rc
+
+    def spy(path: Path, bin_dir: Path) -> bool:
+        calls.append(path)
+        return real_add(path, bin_dir)
+
+    monkeypatch.setattr(shim, "add_to_rc", spy)
+    token = app.state.manager.auth.cli_token()
+    with TestClient(
+        app, client=("127.0.0.1", 50000), headers={"Authorization": f"Bearer {token}"}
+    ) as client:
+        assert client.get("/api/admin/cli/shim").status_code == 200
+        assert client.post("/api/admin/cli/shim", json={}).status_code == 200
+        assert client.post("/api/admin/cli/shim").status_code == 200
+        assert calls == []
+        assert zprofile.read_bytes() == b"# mine\n"
+        assert not (home / ".bash_profile").exists()
+        # The same home is the one an explicit request edits, so the checks
+        # above looked at the right files.
+        assert client.post("/api/admin/cli/shim", json={"add_to_path": True}).status_code == 200
+    assert BEGIN in zprofile.read_text()
+    assert {p.name for p in calls} == {".zprofile", ".bash_profile"}
+
+
+def test_the_generated_shim_carries_the_discovery_marker(paths, tmp_path):
+    """discovery.SHIM_MARKER is the content check that skips a copy of the shim
+    (another SPLASH_GUI_HOME, a copy in /usr/local/bin); without it the
+    passthrough would exec itself forever."""
+    import subprocess
+
+    from splash_gui.engine.discovery import SHIM_MARKER, discover
+
+    assert SHIM_MARKER in shim.render(["/bin/true", "splash"]).decode()
+    copy_dir = tmp_path / "elsewhere"
+    copy_dir.mkdir()
+    copy = copy_dir / "splash"
+    copy.write_bytes(shim.render(["/bin/true", "splash"]))
+    copy.chmod(0o755)
+
+    def runner(argv, timeout):
+        return subprocess.CompletedProcess(list(argv), 0, "Splash 1.2.0\n", "")
+
+    result = discover(env={"PATH": str(copy_dir)}, shim_paths=(), prefix=None, runner=runner)
+    assert result.found is False
+
+
+RC_ORIGINALS = {
+    "missing": None,
+    "empty": b"",
+    "trailing newline": b"export A=1\n",
+    "no trailing newline": b"export A=1",
+    "blank lines around": b"\n\n# top\nexport A=1\n\n\n",
+    "crlf": b"export A=1\r\nexport B=2\r\n",
+    "latin-1 bytes": b"# caf\xe9\nexport A=1\n",
+    "only a newline": b"\n",
+}
+
+
+@pytest.mark.parametrize("original", list(RC_ORIGINALS.values()), ids=list(RC_ORIGINALS))
+def test_rc_edits_are_reversed_byte_for_byte(tmp_path, original):
+    rc = tmp_path / ".zprofile"
+    if original is not None:
+        rc.write_bytes(original)
+        rc.chmod(0o600)
+    assert shim.add_to_rc(rc, tmp_path / "bin") is True
+    assert shim.add_to_rc(rc, tmp_path / "bin") is False, "a repeated add changes nothing"
+    added = rc.read_bytes()
+    assert added.count(BEGIN.encode()) == 1
+    if original:
+        assert added.startswith(original.rstrip(b"\n")), "the user's bytes stay first"
+        assert stat.S_IMODE(rc.stat().st_mode) == 0o600, "the file's mode is kept"
+    assert shim.remove_from_rc(rc) is True
+    if original is None:
+        assert not rc.exists(), "a file we created is removed again"
+    else:
+        assert rc.read_bytes() == original
+        assert stat.S_IMODE(rc.stat().st_mode) == 0o600
+    assert shim.remove_from_rc(rc) is False
+
+
+def test_a_non_utf8_rc_file_is_never_clobbered(tmp_path):
+    rc = tmp_path / ".bash_profile"
+    original = b"# r\xe9sum\xe9\nexport PATH=/opt/x:$PATH\n"
+    rc.write_bytes(original)
+    shim.add_to_rc(rc, tmp_path / "bin")
+    assert rc.read_bytes().startswith(original)
+
+
+def test_a_symlinked_rc_file_is_edited_through_its_link(tmp_path):
+    dotfiles = tmp_path / "dotfiles" / "zprofile"
+    dotfiles.parent.mkdir()
+    dotfiles.write_bytes(b"export A=1\n")
+    rc = tmp_path / ".zprofile"
+    rc.symlink_to(dotfiles)
+    shim.add_to_rc(rc, tmp_path / "bin")
+    assert rc.is_symlink() and BEGIN in dotfiles.read_text()
+    shim.remove_from_rc(rc)
+    assert rc.is_symlink() and dotfiles.read_bytes() == b"export A=1\n"
+
+
+def test_a_broken_rc_symlink_is_left_alone(tmp_path):
+    rc = tmp_path / ".zprofile"
+    rc.symlink_to(tmp_path / "missing" / "zprofile")
+    with pytest.raises(OSError, match="broken symlink"):
+        shim.add_to_rc(rc, tmp_path / "bin")
+    assert rc.is_symlink() and not (tmp_path / "missing").exists()
+
+
+def test_content_added_after_our_block_survives_removal(tmp_path):
+    rc = tmp_path / ".zprofile"
+    shim.add_to_rc(rc, tmp_path / "bin")
+    with rc.open("a") as handle:
+        handle.write('eval "$(/opt/homebrew/bin/brew shellenv)"\n')
+    shim.remove_from_rc(rc)
+    assert rc.read_text() == 'eval "$(/opt/homebrew/bin/brew shellenv)"\n'

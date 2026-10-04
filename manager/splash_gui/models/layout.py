@@ -290,14 +290,33 @@ def _remove_empty_dirs(root: Path) -> None:
             directory.rmdir()
 
 
+def is_held(assembly: Path) -> bool:
+    """install/assembly.py `is_held`: a server (ours, or a `splash serve` the user
+    runs in a terminal) holds the assembly's model.json lock."""
+    try:
+        with (assembly / "model.json").open("rb") as record:
+            fcntl.flock(record, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
 def collect_garbage(models_root: Path) -> None:
-    """install/assembly.py `collect_garbage`, without the `is_held` check (the
-    manager stops the engine before deleting what it serves)."""
+    """install/assembly.py `collect_garbage`: assemblies no selection links and
+    no server holds, and metadata no remaining assembly uses.
+
+    The root is resolved first: selection links name resolved paths (Splash
+    resolves the models root, install/models.py `Selection.of`), so comparing
+    them with an unresolved `.resolved/<hash>` would find every assembly
+    unlinked whenever the root's path goes through a symlink."""
+    models_root = models_root.resolve()
     resolved, derived = models_root / ".resolved", models_root / ".metadata"
     linked = {link.resolve() for link in selection_links(models_root)}
     used: set[str] = set()
     for assembly in sorted(resolved.iterdir()) if resolved.is_dir() else ():
-        if assembly not in linked:
+        if assembly not in linked and not is_held(assembly):
             shutil.rmtree(assembly, ignore_errors=True)
             continue
         record = _read_json(assembly / "model.json") or {}
@@ -314,6 +333,9 @@ def collect_garbage(models_root: Path) -> None:
 def execute_delete(models_root: Path, hub_cache: Path, plan: DeletePlan) -> int:
     """Remove the plan's links, pins, unlinked assemblies and unreferenced blobs.
     Returns the bytes freed. Call it with the engine not serving these models."""
+    # `real` paths are resolved; so must the roots be, or nothing under a path
+    # with a symlink in it would ever be freed.
+    hub_cache = hub_cache.resolve()
     freed = 0
     repos: set[str] = set()
     with installation_lock(models_root):

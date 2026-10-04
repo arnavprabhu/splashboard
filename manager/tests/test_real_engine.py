@@ -330,3 +330,44 @@ def test_acceptance_search_verdicts_on_the_live_hub(
         for variant in gguf["variants"]:
             if variant["name"] in ("UD-Q8_K_XL", "BF16"):
                 assert variant["loadable"] is False, variant
+
+
+@needs_engine
+def test_discovery_reaches_the_client_configurator_in_the_homebrew_package() -> None:
+    """`GET /integrations/{claude,codex,opencode}/print` is `exact` only when discovery
+    finds `install/clients.py` and the bundled Python (SPEC §11.2). The real-manager
+    Playwright test sees `exact: false` because the *fake* engine ships no
+    clients.py; this pins that the Homebrew layout is found and the helper runs."""
+    from splash_gui.engine.discovery import discover
+
+    info = discover(env={"PATH": "/usr/bin:/bin"})
+    assert info.found and info.source == "brew", info
+    assert info.pkg is not None and info.python == SPLASH_PYTHON
+    assert info.install_dir is not None and (info.install_dir / "clients.py").is_file()
+    helper = Path(__file__).parents[1] / "splash_gui" / "helpers" / "launch_client.py"
+    spec = {
+        "client": "claude",
+        "model": f"{MLX_4BIT}:no-think",
+        "url": "http://127.0.0.1:8000",
+        "context": 262144,
+        "modalities": ["text"],
+        "args": [],
+        "print": True,
+        "format": "json",
+    }
+    result = subprocess.run(
+        [str(info.python), str(helper)],
+        env={
+            "PATH": "/usr/bin:/bin",
+            "HOME": "/nonexistent",
+            "PYTHONPATH": str(info.pkg),
+            "SPLASH_GUI_CLIENT_SPEC": json.dumps(spec),
+        },
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=True,
+    )
+    data = json.loads(result.stdout)
+    assert data["argv"][0] == "claude"
+    assert data["env"]["ANTHROPIC_MODEL"] == spec["model"]

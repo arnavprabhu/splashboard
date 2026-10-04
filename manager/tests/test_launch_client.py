@@ -144,3 +144,41 @@ def test_a_missing_client_says_to_install_it(tmp_path: Path) -> None:
     result = run(tmp_path, "claude", print_only=False)
     assert result.returncode != 0
     assert "Install claude before launching it" in result.stderr
+
+
+def test_the_session_environment_keeps_the_user_s_pythonpath(tmp_path: Path) -> None:
+    """D18: Splash's package reaches the helper through sys.path (as Splash's own
+    launcher does), never as PYTHONPATH in the client and the tools it runs."""
+    bin_dir = tmp_path / "bin"
+    record = tmp_path / "record.json"
+    write_script(
+        bin_dir / "claude",
+        f'"{sys.executable}" -c \'import json,os; '
+        f'json.dump(dict(os.environ), open("{record}", "w"))\'\n',
+    )
+    home = tmp_path / "home"
+    home.mkdir()
+    spec = {
+        "client": "claude",
+        "model": MODEL,
+        "url": "http://127.0.0.1:8000",
+        "context": 131072,
+        "modalities": ["text"],
+        "args": [],
+        "print": False,
+    }
+    env = {
+        "HOME": str(home),
+        "PATH": os.pathsep.join([str(bin_dir), "/usr/bin", "/bin"]),
+        "PYTHONPATH": "/the/user/own",
+        "SPLASH_GUI_ENGINE_PKG": str(PKG),
+        "SPLASH_GUI_CLIENT_SPEC": json.dumps(spec),
+    }
+    result = subprocess.run(
+        [sys.executable, str(HELPER)], env=env, capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, result.stderr
+    seen = json.loads(record.read_text())
+    assert seen["PYTHONPATH"] == "/the/user/own"
+    assert "SPLASH_GUI_ENGINE_PKG" not in seen
+    assert seen["ANTHROPIC_MODEL"] == MODEL

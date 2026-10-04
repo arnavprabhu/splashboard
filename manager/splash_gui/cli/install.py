@@ -8,8 +8,11 @@ everything else is exec'd through to the real engine. Two separate jobs:
   * the `PATH` line in the user's shell rc files, which we only ever touch
     inside a marked block so uninstalling removes exactly what we added.
 
-Nothing here runs a shell to edit an rc file: the block is read, inserted after
-the existing preamble, and written back atomically.
+Nothing here runs a shell to edit an rc file: the block is appended and
+written back atomically. Removal gives back the file's exact bytes: the block
+records whether it created the file or had to end the last line, the file is
+handled as bytes (any encoding, CRLF kept), a symlinked rc file is edited
+through its link, and the file's mode is kept.
 """
 
 from __future__ import annotations
@@ -20,11 +23,16 @@ import stat
 import sys
 from pathlib import Path
 
+from ..engine.discovery import SHIM_MARKER
 from ..paths import Paths, write_atomic
 
 BEGIN = "# >>> splash gui (managed block, do not edit) >>>"
 END = "# <<< splash gui <<<"
+# Lines inside the block that let removal restore the exact original bytes.
+CREATED = "# splash gui: this file did not exist before"
+NEWLINE_ADDED = "# splash gui: ended the line above with a newline"
 RC_FILES = (".zprofile", ".bash_profile")
+RC_MODE = 0o644
 SHIM_MODE = 0o700
 
 
@@ -50,6 +58,7 @@ def render(launch: list[str]) -> bytes:
         "# splash - Splash GUI CLI (SPEC §12.1). Generated; edits are overwritten.\n"
         "# Our commands are handled here; anything else is exec'd to the real\n"
         "# Splash engine, found by skipping this script on PATH.\n"
+        f"# {SHIM_MARKER}: engine discovery skips any file carrying this marker.\n"
         f'exec {quoted} "$@"\n'
     ).encode()
 
@@ -78,46 +87,104 @@ def remove_shim(paths: Paths) -> bool:
 
 
 def has_block(text: str) -> bool:
-    return BEGIN in text and END in text
+    return _find_block(text) is not None
+
+
+def _find_block(text: str) -> tuple[int, int, str] | None:
+    """(start, stop, block) of the first marked block, BEGIN at a line start."""
+    start = text.find(BEGIN)
+    while start > 0 and text[start - 1] != "\n":
+        start = text.find(BEGIN, start + 1)
+    if start < 0:
+        return None
+    end = text.find(END, start)
+    if end < 0:
+        return None
+    stop = end + len(END)
+    if text.startswith("\n", stop):
+        stop += 1
+    return start, stop, text[start:stop]
 
 
 def strip_block(text: str) -> str:
-    """Remove our marked block and the blank line it leaves behind."""
-    if not has_block(text):
-        return text
-    head, _, rest = text.partition(BEGIN)
-    _, _, tail = rest.partition(END)
-    return (head.rstrip("\n") + "\n" + tail.lstrip("\n")).lstrip("\n") or "\n"
+    """The text with our marked block(s) and the separator we added removed:
+    for a file `add_to_rc` changed, exactly the original text."""
+    while (found := _find_block(text)) is not None:
+        start, stop, block = found
+        head, tail = text[:start], text[stop:]
+        if head.endswith("\n\n"):
+            # The blank line before the block is ours; with NEWLINE_ADDED, so is
+            # the newline that ended the user's last line.
+            head = head[:-2] if f"\n{NEWLINE_ADDED}\n" in block else head[:-1]
+        text = head + tail
+    return text
 
 
-def path_block() -> str:
-    return f'{BEGIN}\nexport PATH="$HOME/.splash/bin:$PATH"\n{END}\n'
+def path_block(*flags: str) -> str:
+    lines = [BEGIN, *flags, 'export PATH="$HOME/.splash/bin:$PATH"', END]
+    return "\n".join(lines) + "\n"
+
+
+def _rc_target(path: Path) -> Path:
+    """Edit a symlinked rc file (dotfile managers link them) through its link,
+    so the link survives; a broken link is left alone."""
+    if not path.is_symlink():
+        return path
+    target = path.resolve()
+    if not target.exists():
+        raise OSError(f"{path} is a broken symlink; fix it or add the PATH line yourself")
+    return target
+
+
+def _read_rc(path: Path) -> str | None:
+    """The file as text that round-trips to the same bytes (any encoding)."""
+    try:
+        return path.read_bytes().decode("utf-8", "surrogateescape")
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+
+
+def _write_rc(path: Path, text: str, existed: bool) -> None:
+    mode = stat.S_IMODE(path.stat().st_mode) if existed else RC_MODE
+    write_atomic(path, text.encode("utf-8", "surrogateescape"), mode=mode)
 
 
 def add_to_rc(path: Path, bin_dir: Path) -> bool:
-    """Put the PATH block in `path`. Returns whether the file changed."""
-    try:
-        text = path.read_text()
-    except (FileNotFoundError, NotADirectoryError, UnicodeDecodeError):
-        text = ""
-    if BEGIN in text and END in text:
+    """Put the PATH block in `path`. Returns whether the file changed. Only ever
+    called on the user's explicit request (SPEC §12.1)."""
+    target = _rc_target(path)
+    original = _read_rc(target)
+    text = original or ""
+    if has_block(text):
         return False
-    if text and not text.endswith("\n"):
-        text += "\n"
-    if text.strip():
-        text += "\n"
-    write_atomic(path, (text + path_block()).encode(), mode=0o644)
+    if original is None:
+        new = path_block(CREATED)
+    elif not text:
+        new = path_block()
+    elif text.endswith("\n"):
+        new = text + "\n" + path_block()
+    else:
+        new = text + "\n\n" + path_block(NEWLINE_ADDED)
+    _write_rc(target, new, existed=original is not None)
     return True
 
 
 def remove_from_rc(path: Path) -> bool:
     try:
-        text = path.read_text()
-    except (FileNotFoundError, NotADirectoryError, UnicodeDecodeError):
+        target = _rc_target(path)
+    except OSError:
         return False
-    if not has_block(text):
+    text = _read_rc(target)
+    if text is None:
         return False
-    write_atomic(path, strip_block(text).encode(), mode=0o644)
+    found = _find_block(text)
+    if found is None:
+        return False
+    stripped = strip_block(text)
+    if not stripped and f"\n{CREATED}\n" in found[2]:
+        target.unlink()  # we created it and nothing else was added since
+        return True
+    _write_rc(target, stripped, existed=True)
     return True
 
 
@@ -130,8 +197,8 @@ def rc_report(
     for name in names:
         path = home / name
         try:
-            text = path.read_text()
-        except (FileNotFoundError, NotADirectoryError, UnicodeDecodeError):
+            text = _read_rc(path) or ""
+        except OSError:
             text = ""
         report.append({"file": str(path), "present": path.exists(), "managed": has_block(text)})
     return report
@@ -156,7 +223,7 @@ def shim_is_ours(paths: Paths) -> bool:
         return False
 
 
-def self_test(paths: Paths) -> list[str]:
+def self_test(paths: Paths, home: Path | None = None) -> list[str]:
     """Problems worth showing the user, in the order they should fix them."""
     problems: list[str] = []
     if not paths.shim.exists():
@@ -165,7 +232,7 @@ def self_test(paths: Paths) -> list[str]:
         problems.append(f"{paths.shim} is not executable")
     if not on_path(paths.bin_dir):
         problems.append(f"{paths.bin_dir} is not first on PATH")
-    for entry in rc_report():
+    for entry in rc_report(home):
         if not entry["managed"]:
             problems.append(f"{entry['file']} has no Splash GUI PATH block")
     return problems

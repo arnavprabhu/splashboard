@@ -37,8 +37,11 @@ public enum StatusItemRenderer {
 
     // MARK: Glyph
 
+    /// The DESIGN.md mark: display weight (900) at 72 % width in Archivo once the bundled font is
+    /// registered (docs/ui/10 §2.1); the condensed black system font otherwise.
     static func glyphFont() -> NSFont {
-        NSFont.systemFont(ofSize: 17, weight: .black, width: .condensed)
+        ArchivoFont.registeredFont(size: 17, weight: 900, width: 72)
+            ?? NSFont.systemFont(ofSize: 17, weight: .black, width: .condensed)
     }
 
     static func drawGlyph(_ icon: StatusIcon, in rect: NSRect) {

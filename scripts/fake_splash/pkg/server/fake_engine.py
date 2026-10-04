@@ -731,7 +731,9 @@ class FakeEngine:
                 from install import paths  # the fake's own data dir
 
                 root = paths.default_cache_dir()
-            namespace = "fake-" + hashlib.sha256(f"{s.model}|{s.kv_format}".encode()).hexdigest()[:16]
+            # RuntimeResources.mm persistentCacheNamespace: 32 lowercase hex digits
+            # (128 bits), which is what the manager's Clear KV cache recognises.
+            namespace = hashlib.sha256(f"{s.model}|{s.kv_format}".encode()).hexdigest()[:32]
             cache = PersistentCache(root, namespace)
             if cache.open():
                 self.persistent = cache

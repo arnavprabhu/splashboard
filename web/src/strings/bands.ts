@@ -106,6 +106,7 @@ export const bandsStrings = {
   'bands.claude.hide': 'Hide key',
   'bands.claude.copy_env': 'Copy',
   'bands.claude.copied': 'Copied',
+  'bands.claude.key_failed': 'Couldn’t read the API key.',
   'bands.claude.alias': '{id} (alias)',
   'bands.claude.profile': '{id}',
   'bands.claude.stopped': 'The command starts the engine if needed.',

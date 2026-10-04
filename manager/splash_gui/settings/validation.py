@@ -52,6 +52,19 @@ MANAGED_FLAGS = frozenset(
 )
 
 
+def managed_flag_for(flag: str) -> str | None:
+    """The managed flag `flag` names, exactly or as an argparse abbreviation.
+
+    Splash's parsers keep argparse's default `allow_abbrev=True`
+    (`install/launcher.py` `parse_args`), so `--hos 0.0.0.0` *is* `--host 0.0.0.0`
+    to the engine and an exact-match check alone would let it through.
+    """
+    if flag in MANAGED_FLAGS:
+        return flag
+    matches = sorted(m for m in MANAGED_FLAGS if m.startswith(flag))
+    return matches[0] if matches else None
+
+
 @dataclass(frozen=True)
 class Issue:
     path: tuple[str | int, ...]
@@ -204,10 +217,13 @@ def cross_field_issues(doc: SettingsDocument, context: ValidationContext) -> Ite
         )
 
     for index, extra in enumerate(g.engine.extra_flags):
-        if extra.flag in MANAGED_FLAGS:
+        managed = managed_flag_for(extra.flag)
+        if managed is not None:
             yield Issue(
                 ("global", "engine", "extra_flags", index, "flag"),
-                f"{extra.flag} is set through its own setting",
+                f"{extra.flag} is set through its own setting"
+                if managed == extra.flag
+                else f"{extra.flag} abbreviates {managed}, which is set through its own setting",
                 code="managed_flag",
             )
 

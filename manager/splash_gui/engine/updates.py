@@ -185,17 +185,25 @@ class UpdateService:
             self._event("stopping")
             if sup is not None and previous is not None:
                 await sup.stop(reason="engine_upgrade")
-            self._event("updating")
-            job.update(progress=0.1, message="brew update")
-            if await self._run(job, [brew, "update"], "updating") != 0:
-                self._event("failed", "brew update failed", False)
-                raise JobFailed("brew update failed")
-            self._event("upgrading")
-            job.update(progress=0.4, message="brew upgrade")
-            code = await self._run(job, [brew, "upgrade", FORMULA], "upgrading")
-            if code != 0:
-                self._event("failed", f"brew upgrade exited {code}", False)
-                raise JobFailed(f"brew upgrade exited {code}")
+            try:
+                self._event("updating")
+                job.update(progress=0.1, message="brew update")
+                if await self._run(job, [brew, "update"], "updating") != 0:
+                    self._event("failed", "brew update failed", False)
+                    raise JobFailed("brew update failed")
+                self._event("upgrading")
+                job.update(progress=0.4, message="brew upgrade")
+                code = await self._run(job, [brew, "upgrade", FORMULA], "upgrading")
+                if code != 0:
+                    self._event("failed", f"brew upgrade exited {code}", False)
+                    raise JobFailed(f"brew upgrade exited {code}")
+            except JobFailed:
+                # The old engine is still installed: bring back the model that was
+                # serving instead of leaving the user with nothing loaded.
+                if sup is not None and previous is not None:
+                    with contextlib.suppress(Exception):
+                        await sup.load(previous, reason="engine_upgrade_failed")
+                raise
             self._event("rediscovering")
             job.update(progress=0.8, message="rediscovering")
             self.state.forget_engine()

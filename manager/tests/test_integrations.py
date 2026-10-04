@@ -244,6 +244,55 @@ async def test_a_failure_midway_rolls_everything_back(service, monkeypatch):
     assert "codex-app" not in service.records, "a failed connect must leave no record"
 
 
+async def test_a_failed_write_leaves_unwritten_files_byte_for_byte(service, monkeypatch):
+    """Claude's own formatting survives a connect that fails partway: files we
+    never reached are not re-encoded by the rollback."""
+    from splash_gui.integrations import service as module
+    from splash_gui.paths import write_atomic as real_atomic
+
+    support = service.home / "Library" / "Application Support"
+    configs = [support / d / "claude_desktop_config.json" for d in ("Claude", "Claude-3p")]
+    originals = [b'{"mcpServers":{"x":{"command":"y"}}}', b'{\n\t"a": 1\n}']
+    for path, data in zip(configs, originals, strict=True):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    written: list[str] = []
+
+    def failing(path: Path, data: bytes, mode: int = 0o600) -> None:
+        if not str(path).startswith(str(service.state.paths.base)):
+            written.append(path.name)
+            if len(written) == 2:
+                raise OSError("disk full")
+        real_atomic(path, data, mode)
+
+    monkeypatch.setattr(service, "start_gateway", _noop_gateway())
+    monkeypatch.setattr(module, "write_atomic", failing)
+    with pytest.raises(OSError):
+        await service.connect("claude-desktop", confirm=False)
+    for path, data in zip(configs, originals, strict=True):
+        assert path.read_bytes() == data
+    assert "claude-desktop" not in service.records
+
+
+async def test_symlinked_codex_config_keeps_its_link_and_mode(service, tmp_path):
+    dotfiles = tmp_path / "dotfiles" / "codex.toml"
+    dotfiles.parent.mkdir()
+    original = b'model = "native"\n'
+    dotfiles.write_bytes(original)
+    dotfiles.chmod(0o644)
+    config = service.home / ".codex" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.symlink_to(dotfiles)
+
+    await service.connect("codex-app", confirm=False)
+    assert config.is_symlink(), "connecting must not replace the user's symlink"
+    assert b"openai_base_url" in dotfiles.read_bytes()
+    await service.disconnect("codex-app")
+    assert config.is_symlink() and config.resolve() == dotfiles.resolve()
+    assert dotfiles.read_bytes() == original
+    assert dotfiles.stat().st_mode & 0o777 == 0o644
+
+
 async def test_the_listing_reports_the_cli_launchers(service):
     listing = service.listing()
     names = {row.name for row in listing.cli}

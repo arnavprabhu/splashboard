@@ -32,7 +32,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.requests import cookie_parser
 
 from ..auth.core import SESSION_COOKIE
-from ..auth.guard import allowed_hosts, bearer, is_loopback_client, is_same_origin
+from ..auth.guard import allowed_hosts, bearer, is_local_client, is_same_origin
 from ..secrets import SecretName, SecretsError
 from ..settings import parsers as p
 from ..settings.effective import effective_profiles, sampling_defaults
@@ -273,17 +273,28 @@ class ProxyPipeline:
         ):
             return
         auth = self.state.auth
-        if is_loopback_client(request.scope.get("client")) and auth.check_cli_token(
-            bearer(headers)
-        ):
+        local = is_local_client(request.scope)
+        if local and auth.check_cli_token(bearer(headers)):
             return
-        cookie = cookie_parser(headers.get("cookie", "")).get(SESSION_COOKIE)
-        if (
-            cookie
-            and is_same_origin(headers.get("origin"), headers.get("host"))
+        same_origin_page = (
+            is_same_origin(headers.get("origin"), headers.get("host"))
             and headers.get("sec-fetch-site") == "same-origin"
-            and auth.verify_session(cookie)
+        )
+        cookie = cookie_parser(headers.get("cookie", "")).get(SESSION_COOKIE)
+        if cookie and same_origin_page and auth.verify_session(cookie):
+            return
+        origin = headers.get("origin")
+        if (
+            local
+            and headers.get("sec-fetch-site") == "same-origin"
+            and (origin is None or is_same_origin(origin, headers.get("host")))
+            and not self.state.settings.current.global_.security.admin_requires_key
         ):
+            # The admin's own pages (Chat, Playground, Tokenizer, Judgments) on this
+            # Mac with admin sign-in off: they get no session cookie, and the open
+            # admin would hand them the key anyway (GET /settings/secrets/api-key).
+            # Browsers omit Origin on same-origin GETs but always send Sec-Fetch-Site,
+            # which a page cannot set; the Host check above keeps rebound names out.
             return
         raise ProxyError(401, "invalid or missing API key", "authentication_error")
 
