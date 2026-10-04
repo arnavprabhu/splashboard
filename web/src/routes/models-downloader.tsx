@@ -1,0 +1,12 @@
+import { SubNav } from '../components/SubNav';
+import { Placeholder } from './Placeholder';
+import { MODELS_TABS } from './tabs';
+
+export default function Page() {
+  return (
+    <>
+      <SubNav items={MODELS_TABS} label="Models" exact />
+      <Placeholder title="Downloader." spec="§10.4, §9.1–§9.4" />
+    </>
+  );
+}

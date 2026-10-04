@@ -1,0 +1,358 @@
+/* Swiss Poster tokens and type scale. Values come verbatim from DESIGN.md. */
+
+@font-face {
+  font-family: 'Archivo';
+  src: url('../assets/fonts/archivo-latin.woff2') format('woff2');
+  font-weight: 400 900;
+  font-stretch: 62% 100%;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root,
+[data-theme='light'] {
+  --bg: #ecebe7;
+  --ink: #0e0e0e;
+  --mute: #5f5f5b;
+  --rule: #0e0e0e;
+  --acc: oklch(0.57 0.2 32);
+  --on-acc: #ffffff;
+  color-scheme: light;
+}
+
+[data-theme='dark'] {
+  --bg: #0e0e0e;
+  --ink: #ecebe7;
+  --mute: #8d8d88;
+  --rule: #ecebe7;
+  --acc: oklch(0.7 0.19 32);
+  --on-acc: #ffffff;
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  [data-theme='system'] {
+    --bg: #0e0e0e;
+    --ink: #ecebe7;
+    --mute: #8d8d88;
+    --rule: #ecebe7;
+    --acc: oklch(0.7 0.19 32);
+    --on-acc: #ffffff;
+    color-scheme: dark;
+  }
+}
+
+:root {
+  --font: 'Archivo', ui-sans-serif, system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  --mono: ui-monospace, 'SF Mono', Menlo, monospace;
+  --gutter: clamp(20px, 4vw, 48px);
+  --section-y: clamp(40px, 6vw, 64px);
+  --rule-major: 2px;
+  --rule-minor: 1px;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --row-ease: 0.25s ease;
+  --dim: color-mix(in srgb, var(--bg) 80%, transparent);
+}
+
+/* DESIGN.md: radius 0, shadow none, everywhere. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+html {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--ink);
+  overflow-x: hidden;
+}
+
+/* ---------- type scale ---------- */
+
+.display-xl,
+.display-l,
+.display-m,
+.display-number {
+  font-weight: 900;
+  font-stretch: 72%;
+  margin: 0;
+}
+
+.display-xl {
+  font-size: clamp(84px, 22.5vw, 300px);
+  line-height: 0.8;
+  letter-spacing: -0.03em;
+  text-transform: uppercase;
+}
+
+.display-l {
+  font-size: clamp(64px, 12.5vw, 160px);
+  line-height: 0.85;
+  letter-spacing: -0.02em;
+  text-transform: uppercase;
+}
+
+.display-m {
+  font-size: clamp(56px, 10.5vw, 132px);
+  line-height: 1.05;
+  text-transform: uppercase;
+}
+
+.display-number {
+  font-size: clamp(88px, 9vw, 120px);
+  line-height: 0.9;
+  font-variant-numeric: tabular-nums;
+}
+
+.heading {
+  font-size: clamp(44px, 4.5vw, 56px);
+  font-weight: 800;
+  font-stretch: 80%;
+  line-height: 1;
+  text-transform: uppercase;
+  margin: 0;
+}
+
+.lead {
+  font-size: clamp(24px, 3.2vw, 42px);
+  font-weight: 500;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
+  margin: 0;
+}
+
+.body {
+  font-size: clamp(16px, 0.4vw + 14.5px, 20px);
+  font-weight: 400;
+  line-height: 1.55;
+}
+
+.label {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.nav {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.meta {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+
+.mute {
+  color: var(--mute);
+}
+
+.acc {
+  color: var(--acc);
+}
+
+.tnum,
+table,
+.numbers {
+  font-variant-numeric: tabular-nums;
+}
+
+.mono {
+  font-family: var(--mono);
+  text-transform: none;
+}
+
+/* ---------- base elements ---------- */
+
+h1,
+h2,
+h3,
+h4,
+p {
+  margin: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+  transition: opacity 0.2s ease;
+}
+
+a:hover {
+  opacity: 0.75;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--acc);
+  color: var(--on-acc);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+  appearance: none;
+  -webkit-appearance: none;
+  background: none;
+}
+
+button {
+  cursor: pointer;
+  border: 0;
+  padding: 0;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--mono);
+  font-size: 0.92em;
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link:focus {
+  position: fixed !important;
+  top: 8px;
+  left: var(--gutter);
+  z-index: 100;
+  width: auto;
+  height: auto;
+  margin: 0;
+  padding: 8px 14px;
+  clip: auto;
+  background: var(--ink);
+  color: var(--bg);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+/* ---------- layout ---------- */
+
+.gutter {
+  padding-inline: var(--gutter);
+}
+
+.band {
+  border-top: var(--rule-major) solid var(--rule);
+  padding: var(--section-y) var(--gutter);
+}
+
+.band.tight {
+  padding-block: clamp(16px, 2.5vw, 28px);
+}
+
+.rule-minor {
+  border-top: var(--rule-minor) solid var(--rule);
+}
+
+.label-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px clamp(16px, 3vw, 40px);
+  align-items: baseline;
+}
+
+.label-row > .label-row-label {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.label-row > .label-row-content {
+  flex: 3 1 560px;
+  min-width: 0;
+}
+
+.grid-auto {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.cluster {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  align-items: baseline;
+}
+
+/* ---------- motion ---------- */
+
+.reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  transition:
+    opacity 0.8s var(--ease),
+    transform 0.8s var(--ease);
+}
+
+.reveal.is-visible {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition-duration: 0s !important;
+  }
+  .reveal {
+    opacity: 1;
+    transform: none;
+  }
+}

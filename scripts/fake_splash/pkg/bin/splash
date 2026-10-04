@@ -1,0 +1,14 @@
+#!/bin/sh
+# Fake `splash` CLI, laid out like Homebrew's opt/splash/bin/splash.
+set -eu
+export PYTHONDONTWRITEBYTECODE=1
+script=$0
+while [ -L "$script" ]; do
+    target=$(readlink -- "$script")
+    case $target in
+        /*) script=$target ;;
+        *) script=$(dirname -- "$script")/$target ;;
+    esac
+done
+ROOT=$(CDPATH= cd -P -- "$(dirname -- "$script")/.." && pwd -P)
+exec "$ROOT/python/bin/python3" -u "$ROOT/install/launcher.py" "$@"
