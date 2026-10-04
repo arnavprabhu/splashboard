@@ -12,6 +12,7 @@ from ..schemas import McpCallRequest, McpCallResult, McpServers, McpToolList
 from ..settings.api import save_settings
 from ..state import ManagerState, get_state
 from .manager import McpManager
+from .secrets import masked_document
 
 router = APIRouter()
 State = Annotated[ManagerState, Depends(get_state)]
@@ -19,7 +20,8 @@ State = Annotated[ManagerState, Depends(get_state)]
 
 @router.get("/mcp/servers", response_model=McpServers)
 def get_servers(state: State) -> McpServers:
-    return McpServers(servers=state.settings.current.global_.chat.mcp_servers)
+    doc = masked_document(state.settings.current)
+    return McpServers(servers=doc.global_.chat.mcp_servers)
 
 
 @router.put("/mcp/servers", response_model=McpServers, responses=error_responses(409, 422))

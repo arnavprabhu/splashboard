@@ -274,14 +274,29 @@ class DownloadSettings(_Strict):
     full_verify: bool = False
 
 
+class McpSecretRef(_Strict):
+    """An MCP `env`/`headers` value kept in the Keychain (D43): settings.json and the
+    API carry only this reference with its mask (`prefix••••last4`, S3-23)."""
+
+    secret: Literal[True]
+    masked: str
+
+
+McpValue = str | McpSecretRef
+
+
 class McpServer(_Strict):
-    """One MCP server, in a shape compatible with `mcp.json` entries (SPEC §10.5)."""
+    """One MCP server, in a shape compatible with `mcp.json` entries (SPEC §10.5).
+
+    Every `env` and `headers` value is a secret (D43). A plain string is a new value
+    (the manager moves it to the Keychain on save); a `{"secret": true, "masked"}`
+    reference keeps the stored one."""
 
     command: str | None = None
     args: list[str] = Field(default_factory=list)
-    env: dict[str, str] = Field(default_factory=dict)
+    env: dict[str, McpValue] = Field(default_factory=dict)
     url: str | None = None
-    headers: dict[str, str] = Field(default_factory=dict)
+    headers: dict[str, McpValue] = Field(default_factory=dict)
     enabled: bool = True
     always_allow: bool = False
 

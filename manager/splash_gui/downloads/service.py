@@ -12,7 +12,7 @@ import time
 import uuid
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from ..errors import ApiError
 from ..events.alerts import action
@@ -295,16 +295,7 @@ class Downloads:
             raise
         except Exception as error:
             message = str(error)
-            code = (
-                "gated"
-                if any(x in message for x in ("401", "403"))
-                else "disk_full"
-                if "space" in message.lower()
-                else "installer_failed"
-            )
-            item.error = DownloadError.model_validate(
-                {"code": code, "message": message, "action": "retry"}
-            )
+            item.error = self.classify(item, message)
             item.state = "failed"
             self.state.alerts.raise_alert(
                 "download_failed",
@@ -315,6 +306,51 @@ class Downloads:
             )
         finally:
             self.publish(item)
+
+    # SPEC §9.4 plain-language errors: each code carries the action the UI offers.
+    ACTIONS: ClassVar[dict[str, str | None]] = {
+        "gated": "add_hf_token",
+        "disk_full": "free_space",
+        "hub_unreachable": "retry",
+        "installer_failed": "retry",
+        "verify_failed": "retry",
+        "incompatible": None,
+    }
+    _UNREACHABLE = (
+        "connection",
+        "unreachable",
+        "name resolution",
+        "timed out",
+        "network is",
+        "offline",
+    )
+
+    def classify(self, item: DownloadItem, message: str) -> DownloadError:
+        lower = message.lower()
+        if any(x in message for x in ("401", "403")) or "gated" in lower:
+            code = "gated"
+        elif "space" in lower or "errno 28" in lower:
+            code = "disk_full"
+        elif "incompatible" in lower or "not supported" in lower:
+            code = "incompatible"
+        elif any(x in lower for x in self._UNREACHABLE):
+            code = "hub_unreachable"
+        else:
+            code = "installer_failed"
+        needed = free = None
+        if code == "disk_full":
+            needed = max(0, (item.bytes_total or 0) - item.bytes_done) + 2 * 1024**3
+            with contextlib.suppress(OSError):
+                free = shutil.disk_usage(self.state.settings.models_dir()).free
+        return DownloadError.model_validate(
+            {
+                "code": code,
+                "message": message,
+                "action": self.ACTIONS.get(code, "retry"),
+                "needed_bytes": needed,
+                "free_bytes": free,
+            }
+        )
 
     async def pause(self, dl: str) -> DownloadItem:
         item = self.get(dl)

@@ -311,6 +311,13 @@ def test_lan_bind_needs_generated_key(client: TestClient) -> None:
     assert client.put("/api/admin/settings", json=doc).status_code == 422
     key = client.post("/api/admin/settings/secrets/api-key").json()["key"]
     assert key.startswith("sk-splash-")
+    refused = client.put("/api/admin/settings", json=doc)
+    assert refused.status_code == 422, "D42: admin sign-in must be on for a LAN bind"
+    issue = refused.json()["error"]["issues"][0]
+    assert (
+        issue["key"] == "security.admin_requires_key" and issue["code"] == "lan_requires_admin_key"
+    )
+    doc["global"]["security"]["admin_requires_key"] = True
     assert client.put("/api/admin/settings", json=doc).status_code == 200
     # The key cannot be deleted while it is required.
     assert client.delete("/api/admin/settings/secrets/api-key").status_code == 409

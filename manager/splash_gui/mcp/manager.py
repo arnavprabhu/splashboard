@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -13,9 +15,11 @@ from typing import TYPE_CHECKING, Any
 
 from ..errors import ApiError
 from ..schemas import McpCallResult, McpServerError, McpTool, McpToolList
+from ..secrets import SecretsError
 from ..settings.model import McpServer
 from ..settings.store import Change
 from .client import HttpTransport, McpError, McpSession, StdioTransport, Transport
+from .secrets import resolve
 
 if TYPE_CHECKING:
     from ..state import ManagerState
@@ -28,6 +32,9 @@ class _Conn:
     config: McpServer
     session: McpSession
     tools: list[dict[str, Any]] | None = None
+    # Digest of the resolved env/headers: a new Keychain value with the same mask
+    # still reconnects.
+    secrets: str = ""
 
 
 class McpManager:
@@ -86,11 +93,24 @@ class McpManager:
                 await conn.session.close()
             self._event(name, "disconnected")
 
-    def _transport(self, config: McpServer) -> Transport:
+    def _resolved(self, name: str, config: McpServer) -> tuple[dict[str, str], dict[str, str]]:
+        try:
+            return resolve(self.state.secrets, name, config)
+        except SecretsError as error:
+            raise McpError(str(error)) from None
+
+    @staticmethod
+    def _digest(env: dict[str, str], headers: dict[str, str]) -> str:
+        blob = json.dumps([sorted(env.items()), sorted(headers.items())]).encode()
+        return hashlib.sha256(blob).hexdigest()
+
+    def _transport(
+        self, config: McpServer, env: dict[str, str], headers: dict[str, str]
+    ) -> Transport:
         if config.command is not None:
-            return StdioTransport(config.command, list(config.args), dict(config.env))
+            return StdioTransport(config.command, list(config.args), env)
         assert config.url is not None
-        return HttpTransport(config.url, dict(config.headers))
+        return HttpTransport(config.url, headers)
 
     async def session(self, name: str) -> _Conn:
         config = self.servers().get(name)
@@ -98,12 +118,14 @@ class McpManager:
             raise ApiError(404, f"no MCP server named {name}", "mcp_server_not_found")
         lock = self._locks.setdefault(name, asyncio.Lock())
         async with lock:
+            env, headers = self._resolved(name, config)
+            digest = self._digest(env, headers)
             conn = self._conns.get(name)
-            if conn is not None and conn.config == config:
+            if conn is not None and conn.config == config and conn.secrets == digest:
                 return conn
             if conn is not None:
                 await self._close(name)
-            transport = self._transport(config)
+            transport = self._transport(config, env, headers)
             start = getattr(transport, "start", None)
             session = McpSession(transport)
             try:
@@ -115,7 +137,7 @@ class McpManager:
                     await session.close()
                 self._event(name, "error", str(error))
                 raise
-            conn = _Conn(config=config, session=session)
+            conn = _Conn(config=config, session=session, secrets=digest)
             self._conns[name] = conn
             self._event(name, "connected")
             return conn

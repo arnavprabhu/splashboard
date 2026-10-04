@@ -60,14 +60,23 @@ def instance_lock(paths: Paths) -> Iterator[None]:
                 paths.manager_pid.unlink()
 
 
-def check_bind(host: str, secrets: SecretStore, require_key: bool) -> None:
-    """SPEC §17.1: refuse a non-loopback bind without an API key."""
+def check_bind(
+    host: str, secrets: SecretStore, require_key: bool, admin_requires_key: bool = True
+) -> None:
+    """SPEC §17.1: refuse a non-loopback bind without an API key, and (D42) without
+    admin sign-in (a settings.json written before D42 may still hold that)."""
     if p.is_loopback_host(host):
         return
     if not require_key or not secrets.has(SecretName.API_KEY):
         raise StartupError(
             f"refusing to listen on {host} without an API key; generate one in "
             "Settings → Security or bind to 127.0.0.1"
+        )
+    if not admin_requires_key:
+        raise StartupError(
+            f"refusing to listen on {host} with admin sign-in off; turn on "
+            "security.admin_requires_key (`splash config set security.admin_requires_key "
+            "true`) or bind to 127.0.0.1"
         )
 
 
@@ -218,7 +227,12 @@ def main(argv: list[str] | None = None) -> int:
     host = args.host or doc.global_.server.host
     port = args.port or doc.global_.server.port
     try:
-        check_bind(host, secrets, doc.global_.security.api_key_required)
+        check_bind(
+            host,
+            secrets,
+            doc.global_.security.api_key_required,
+            doc.global_.security.admin_requires_key,
+        )
         with instance_lock(paths):
             app = create_app(
                 AppConfig(paths=paths, web_dist=args.web_dist, secrets=secrets, settings=settings)

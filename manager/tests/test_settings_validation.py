@@ -192,6 +192,7 @@ def test_field_accepts(path: str, value: Any) -> None:
     raw = doc_with(path, value)
     if path == "server.host":
         raw["global"]["security"]["api_key_required"] = True
+        raw["global"]["security"]["admin_requires_key"] = True
     assert errors(raw) == []
 
 
@@ -216,12 +217,29 @@ def test_small_disk_tier_warns() -> None:
 
 def test_lan_bind_requires_key() -> None:
     raw = doc_with("server.host", "0.0.0.0")  # noqa: S104
+    raw["global"]["security"]["admin_requires_key"] = True
     assert any(code == "security.api_key_required" for code, _ in errors(raw))
     raw["global"]["security"]["api_key_required"] = True
     assert errors(raw, ValidationContext(api_key_present=False)) == [
-        ("security.api_key_required", "Generate an API key before binding to the local network")
+        ("security.api_key_required", "Generate an API key before binding to the local network"),
+        ("security.admin_requires_key", "Generate an API key before protecting the admin"),
     ]
     assert errors(raw, ValidationContext(api_key_present=True)) == []
+
+
+def test_lan_bind_requires_admin_sign_in() -> None:
+    """D42: a LAN bind with admin sign-in off is refused (never switched on silently)."""
+    for host in ("0.0.0.0", "192.168.1.20"):  # noqa: S104
+        raw = doc_with("server.host", host)
+        raw["global"]["security"]["api_key_required"] = True
+        result = validate_document(raw, ValidationContext(api_key_present=True))
+        assert [(i.key, i.code) for i in result.errors] == [
+            ("security.admin_requires_key", "lan_requires_admin_key")
+        ], host
+        raw["global"]["security"]["admin_requires_key"] = True
+        assert errors(raw, ValidationContext(api_key_present=True)) == []
+    loopback = doc_with("server.host", "127.0.0.1")
+    assert errors(loopback) == [], "loopback needs neither"
 
 
 def test_admin_protection_requires_key() -> None:

@@ -58,6 +58,9 @@ def main() -> None:
     if spec["print"]:
         changed = {key: value for key, value in env.items() if os.environ.get(key) != value}
         secret = os.environ.get("SPLASH_API_KEY")
+        if secret and secret in changed.values():
+            print("# The API key is required: export SPLASH_API_KEY=<your key> first")
+            print("# (Settings → Security in Splash GUI shows and copies it).")
         for key in sorted(changed):
             value = changed[key]
             if secret and value == secret:

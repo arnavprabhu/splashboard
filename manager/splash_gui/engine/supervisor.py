@@ -101,6 +101,8 @@ class _Run:
     readers_done: asyncio.Event = field(default_factory=asyncio.Event)
     exit_code: int | None = None
     saved_identity: dict[str, Any] | None = None
+    # Spawned by the crash auto-restart (D45: its startup crash is a crash).
+    auto_restart: bool = False
 
     @property
     def base_url(self) -> str:
@@ -535,7 +537,7 @@ class Supervisor:
             return int(configured)
         return free_port()
 
-    async def _spawn(self, model: str) -> None:
+    async def _spawn(self, model: str, *, auto_restart: bool = False) -> None:
         engine = self.app.engine_cached()
         assert engine.cli is not None
         key = generate_internal_key()
@@ -609,6 +611,7 @@ class Supervisor:
             spec=spec,
             session_id=session_id,
             started_mono=time.monotonic(),
+            auto_restart=auto_restart,
         )
         self._run = run
         with contextlib.suppress(OSError):
@@ -822,7 +825,9 @@ class Supervisor:
         self._on_crash(run, code, was_ready)
 
     def _on_crash(self, run: _Run, code: int | None, was_ready: bool) -> None:
-        if not was_ready:
+        # D45: a crash while an auto-restart is starting is still a crash, so it
+        # counts toward the crash loop (3 in 5 min → failed + alert + notification).
+        if not was_ready and not run.auto_restart:
             # Startup failed: an unfixable error (SPEC §6.3 failed), never a restart loop.
             error = self.error or EngineError(
                 kind="other",
@@ -899,7 +904,7 @@ class Supervisor:
             self._next_retry_at = None
             self._backoff = None
             try:
-                await self._spawn(model)
+                await self._spawn(model, auto_restart=True)
             except ApiError as error:
                 log.error("auto-restart failed: %s", error.message)
 

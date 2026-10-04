@@ -451,7 +451,22 @@ def main(argv: list[str] | None = None) -> int:
                 not sys.stdin.isatty() or input("Delete " + args.model + "? [y/N] ").lower() != "y"
             ):
                 return 1
-            client.request("DELETE", "/models/" + args.model + "?confirm_active=true")
+            try:
+                client.request("DELETE", "/models/" + args.model)
+            except ValueError as error:
+                # The loaded model needs its own confirmation: deleting it stops the engine.
+                if "active" not in str(error).lower():
+                    raise
+                if not args.yes and (
+                    not sys.stdin.isatty()
+                    or input(
+                        args.model + " is loaded. Stop the engine and delete it? [y/N] "
+                    ).lower()
+                    != "y"
+                ):
+                    print("splash: " + str(error), file=sys.stderr)
+                    return 1
+                client.request("DELETE", "/models/" + args.model + "?confirm_active=true")
         elif name == "pull":
             item = client.request(
                 "POST",

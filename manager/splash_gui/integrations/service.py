@@ -77,6 +77,17 @@ def untested(name: str, version: str | None) -> bool:
     return tested is None or version is None or _version_key(version) < _version_key(tested)
 
 
+def through_link(path: Path) -> Path:
+    """The file to edit for `path`: a symlinked config (dotfile managers) is edited
+    at its target so the link survives; a broken link is refused rather than
+    creating the target's folders (review R34)."""
+    if not path.is_symlink():
+        return path
+    if not path.exists():
+        raise ApiError(409, f"{path} is a broken symlink; fix or remove it first", "broken_symlink")
+    return path.resolve()
+
+
 def bundled_codex(app: Path) -> Path | None:
     """The Codex CLI inside the Codex/ChatGPT app: `Contents/Resources/codex`
     (SPEC §11.3.2), or, in ChatGPT builds that ship `codex-cli/` (checked on
@@ -111,6 +122,7 @@ class IntegrationsService:
         self.state = state
         self.home = home if home is not None else Path.home()
         self._mdfind: tuple[float, Path | None] | None = None
+        self.corrupt_state: str | None = None
         self.records: dict[str, Any] = {}
         self.recovery: set[str] = set()
         self.lock = asyncio.Lock()
@@ -124,10 +136,11 @@ class IntegrationsService:
         except FileNotFoundError:
             pass
         except ValueError:
-            # A torn state.json: keep it for inspection and start clean.
-            self.state.paths.integrations_state.rename(
-                self.state.paths.integrations_state.with_suffix(".corrupt")
-            )
+            # A torn state.json: keep it for inspection and start clean. Connect
+            # then refuses an app whose config is still ours (refuse_if_already_applied).
+            corrupt = self.state.paths.integrations_state.with_suffix(".corrupt")
+            self.state.paths.integrations_state.rename(corrupt)
+            self.corrupt_state = str(corrupt)
         if self.recovery:
             self._unclean_alert()
 
@@ -266,6 +279,11 @@ class IntegrationsService:
                         "command": f"splash launch {name}",
                         "changes": self.changes(name),
                         "entries": self.entries(name),
+                        # D44: Splash's Hermes configurator writes the server's key
+                        # into the profile in plain text (install/clients.py:410,
+                        # `api_key=server.api_key`); Pi stores "$SPLASH_API_KEY".
+                        "plaintext_key_warning": name == "hermes"
+                        and self.state.settings.current.global_.security.api_key_required,
                         "last_launched_at": launched.get(name),
                     }
                 )
@@ -274,6 +292,7 @@ class IntegrationsService:
             cli=cli,
             desktop=[self.desktop(n) for n in ("claude-desktop", "codex-app")],
             unclean_shutdown=bool(self.recovery),
+            corrupt_state=self.corrupt_state,
         )
 
     def changes(self, name: str) -> IntegrationChanges:
@@ -281,9 +300,10 @@ class IntegrationsService:
         (1.2.0) configures each client (SPEC §3.5, §10.7 "What this changes").
         `splash launch <name> --print` shows the exact values for a session."""
         g = self.state.settings.current.global_
-        url = f"http://127.0.0.1:{g.server.port}"
+        port = self.public_port()
+        url = f"http://127.0.0.1:{port}"
         model = "<model>"
-        entry = "splash" if g.server.port == 8000 else f"splash-{g.server.port}"
+        entry = "splash" if port == 8000 else f"splash-{port}"
         key = "$SPLASH_API_KEY" if g.security.api_key_required else "local"
         session = "This session only: plain `{0}` keeps its normal configuration."
         if name == "claude":
@@ -346,7 +366,7 @@ class IntegrationsService:
                 ],
             )
         if name == "hermes":
-            home = self.home / ".hermes" / "profiles" / entry
+            home = self.hermes_profiles() / entry
             return IntegrationChanges(
                 env={"HERMES_HOME": str(home), "OPENAI_BASE_URL": f"{url}/v1"},
                 args=["--provider", "custom", "--model", model],
@@ -356,7 +376,7 @@ class IntegrationsService:
                     "your default profile is unchanged."
                 ],
             )
-        models = self.home / ".pi" / "agent" / "models.json"
+        models = self.pi_models()
         return IntegrationChanges(
             args=["--provider", entry, "--model", model],
             files=[str(models)],
@@ -366,12 +386,41 @@ class IntegrationsService:
             ],
         )
 
+    def public_port(self) -> int:
+        """The port the manager actually listens on (`--port` may differ from
+        `server.port`); clients and Splash's launchers must use it."""
+        bound = self.state.bound
+        return bound[1] if bound else self.state.settings.current.global_.server.port
+
+    def env(self) -> dict[str, str]:
+        """The environment Splash's configurators would see (tests replace it)."""
+        return dict(os.environ)
+
+    def hermes_profiles(self) -> Path:
+        """`<root>/profiles` by Splash's rule (install/clients.py
+        `hermes_profile_home`): ~/.hermes, unless HERMES_HOME names a home outside
+        it, whose root is its parent's parent for `<root>/profiles/<name>`."""
+        root = self.home / ".hermes"
+        value = self.env().get("HERMES_HOME", "").strip()
+        if value:
+            home = Path(os.path.expandvars(value)).expanduser()
+            if not home.resolve().is_relative_to(root.resolve()):
+                root = home.parent.parent if home.parent.name == "profiles" else home
+        return root / "profiles"
+
+    def pi_models(self) -> Path:
+        """Pi's models.json (install/clients.py `_pi_models_path`):
+        `$PI_CODING_AGENT_DIR/models.json`, else ~/.pi/agent/models.json."""
+        agent = self.env().get("PI_CODING_AGENT_DIR")
+        directory = Path(agent).expanduser() if agent else self.home / ".pi" / "agent"
+        return directory / "models.json"
+
     def entries(self, name: str) -> list[str]:
         """The Hermes `splash*` profiles or Pi `splash*` providers Splash's
         launchers created (SPEC §11.2), for the Remove button."""
         pattern = re.compile(r"splash(-\d+)?")
         if name == "hermes":
-            profiles = self.home / ".hermes" / "profiles"
+            profiles = self.hermes_profiles()
             if not profiles.is_dir():
                 return []
             return sorted(
@@ -379,9 +428,7 @@ class IntegrationsService:
             )
         if name == "pi":
             try:
-                providers = read_document(self.home / ".pi" / "agent" / "models.json").get(
-                    "providers", {}
-                )
+                providers = read_document(self.pi_models().resolve()).get("providers", {})
             except (OSError, ValueError):
                 return []
             return sorted(k for k in providers if isinstance(k, str) and pattern.fullmatch(k))
@@ -407,6 +454,7 @@ class IntegrationsService:
         plans: list[tuple[Path, bytes, list[str] | None]] = []
 
         def patch(path: Path, values: dict[str, Any], remove: tuple[str, ...] = ()) -> None:
+            path = through_link(path)
             data = read_document(path)
             data.update(values)
             for key in remove:
@@ -482,15 +530,20 @@ class IntegrationsService:
                 dict.fromkeys([*desktop.get("enabled-reasoning-efforts", []), "none", "max"])
             )
             values: dict[str, Any] = {
-                "openai_base_url": f"http://127.0.0.1:{self.state.settings.current.global_.server.port}/api/codex/v1",
+                "openai_base_url": f"http://127.0.0.1:{self.public_port()}/api/codex/v1",
                 "model_catalog_json": str(folder / "models.json"),
                 "desktop": desktop,
             }
             if self.state.settings.current.global_.integrations.codex_app.make_default and models:
                 values["model"] = models[0]["id"]
             patch(config, values)
-            if not (codex / "auth.json").exists():
-                plans.append((codex / "auth.json", CODEX_SENTINEL, None))
+            auth = codex / "auth.json"
+            if auth.is_symlink() and not auth.exists():
+                raise ApiError(
+                    409, f"{auth} is a broken symlink; fix or remove it first", "broken_symlink"
+                )
+            if not auth.exists():
+                plans.append((auth, CODEX_SENTINEL, None))
         return plans
 
     def native_codex_models(self, codex_home: Path) -> list[Any]:
@@ -523,6 +576,31 @@ class IntegrationsService:
         except (OSError, ValueError):
             return []
 
+    def refuse_if_already_applied(self, name: str) -> None:
+        """No record, yet the app's config already points at Splash (a lost or
+        corrupt state.json, review R34): snapshotting now would save our own
+        settings as the "original", so refuse until the user restores it."""
+        if name == "claude-desktop":
+            support = self.home / "Library" / "Application Support"
+            ours = support / "Claude-3p" / "configLibrary" / (DEPLOYMENT + ".json")
+            applied = ours.exists() or ours.is_symlink()
+        else:
+            try:
+                config = read_document(self.home / ".codex" / "config.toml")
+            except (OSError, ValueError):
+                config = {}
+            applied = "/api/codex/v1" in str(config.get("openai_base_url", ""))
+        if applied:
+            backups = self.state.paths.integrations_backups / name
+            raise ApiError(
+                409,
+                "This app's configuration already points at Splash GUI but there is no "
+                "restore record (state.json was lost or unreadable). Restore it from "
+                f"{backups} or remove the Splash keys, then connect.",
+                "foreign_connection_state",
+                details={"backups": str(backups)},
+            )
+
     def owned(self, name: str) -> set[str]:
         """Files Splash creates outright: removed on restore whatever they hold."""
         if name == "claude-desktop":
@@ -549,6 +627,8 @@ class IntegrationsService:
                 )
             if name in self.recovery:
                 await self.restore_one(name, reopen=False)
+            elif name not in self.records:
+                self.refuse_if_already_applied(name)
             label = "Claude" if name == "claude-desktop" else "Codex"
             self.progress(name, "connecting", "quitting_app", f"Quitting {label}…")
             await self.quit_app(name)
@@ -829,7 +909,7 @@ class IntegrationsService:
         spec = {
             "client": client,
             "model": chosen,
-            "url": f"http://127.0.0.1:{g.server.port}",
+            "url": f"http://127.0.0.1:{self.public_port()}",
             "context": context,
             "modalities": entry.get("input_modalities") or ["text"],
             "args": [],
@@ -922,13 +1002,13 @@ class IntegrationsService:
         removed = []
         if name == "hermes":
             for entry in wanted:
-                path = self.home / ".hermes" / "profiles" / entry
+                path = self.hermes_profiles() / entry
                 if path.is_dir() and not path.is_symlink():
                     shutil.copytree(path, backup / entry, symlinks=True)
                     shutil.rmtree(path)
                     removed.append(entry)
         elif wanted:
-            path = self.home / ".pi" / "agent" / "models.json"
+            path = self.pi_models()
             # Write through a symlinked models.json, as Splash's launcher does.
             target = path.resolve()
             write_atomic(backup / "models.json", target.read_bytes())

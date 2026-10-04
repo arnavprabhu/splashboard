@@ -37,7 +37,10 @@ State = Annotated[ManagerState, Depends(get_state)]
 def storage(state: State) -> StorageInfo:
     models = state.settings.models_dir()
     models.mkdir(parents=True, exist_ok=True)
+    hub = user_hf_hub()
     return StorageInfo(
+        models_shared_with_hf_cache=shares_hf_cache(models, hub),
+        hf_cache_path=str(hub),
         models_dir=str(models),
         cache_dir=str(state.settings.cache_dir()),
         tmp_dir=str(state.settings.tmp_dir()),
@@ -89,6 +92,26 @@ def move_tree(source: Path, destination: Path) -> None:
         raise
     # The copy is complete and in place; only now is the source removed.
     shutil.rmtree(source)
+
+
+def user_hf_hub() -> Path:
+    """The user's own Hugging Face hub cache, as `hf download` would use it:
+    `HF_HUB_CACHE`, else `HF_HOME/hub`, else ~/.cache/huggingface/hub."""
+    explicit = os.environ.get("HF_HUB_CACHE")
+    if explicit:
+        return Path(explicit).expanduser()
+    home = Path(os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface")))
+    return home.expanduser() / "hub"
+
+
+def shares_hf_cache(models: Path, hub: Path) -> bool:
+    """D44: the models directory is (inside, or contains) the user's own HF cache,
+    so deleting a model can remove files they downloaded themselves."""
+    try:
+        a, b = models.resolve(), hub.resolve()
+    except OSError:
+        return False
+    return a == b or a.is_relative_to(b) or b.is_relative_to(a)
 
 
 def default_hf_hub(models_dir: Path) -> Path:

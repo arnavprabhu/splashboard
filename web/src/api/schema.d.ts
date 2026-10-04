@@ -2337,6 +2337,11 @@ export interface components {
             entries?: string[];
             /** Last Launched At */
             last_launched_at?: string | null;
+            /**
+             * Plaintext Key Warning
+             * @default false
+             */
+            plaintext_key_warning: boolean;
         };
         /** CodexAppSettings */
         CodexAppSettings: {
@@ -3304,6 +3309,8 @@ export interface components {
              * @default false
              */
             unclean_shutdown: boolean;
+            /** Corrupt State */
+            corrupt_state?: string | null;
         };
         /** IssueOut */
         IssueOut: {
@@ -3573,8 +3580,26 @@ export interface components {
             duration_ms?: number | null;
         };
         /**
+         * McpSecretRef
+         * @description An MCP `env`/`headers` value kept in the Keychain (D43): settings.json and the
+         *     API carry only this reference with its mask (`prefix••••last4`, S3-23).
+         */
+        McpSecretRef: {
+            /**
+             * Secret
+             * @constant
+             */
+            secret: true;
+            /** Masked */
+            masked: string;
+        };
+        /**
          * McpServer
          * @description One MCP server, in a shape compatible with `mcp.json` entries (SPEC §10.5).
+         *
+         *     Every `env` and `headers` value is a secret (D43). A plain string is a new value
+         *     (the manager moves it to the Keychain on save); a `{"secret": true, "masked"}`
+         *     reference keeps the stored one.
          */
         McpServer: {
             /** Command */
@@ -3583,13 +3608,13 @@ export interface components {
             args?: string[];
             /** Env */
             env?: {
-                [key: string]: string;
+                [key: string]: string | components["schemas"]["McpSecretRef"];
             };
             /** Url */
             url?: string | null;
             /** Headers */
             headers?: {
-                [key: string]: string;
+                [key: string]: string | components["schemas"]["McpSecretRef"];
             };
             /**
              * Enabled
@@ -4544,6 +4569,13 @@ export interface components {
             splash_data_bytes?: number | null;
             /** Free Bytes */
             free_bytes?: number | null;
+            /**
+             * Models Shared With Hf Cache
+             * @default false
+             */
+            models_shared_with_hf_cache: boolean;
+            /** Hf Cache Path */
+            hf_cache_path?: string | null;
         };
         /** StorageMoveRequest */
         StorageMoveRequest: {

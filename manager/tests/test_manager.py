@@ -37,6 +37,15 @@ def test_lan_bind_refused_without_key(secrets: SecretStore) -> None:
     manager.check_bind("0.0.0.0", secrets, require_key=True)  # noqa: S104
 
 
+def test_lan_bind_refused_without_admin_sign_in(secrets: SecretStore) -> None:
+    """D42, for a settings.json written before the rule existed."""
+    secrets.generate(SecretName.API_KEY)
+    with pytest.raises(manager.StartupError, match="admin sign-in off"):
+        manager.check_bind("0.0.0.0", secrets, require_key=True, admin_requires_key=False)  # noqa: S104
+    manager.check_bind("0.0.0.0", secrets, require_key=True, admin_requires_key=True)  # noqa: S104
+    manager.check_bind("127.0.0.1", secrets, require_key=False, admin_requires_key=False)
+
+
 def test_instance_lock_writes_pid(paths: Paths) -> None:
     with manager.instance_lock(paths):
         assert paths.manager_pid.read_text().strip().isdigit()

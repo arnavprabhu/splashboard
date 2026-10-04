@@ -43,7 +43,7 @@ from ..schemas import (
     SettingsSchema,
     SettingsValidation,
 )
-from ..secrets import SecretName, SecretsError
+from ..secrets import SecretName, SecretsError, mask_secret
 from ..state import ManagerState, get_state
 from . import parsers as p
 from .effective import effective_profiles, effective_values, sampling_defaults
@@ -89,9 +89,11 @@ def _hf_login_token_present() -> bool:
 
 
 def _settings_response(state: ManagerState) -> SettingsResponse:
+    from ..mcp.secrets import masked_document
+
     store = state.settings
     return SettingsResponse(
-        settings=store.current,
+        settings=masked_document(store.current),
         secrets=SecretsState(
             api_key_set=state.secrets.has(SecretName.API_KEY),
             hf_token_override_set=state.secrets.has(SecretName.HF_TOKEN),
@@ -164,8 +166,16 @@ def _check_new_bind(state: ManagerState, raw: Any) -> None:
 
 
 def save_settings(state: ManagerState, raw: Any) -> SettingsSaveResult:
+    from ..mcp.secrets import externalize, masked_document
+
     old = state.settings.current
     _check_new_bind(state, raw)
+    # D43: MCP env/header values become Keychain references before validation;
+    # the store is written only once the document is known to be valid.
+    pending = externalize(raw, old, state.secrets)
+    checked = state.settings.validate(raw, _context(state))
+    if checked.ok:
+        pending.apply(state.secrets)
     try:
         result, changes = state.settings.save(raw, _context(state))
     except SettingsReadOnlyError as error:
@@ -185,7 +195,7 @@ def save_settings(state: ManagerState, raw: Any) -> SettingsSaveResult:
         except Exception:
             log.exception("settings listener failed")
     return SettingsSaveResult(
-        settings=result.document,
+        settings=masked_document(result.document),
         restart_required=restart,
         changed=[_change_out(c, active, old, result.document) for c in changes],
         warnings=_issues(result.warnings),
@@ -394,16 +404,6 @@ def _secret_call(fn: Any, *args: Any) -> Any:
 
 
 _SECRET_NAMES = {"api_key": SecretName.API_KEY, "hf_token": SecretName.HF_TOKEN}
-
-
-def mask_secret(value: str) -> tuple[str | None, str | None, str]:
-    """(prefix, last4, masked) for display. Short values show nothing of themselves."""
-    if len(value) < 12:
-        return None, None, "••••"
-    prefix = value[: value.rindex("-", 0, 11) + 1] if "-" in value[:11] else value[:4]
-    if len(prefix) > 10:
-        prefix = value[:4]
-    return prefix, value[-4:], f"{prefix}••••{value[-4:]}"
 
 
 @router.get("/settings/secret/meta", response_model=SecretMeta, responses=error_responses(503))

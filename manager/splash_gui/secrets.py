@@ -7,6 +7,7 @@ Secrets never go into settings.json and are redacted from logs and exports.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -40,11 +41,11 @@ class SecretsError(RuntimeError):
 class SecretsBackend(Protocol):
     name: str
 
-    def get(self, name: SecretName) -> str | None: ...
+    def get(self, name: str) -> str | None: ...
 
-    def set(self, name: SecretName, value: str) -> None: ...
+    def set(self, name: str, value: str) -> None: ...
 
-    def delete(self, name: SecretName) -> None: ...
+    def delete(self, name: str) -> None: ...
 
 
 def _check_value(value: str) -> str:
@@ -59,18 +60,18 @@ class MemoryBackend:
     name = "memory"
 
     def __init__(self) -> None:
-        self._values: dict[SecretName, str] = {}
+        self._values: dict[str, str] = {}
         self._lock = threading.Lock()
 
-    def get(self, name: SecretName) -> str | None:
+    def get(self, name: str) -> str | None:
         with self._lock:
             return self._values.get(name)
 
-    def set(self, name: SecretName, value: str) -> None:
+    def set(self, name: str, value: str) -> None:
         with self._lock:
             self._values[name] = _check_value(value)
 
-    def delete(self, name: SecretName) -> None:
+    def delete(self, name: str) -> None:
         with self._lock:
             self._values.pop(name, None)
 
@@ -95,20 +96,20 @@ class FileBackend:
             return {}
         return {str(k): str(v) for k, v in data.items()}
 
-    def get(self, name: SecretName) -> str | None:
+    def get(self, name: str) -> str | None:
         with self._lock:
-            return self._read().get(name.value)
+            return self._read().get(str(name))
 
-    def set(self, name: SecretName, value: str) -> None:
+    def set(self, name: str, value: str) -> None:
         with self._lock:
             data = self._read()
-            data[name.value] = _check_value(value)
+            data[str(name)] = _check_value(value)
             write_atomic(self.path, json.dumps(data, indent=2).encode())
 
-    def delete(self, name: SecretName) -> None:
+    def delete(self, name: str) -> None:
         with self._lock:
             data = self._read()
-            if data.pop(name.value, None) is not None:
+            if data.pop(str(name), None) is not None:
                 write_atomic(self.path, json.dumps(data, indent=2).encode())
 
 
@@ -139,26 +140,26 @@ class KeychainBackend:
         except (OSError, subprocess.TimeoutExpired) as error:
             raise SecretsError(f"keychain unavailable: {error}") from error
 
-    def get(self, name: SecretName) -> str | None:
-        result = self._run(["find-generic-password", "-s", name.value, "-a", self.account, "-w"])
+    def get(self, name: str) -> str | None:
+        result = self._run(["find-generic-password", "-s", str(name), "-a", self.account, "-w"])
         if result.returncode == self.NOT_FOUND:
             return None
         if result.returncode != 0:
             raise SecretsError(f"keychain read failed: {result.stderr.strip()}")
         return result.stdout.rstrip("\n") or None
 
-    def set(self, name: SecretName, value: str) -> None:
+    def set(self, name: str, value: str) -> None:
         value = _check_value(value)
         command = (
-            f'add-generic-password -U -s "{name.value}" -a "{self.account}" '
+            f'add-generic-password -U -s "{name}" -a "{self.account}" '
             f'-l "Splash GUI" -w "{value}"\n'
         )
         result = self._run(["-i"], stdin=command)
         if result.returncode != 0:
             raise SecretsError(f"keychain write failed: {result.stderr.strip()}")
 
-    def delete(self, name: SecretName) -> None:
-        result = self._run(["delete-generic-password", "-s", name.value, "-a", self.account])
+    def delete(self, name: str) -> None:
+        result = self._run(["delete-generic-password", "-s", str(name), "-a", self.account])
         if result.returncode not in (0, self.NOT_FOUND):
             raise SecretsError(f"keychain delete failed: {result.stderr.strip()}")
 
@@ -191,23 +192,43 @@ class SecretStore:
                 self._known.add(value)
         return value
 
-    def get(self, name: SecretName) -> str | None:
+    def get(self, name: str) -> str | None:
         return self._remember(self.backend.get(name))
 
-    def set(self, name: SecretName, value: str) -> None:
+    def set(self, name: str, value: str) -> None:
         self.backend.set(name, value)
         self._remember(value)
 
-    def delete(self, name: SecretName) -> None:
+    def delete(self, name: str) -> None:
         self.backend.delete(name)
 
-    def has(self, name: SecretName) -> bool:
+    def has(self, name: str) -> bool:
         return self.get(name) is not None
 
-    def generate(self, name: SecretName, prefix: str = "sk-splash-") -> str:
+    def generate(self, name: str, prefix: str = "sk-splash-") -> str:
         value = prefix + _stdlib_secrets.token_urlsafe(32)
         self.set(name, value)
         return value
+
+    # Arbitrary text (MCP env/header values may hold spaces or quotes, which the
+    # `security -i` command line can't carry) is stored base64-encoded.
+    TEXT_PREFIX = "b64:"
+
+    def set_text(self, name: str, value: str) -> None:
+        encoded = base64.urlsafe_b64encode(value.encode()).decode()
+        self.backend.set(name, self.TEXT_PREFIX + encoded)
+        self._remember(value)
+
+    def get_text(self, name: str) -> str | None:
+        raw = self.backend.get(name)
+        if raw is None:
+            return None
+        if raw.startswith(self.TEXT_PREFIX):
+            try:
+                raw = base64.urlsafe_b64decode(raw[len(self.TEXT_PREFIX) :]).decode()
+            except (ValueError, UnicodeDecodeError):
+                raise SecretsError(f"unreadable secret {name}") from None
+        return self._remember(raw)
 
     def known_values(self) -> frozenset[str]:
         with self._lock:
@@ -215,6 +236,18 @@ class SecretStore:
 
     def redact(self, text: str) -> str:
         return redact_text(text, self.known_values())
+
+
+def mask_secret(value: str) -> tuple[str | None, str | None, str]:
+    """(prefix, last4, masked) for display (SPEC S3-23): the prefix runs to the last
+    "-" in the first 11 characters (`sk-splash-`), else 4 characters; a value under
+    12 characters shows nothing of itself."""
+    if len(value) < 12:
+        return None, None, "••••"
+    prefix = value[: value.rindex("-", 0, 11) + 1] if "-" in value[:11] else value[:4]
+    if len(prefix) > 10:
+        prefix = value[:4]
+    return prefix, value[-4:], f"{prefix}••••{value[-4:]}"
 
 
 def generate_internal_key() -> str:

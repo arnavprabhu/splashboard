@@ -180,6 +180,13 @@ def cross_field_issues(doc: SettingsDocument, context: ValidationContext) -> Ite
                 "Generate an API key before binding to the local network",
                 code="api_key_missing",
             )
+        if not g.security.admin_requires_key:
+            # D42: a LAN bind forces admin sign-in (refused, never switched on silently).
+            yield Issue(
+                ("global", "security", "admin_requires_key"),
+                "A local-network bind requires admin sign-in",
+                code="lan_requires_admin_key",
+            )
     elif g.security.api_key_required and not context.api_key_present:
         yield Issue(
             ("global", "security", "api_key_required"),

@@ -161,6 +161,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     with contextlib.suppress(Exception):
         await asyncio.to_thread(state.engine)
     _ensure_shim(state)
+    _migrate_mcp_secrets(state)
     core = [state.proxy, state.supervisor, state.metrics]
     services = subsystem_services(state)
     started: list[Any] = []
@@ -178,6 +179,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         with contextlib.suppress(Exception):
             await state.jobs.shutdown()
         state.usage.close_open_sessions()
+
+
+def _migrate_mcp_secrets(state: ManagerState) -> None:
+    """D43: plaintext MCP env/header values left in settings.json move to the
+    Keychain at startup (settings.json keeps only references)."""
+    from .mcp.secrets import migrate
+
+    try:
+        moved = migrate(state.settings, state.secrets)
+    except Exception:
+        log.exception("could not move MCP secrets to the Keychain")
+        return
+    if moved:
+        log.info("moved %d MCP server secret(s) from settings.json to the Keychain", moved)
 
 
 def _ensure_shim(state: ManagerState) -> None:

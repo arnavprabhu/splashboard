@@ -1386,6 +1386,9 @@ class CliIntegration(ApiModel):
     changes: IntegrationChanges
     entries: list[str] = Field(default_factory=list)
     last_launched_at: str | None = None
+    # D44: true for Hermes when the API key is required — Splash writes the key
+    # into its profile config.yaml in plain text.
+    plaintext_key_warning: bool = False
 
 
 IntegrationStep = Literal[
@@ -1420,6 +1423,8 @@ class Integrations(ApiModel):
     cli: list[CliIntegration]
     desktop: list[DesktopIntegration]
     unclean_shutdown: bool = False
+    # Set when state.json was unreadable at start (kept at this path).
+    corrupt_state: str | None = None
 
 
 class ConnectRequest(ApiModel):
@@ -1585,6 +1590,10 @@ class StorageInfo(ApiModel):
     cache_bytes: int | None = None
     splash_data_bytes: int | None = None
     free_bytes: int | None = None
+    # D44: the models folder resolves to (or nests with) the user's own Hugging Face
+    # cache, so a model delete can remove files they downloaded themselves.
+    models_shared_with_hf_cache: bool = False
+    hf_cache_path: str | None = None
 
 
 class StorageMoveRequest(ApiModel):

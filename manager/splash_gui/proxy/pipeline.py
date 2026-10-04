@@ -481,6 +481,13 @@ class ProxyPipeline:
             ) from None
         remaining = max(1.0, deadline - time.monotonic())
         if not await sup.wait_ready(remaining):
+            if sup.active_model() not in (None, model):
+                raise ProxyError(
+                    503,
+                    f"Splash GUI switched to {sup.active_model()} while loading {model}; retry",
+                    "model_switch_busy",
+                    headers={"Retry-After": "10"},
+                )
             message = sup.error.message if sup.error else f"{model} is not ready"
             raise unavailable(f"Could not load {model}: {message}")
 
@@ -516,6 +523,17 @@ class ProxyPipeline:
             route = await self.route(request, body.get("model"))
         except ProxyError as error:
             return error.response(anthropic, cors)
+        if route.model is not None and self.sup.active_model() != route.model:
+            # Another request switched the engine while this one waited for its
+            # model (review R32): never forward to the wrong model.
+            return ProxyError(
+                503,
+                f"Splash GUI switched to {self.sup.active_model() or 'another model'} while "
+                f"this request waited for {route.model}; retry",
+                "model_switch_busy",
+                headers={"Retry-After": "10"},
+                details={"active": self.sup.active_model(), "requested": route.model},
+            ).response(anthropic, cors)
         shape: Shape = SHAPES.get(path, "other")
         overlay = {**route.overlay, **(extra_overlay or {})}
         injected: dict[str, Any] = {}

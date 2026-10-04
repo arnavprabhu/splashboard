@@ -275,7 +275,7 @@ def test_a_gated_repository_fails_with_an_actionable_code(hub_harness, monkeypat
     failed = wait_for(harness, started["id"], "failed")
     assert failed["error"]["code"] == "gated"
     assert "HF_TOKEN" in failed["error"]["message"] or "auth" in failed["error"]["message"].lower()
-    assert failed["error"]["action"] == "retry"
+    assert failed["error"]["action"] == "add_hf_token", "the hint follows the code (R33)"
 
 
 def test_a_gated_repository_succeeds_with_a_token(hub_harness, monkeypatch):
@@ -291,7 +291,8 @@ def test_a_network_failure_is_reported_and_can_be_retried(hub_harness):
     harness = hub_harness({"FAKE_SPLASH_DL_FAIL": "network_mid"})
     started = queue(harness, MODEL)
     failed = wait_for(harness, started["id"], "failed")
-    assert failed["error"]["code"] == "installer_failed"
+    assert failed["error"]["code"] == "hub_unreachable"
+    assert failed["error"]["action"] == "retry"
     assert failed["error"]["message"]
     # resume clears the error and retries (SPEC §9.4).
     response = harness.client.post(f"/api/admin/downloads/{started['id']}/resume")
@@ -305,6 +306,8 @@ def test_a_disk_full_failure_is_classified(hub_harness):
     failed = wait_for(harness, started["id"], "failed")
     # ENOSPC ("No space left on device") must not fall through to installer_failed.
     assert failed["error"]["code"] == "disk_full"
+    assert failed["error"]["action"] == "free_space"
+    assert failed["error"]["needed_bytes"] >= 2 * 1024**3 and failed["error"]["free_bytes"] > 0
 
 
 def test_a_failed_download_raises_an_alert(hub_harness):
