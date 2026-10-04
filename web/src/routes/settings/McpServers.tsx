@@ -8,7 +8,7 @@
  * new one. Values are write-only here: the masked text is shown, never sent as a value.
  */
 import { useState } from 'preact/hooks';
-import type { MaskedSecret, McpServerView, McpValue } from '../../api/models';
+import type { MaskedSecret, McpServerView, McpValue } from '../../api/mcp';
 import { Button } from '../../components/Button';
 import { ConfirmSheet } from '../../components/ConfirmSheet';
 import { SegmentedControl } from '../../components/controls';

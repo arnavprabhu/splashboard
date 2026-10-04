@@ -11,7 +11,6 @@ import type {
   EffectiveSettings,
   HfTokenTestOut,
   LaunchPreview,
-  McpServerView,
   ModelDetail,
   ProfilesView,
   SamplingOverlay,
@@ -27,6 +26,7 @@ import type {
   UpdateInfo,
   Versions,
 } from '../../api/models';
+import type { McpServerView } from '../../api/mcp';
 import type { SettingsDoc } from '../../api/types';
 
 /** Model IDs go into paths literally (docs/api.md §1.1); each segment is encoded. */
