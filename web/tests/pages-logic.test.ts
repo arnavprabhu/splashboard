@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { stagePercentileMs } from '../src/routes/status/logic';
 import { answerView, detailKey, newQuestion, questionBody, questionErrors, questionsFromBody, semifErrors, shortHash, systemOneBody } from '../src/routes/tools/judgments';
 import { SYSTEMONE_EXAMPLE } from '../src/routes/tools/endpoints';
@@ -7,6 +7,8 @@ import { searchFields } from '../src/routes/settings';
 import { consequence, sizeText } from '../src/routes/settings/DataPrivacy';
 import { updateLine } from '../src/routes/settings/About';
 import { traceTime } from '../src/routes/logs-diagnostics';
+import { fingerprintRows } from '../src/routes/model-settings';
+import { piecesFor } from '../src/routes/tools-tokenizer';
 import type { SchemaField } from '../src/api/models';
 
 describe('latency percentiles from cumulative buckets (decision T5)', () => {
@@ -129,5 +131,31 @@ describe('MCP servers editor (docs/ui/05 §3.11)', () => {
   it('imports a Claude-style mcp.json', () => {
     expect(importMcpJson('{"mcpServers":{"w":{"command":"npx","args":["a"]}}}')).toEqual({ w: { command: 'npx', args: ['a'], env: {}, enabled: true, always_allow: false } });
     expect(importMcpJson('nope')).toBeNull();
+  });
+});
+
+describe('model fingerprints on Info (GET /models/{id} fingerprints)', () => {
+  it('shows the recorded values, or "load once" when nothing is recorded', () => {
+    const rows = fingerprintRows({ build_id: 'b-42', loaded_model_layout_sha256: 'abc', target_model_sha256: 'def', kv_format: 'int8', kv_quantization: 'symmetric_int8', max_context: 131072, recorded_at: null } as never);
+    expect(rows.map((r) => r.key)).toEqual(['build', 'layout', 'target', 'kv', 'ctx', 'recorded']);
+    expect(rows[4]!.value).toBe('128K');
+    const empty = fingerprintRows(null);
+    expect(empty.every((r) => typeof r.value === 'string')).toBe(true);
+  });
+});
+
+describe('tokenizer pieces (POST /tokenizer/pieces)', () => {
+  const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  afterEach(() => vi.restoreAllMocks());
+  it('maps decoded text per id and keeps the vocab piece', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(json(200, { model: 'm', pieces: [{ id: 785, piece: 'The', text: 'The' }, { id: 3974, piece: 'Ġquick', text: ' quick' }] }));
+    const out = await piecesFor([785, 3974], 'm');
+    expect(out.ok).toBe(true);
+    expect(out.tokens[1]).toMatchObject({ id: 3974, piece: ' quick', vocab: 'Ġquick', special: false });
+  });
+  it('falls back to IDs only on pieces_unavailable', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(json(503, { error: { message: 'x', type: 'x', code: 'pieces_unavailable' } }));
+    const out = await piecesFor([1, 2], undefined);
+    expect(out).toEqual({ ok: false, tokens: [{ id: 1, piece: null, special: false }, { id: 2, piece: null, special: false }] });
   });
 });

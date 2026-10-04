@@ -1,7 +1,7 @@
 /** Wizard steps 3–5 (docs/ui/04 §4–6): use case with the preset diff, first model, start. */
 import { useEffect, useState } from 'preact/hooks';
 import { useLocation } from 'wouter-preact';
-import type { InstalledModels } from '../../api/models';
+import type { HfWhoami, InstalledModels } from '../../api/models';
 import { api } from '../../api/client';
 import { Banner } from '../../components/Banner';
 import { Button } from '../../components/Button';
@@ -10,6 +10,8 @@ import { CopyButton } from '../../components/CopyButton';
 import { KeyValue } from '../../components/KeyValue';
 import { LogPane } from '../../components/LogPane';
 import { ProgressBar } from '../../components/ProgressBar';
+import { Sheet } from '../../components/Sheet';
+import { TextInput } from '../../components/inputs';
 import { Empty, LoadError, Loading } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
 import { Table } from '../../components/Table';
@@ -120,6 +122,11 @@ export function StepModel() {
   const ids = installed.data?.models.map((m) => m.id) ?? [];
   const rec = recommendation(presets.data, progress.value.preset, catalog.data, ids);
   const [busy, setBusy] = useState<string | null>(null);
+  const [tokenSheet, setTokenSheet] = useState(false);
+  // A gated or private repo (docs/ui/04 §5): offer the token field here so the wizard is not left.
+  const gated = downloads.value.find(
+    (d) => d.state === 'failed' && (d.error?.code === 'gated' || d.error?.action === 'add_hf_token') && (d.id === progress.value.downloadId || d.model === progress.value.model),
+  );
   async function download(model: string, languageOnly: boolean) {
     setBusy(model);
     try {
@@ -192,10 +199,100 @@ export function StepModel() {
               {t('welcome.model.browse')} ↗
             </a>
           )}
+          {gated && (
+            <Banner
+              tone="warn"
+              title={t('welcome.model.gated')}
+              actions={
+                <Button size="s" variant="solid" onClick={() => setTokenSheet(true)}>
+                  {t('welcome.model.add_token')}
+                </Button>
+              }
+            >
+              <span class="mono">{gated.model}</span>
+            </Banner>
+          )}
           {progress.value.downloadId && <DownloadsPanel installedIds={new Set(ids)} />}
+          <HfTokenSheet
+            open={tokenSheet}
+            onClose={() => setTokenSheet(false)}
+            onRetry={
+              gated
+                ? () => {
+                    setTokenSheet(false);
+                    void download(gated.model, gated.language_only);
+                  }
+                : undefined
+            }
+          />
         </>
       )}
     </StepLayout>
+  );
+}
+
+/** The Hugging Face token field in a sheet (docs/ui/04 §5): status from `GET /hf/whoami`, save the override, test it. */
+export function HfTokenSheet({ open, onClose, onRetry }: { open: boolean; onClose: () => void; onRetry?: (() => void) | undefined }) {
+  const who = useApi((s) => api.get<HfWhoami>('/hf/whoami', { use: 'active' }, s), [open], open);
+  const [token, setToken] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<HfWhoami | null>(null);
+  const status = result ?? who.data;
+  async function save() {
+    setBusy(true);
+    try {
+      await api.put('/settings/secrets/hf-token', { token });
+      setToken('');
+      setResult(await api.get<HfWhoami>('/hf/whoami', { use: 'override' }));
+    } catch (err) {
+      toastError(t('welcome.token.failed'), err);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Sheet
+      open={open}
+      title={t('welcome.token.title')}
+      onClose={onClose}
+      busy={busy}
+      footer={
+        <>
+          <Button variant="text" onClick={onClose}>
+            {t('common.close')}
+          </Button>
+          {onRetry && (
+            <Button variant="accent" disabled={status?.status !== 'ok'} onClick={onRetry}>
+              {t('welcome.token.retry')}
+            </Button>
+          )}
+        </>
+      }
+    >
+      <div class="stack">
+        <p class="body">{t('welcome.token.lead')}</p>
+        {status && (
+          <p class={status.status === 'ok' ? 'body' : 'field-error'} role="status" data-testid="whoami">
+            {status.status === 'ok'
+              ? t('welcome.token.ok', { user: status.user ?? '—', source: status.source })
+              : t(`welcome.token.${status.status}` as 'welcome.token.no_token', { message: status.message ?? '' })}
+          </p>
+        )}
+        <label class="stack">
+          <span class="label">{t('welcome.token.field')}</span>
+          <TextInput type="password" autocomplete="off" class="mono" value={token} onChange={setToken} placeholder="hf_…" />
+        </label>
+        <div class="cluster">
+          <Button variant="solid" disabled={!token.trim()} loading={busy} onClick={() => void save()}>
+            {t('welcome.token.save')}
+          </Button>
+          <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener noreferrer">
+            {t('welcome.token.create')} ↗
+          </a>
+        </div>
+        <p class="meta">{t('welcome.token.keychain')}</p>
+      </div>
+    </Sheet>
   );
 }
 

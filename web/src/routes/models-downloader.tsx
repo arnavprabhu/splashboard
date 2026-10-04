@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { Link, useSearchParams } from "wouter-preact";
-import type { CatalogEntry, HfTokenTestOut, InspectResult, SearchResult, SystemInfo, VariantOut } from "../api/models";
+import type { CatalogEntry, HfWhoami, InspectResult, SearchResult, SystemInfo, VariantOut } from "../api/models";
 import { api, ApiError } from "../api/client";
 import { Banner } from "../components/Banner";
 import { Button, ExternalLink } from "../components/Button";
@@ -19,7 +19,7 @@ import { useApi } from "../lib/use-api";
 import { engine } from "../store";
 import { t } from "../strings/downloader";
 import "../styles/pages/models.css";
-import { getCatalog, getStorage, inspectModel, loadEngine, postDownload, searchHub, testHfToken, type SearchSort } from "./models/api";
+import { getCatalog, getStorage, inspectModel, loadEngine, postDownload, searchHub, whoami, type SearchSort } from "./models/api";
 import { CompatTag, FitTag, type CompatState } from "./models/bits";
 import { DownloadsPanel } from "./models/DownloadsPanel";
 import { useDownloadsPoll, useDrawerParam, useInstalled, useModelsTitle } from "./models/hooks";
@@ -68,11 +68,12 @@ export default function Downloader() {
     );
   const system = useApi((s) => api.get<SystemInfo>("/system", undefined, s));
   const storage = useApi((s) => getStorage(s));
-  const token = useApi<HfTokenTestOut>(() => testHfToken());
-  const tokenState = token.data
-    ? token.data.ok && token.data.source !== "none"
-      ? t(`downloader.token.${token.data.source === "override" ? "override" : token.data.source === "env" ? "env" : "hf_login"}`, { user: token.data.user ?? "—" })
-      : t("downloader.token.none")
+  const token = useApi<HfWhoami>((sig) => whoami(sig));
+  const who = token.data;
+  const tokenState = who
+    ? who.status === "ok"
+      ? t(`downloader.token.${who.source === "override" ? "override" : who.source === "env" ? "env" : "hf_login"}`, { user: who.user ?? "—" })
+      : t(`downloader.token.${who.status}`)
     : null;
   const free = storage.data?.free_bytes ?? null;
   const s = system.data;
@@ -89,7 +90,7 @@ export default function Downloader() {
             {tokenState && (
               <span>
                 {t("downloader.token", { state: tokenState })}
-                {token.data && token.data.source === "none" && (
+                {who && (who.status === "no_token" || who.status === "rejected") && (
                   <>
                     {" · "}
                     <Link href="/settings/hf">{t("downloader.token_settings")} ↗</Link>
@@ -286,8 +287,14 @@ function ById({ initial, free, memory, installedIds }: { initial: string; free: 
   const variants = (result?.variants ?? []).filter((x) => !isProjector(x.name));
   const chosen: VariantOut | undefined = variants.find((x) => x.name === variant);
   const legacy = isLegacyId(repo) || result?.format === "legacy";
-  const size = chosen?.size_bytes ?? null;
-  const disk = diskCheck(size, free);
+  // The manager's plan (api.md §7, S3-25) is for the requested/recommended variant; another pick falls back to its size.
+  const lang = languageOnly || result?.badge === "text_only";
+  const rawPlan = lang ? result?.language_only_plan : result?.download_plan;
+  const plan = rawPlan && (!variants.length || rawPlan.variant === variant) ? rawPlan : null;
+  const size = plan ? plan.remaining_bytes : (chosen?.size_bytes ?? null);
+  const disk = plan
+    ? { ok: plan.fits_on_disk, neededBytes: plan.remaining_bytes + plan.margin_bytes, freeBytes: plan.free_bytes ?? free }
+    : diskCheck(size, free);
   const target = variants.length ? variantId(repo, variant) : (result?.id ?? id.trim());
   const isInstalled = installedIds.has(target);
 
@@ -367,9 +374,31 @@ function ById({ initial, free, memory, installedIds }: { initial: string; free: 
                   )}
                 </Disclosure>
                 {result.badge === "text_only" && <p class="meta">{t("downloader.text_forced")}</p>}
-                <p class="meta tnum">
-                  {size !== null ? t("downloader.size_free", { size: formatBytes(size), free: free === null ? DASH : formatBytes(free) }) : null}
-                </p>
+                {plan ? (
+                  <div class="stack dlr-plan" data-testid="download-plan">
+                    <ul class="dlr-plan-files">
+                      {(plan.files ?? []).map((f) => (
+                        <li key={`${f.repo_id}/${f.name}`} class="cluster">
+                          <span class="mono">{f.name}</span>
+                          <span class="meta tnum">{f.bytes != null ? formatBytes(f.bytes) : DASH}</span>
+                          {f.present && <span class="meta">{t("downloader.plan_present")}</span>}
+                          {f.repo_id !== result.repo_id && <span class="meta mono">{f.repo_id}</span>}
+                        </li>
+                      ))}
+                    </ul>
+                    <p class="meta tnum">
+                      {t("downloader.plan_line", {
+                        remaining: formatBytes(plan.remaining_bytes),
+                        total: formatBytes(plan.total_bytes),
+                        free: plan.free_bytes != null ? formatBytes(plan.free_bytes) : DASH,
+                      })}
+                    </p>
+                  </div>
+                ) : (
+                  <p class="meta tnum">
+                    {size !== null ? t("downloader.size_free", { size: formatBytes(size), free: free === null ? DASH : formatBytes(free) }) : null}
+                  </p>
+                )}
                 {!disk.ok && (
                   <Banner tone="warn" actions={<Link href="/settings/storage">{t("models.disk.storage_settings")} ↗</Link>}>
                     {t("downloader.no_space", { need: formatBytes(disk.neededBytes), free: formatBytes(disk.freeBytes ?? 0) })}

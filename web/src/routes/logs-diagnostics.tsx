@@ -16,6 +16,7 @@ import {
   Loading,
   LogPane,
   PageHeader,
+  Sheet,
   Section,
   SubNav,
   Table,
@@ -254,6 +255,8 @@ function TracesBand({ traces, error, onRetry }: { traces: TraceList | null; erro
   const [lines, setLines] = useState<LogPaneLine[] | null>(null);
   const [exit, setExit] = useState<number | null>(null);
   const [replaying, setReplaying] = useState(false);
+  const [replayName, setReplayName] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<string | null>(null);
   const ctrl = useRef<AbortController | null>(null);
   useEffect(() => () => ctrl.current?.abort(), []);
 
@@ -264,6 +267,7 @@ function TracesBand({ traces, error, onRetry }: { traces: TraceList | null; erro
     setLines([]);
     setExit(null);
     setReplaying(true);
+    setReplayName(name);
     let n = 0;
     try {
       for await (const msg of postStream<{ text?: string; level?: string; code?: number }>(
@@ -286,6 +290,19 @@ function TracesBand({ traces, error, onRetry }: { traces: TraceList | null; erro
         setReplaying(false);
       }
     }
+  }
+  /** Stop: the manager kills the replay and the stream ends with `exit {code: -15}` (api.md §12.2). */
+  async function stopReplay() {
+    if (!replayName) return;
+    try {
+      await api.post(`/traces/${encodeURIComponent(replayName)}/replay/cancel`);
+    } catch {
+      ctrl.current?.abort();
+    }
+  }
+  function askReplay(name: string) {
+    if (engine.value?.model && engine.value.state !== "stopped") setConfirm(name);
+    else void replay(name);
   }
   async function reveal(name: string) {
     try {
@@ -324,7 +341,7 @@ function TracesBand({ traces, error, onRetry }: { traces: TraceList | null; erro
                   label: t("logs.diag.traces_actions"),
                   render: (r) => (
                     <span class="cluster nowrap">
-                      <Button size="s" disabled={replaying} onClick={() => void replay(r.name)}>
+                      <Button size="s" disabled={replaying} onClick={() => askReplay(r.name)}>
                         {t("logs.diag.replay")}
                       </Button>
                       <Button size="s" variant="text" onClick={() => void reveal(r.name)}>
@@ -348,7 +365,7 @@ function TracesBand({ traces, error, onRetry }: { traces: TraceList | null; erro
                 <div class="cluster">
                   {exit !== null && <span class="meta">{t("logs.diag.replay_exit", { code: exit })}</span>}
                   {replaying && (
-                    <Button size="s" onClick={() => ctrl.current?.abort()}>
+                    <Button size="s" onClick={() => void stopReplay()}>
                       {t("logs.diag.replay_stop")}
                     </Button>
                   )}
@@ -359,6 +376,43 @@ function TracesBand({ traces, error, onRetry }: { traces: TraceList | null; erro
         )}
         <p class="meta">{t("logs.diag.traces_footer")}</p>
       </div>
+      <Sheet
+        open={!!confirm}
+        title={t("logs.diag.replay_confirm_title")}
+        role="alertdialog"
+        onClose={() => setConfirm(null)}
+        footer={
+          <>
+            <Button variant="text" onClick={() => setConfirm(null)}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              variant="solid"
+              onClick={() => {
+                const name = confirm!;
+                setConfirm(null);
+                void api
+                  .post("/engine/stop")
+                  .then(() => replay(name))
+                  .catch((e) => toastError(t("logs.diag.replay_failed"), e));
+              }}
+            >
+              {t("logs.diag.replay_stop_engine")}
+            </Button>
+            <Button
+              onClick={() => {
+                const name = confirm!;
+                setConfirm(null);
+                void replay(name);
+              }}
+            >
+              {t("logs.diag.replay_anyway")}
+            </Button>
+          </>
+        }
+      >
+        <p class="body">{t("logs.diag.replay_confirm_body")}</p>
+      </Sheet>
       <ConfirmSheet
         open={!!deleting}
         title={t("logs.diag.delete_title")}
@@ -434,6 +488,9 @@ function DoctorBand() {
 
 function PathsBand() {
   const storage = useApi((s) => api.get<StorageInfo>("/storage", undefined, s));
+  // Permission modes come from the doctor's `permissions` check (~/.splash 0700, settings.json 0600).
+  const doctor = useApi((s) => api.get<DoctorReport>("/doctor", undefined, s));
+  const perm = doctor.data?.checks.find((c) => c.id === "permissions") ?? null;
   const reveal = (target: string) =>
     void api.post("/system/reveal", { target }).catch((e) => toastError(t("logs.diag.reveal_failed"), e));
   const s = storage.data;
@@ -464,6 +521,13 @@ function PathsBand() {
             row("models", t("logs.diag.path.models"), s.models_dir, s.models_bytes, "models_dir"),
             row("cache", t("logs.diag.path.cache"), s.cache_dir, s.cache_bytes, "cache_dir"),
             row("logs", t("logs.diag.path.logs"), "~/.splash/logs", null, "logs_dir"),
+            {
+              key: "perm",
+              label: t("logs.diag.path.permissions"),
+              value: perm ? `${DOCTOR_GLYPH[perm.status]} ${perm.message}` : doctor.error ? DASH : "…",
+              meta: perm?.fix ?? undefined,
+              accent: perm?.status === "fail",
+            },
           ]}
         />
       )}

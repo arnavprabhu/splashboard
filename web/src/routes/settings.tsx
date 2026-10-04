@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { Link, Redirect, useLocation } from "wouter-preact";
 import type { SchemaField } from "../api/models";
+import { ApiError } from "../api/client";
 import {
   Button,
   ConfirmSheet,
@@ -8,6 +9,7 @@ import {
   LoadError,
   PageHeader,
   SearchInput,
+  Sheet,
   Section,
   Select,
   Toggle,
@@ -143,6 +145,67 @@ function CommandPreview() {
   );
 }
 
+/** "Reset all settings" (docs/ui/05 §3.16, G3): typed RESET, then `POST /settings/reset`; lists what was kept. */
+function ResetSettings({ form }: { form: SettingsForm }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busyEngine, setBusyEngine] = useState(false);
+  const [kept, setKept] = useState<string[] | null>(null);
+  async function run(force: boolean) {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await settingsApi.resetSettings(force);
+      setKept(res.kept ?? []);
+      setBusyEngine(false);
+      await form.load(true);
+      toast(res.engine_restarted ? t("settings.reset.done_restart") : t("settings.reset.done"));
+    } catch (err) {
+      if (err instanceof ApiError && err.code === "model_switch_busy") setBusyEngine(true);
+      else setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div class="field" data-key="settings.reset" id="settings.reset">
+      <span class="label">{t("settings.reset.title")}</span>
+      <p class="field-help">{t("settings.reset.help")}</p>
+      <div class="cluster">
+        <Button size="s" onClick={() => (setKept(null), setError(null), setBusyEngine(false), setOpen(true))}>
+          {t("settings.reset.button")}
+        </Button>
+      </div>
+      {kept === null ? (
+        <ConfirmSheet
+          open={open}
+          title={t("settings.reset.sheet_title")}
+          confirmLabel={busyEngine ? t("settings.reset.force") : t("settings.reset.button")}
+          typedWord="RESET"
+          important={busyEngine}
+          busy={busy}
+          error={error}
+          onClose={() => setOpen(false)}
+          onConfirm={() => run(busyEngine)}
+        >
+          <p class="body">{t("settings.reset.body")}</p>
+          {busyEngine && <p class="field-error">{t("settings.reset.busy")}</p>}
+        </ConfirmSheet>
+      ) : (
+        <Sheet open={open} title={t("settings.reset.result_title")} onClose={() => setOpen(false)} footer={<Button variant="solid" onClick={() => setOpen(false)}>{t("common.close")}</Button>}>
+          <p class="body">{t("settings.reset.kept")}</p>
+          <ul class="mono" data-testid="reset-kept">
+            {kept.map((k) => (
+              <li key={k}>{k}</li>
+            ))}
+          </ul>
+        </Sheet>
+      )}
+    </div>
+  );
+}
+
 function SectionExtras({ slug, form }: { slug: SettingsSlug; form: SettingsForm }) {
   switch (slug) {
     case "security":
@@ -157,7 +220,12 @@ function SectionExtras({ slug, form }: { slug: SettingsSlug; form: SettingsForm 
         </div>
       );
     case "advanced":
-      return <CommandPreview />;
+      return (
+        <>
+          <CommandPreview />
+          <ResetSettings form={form} />
+        </>
+      );
     case "data":
       return <DataPrivacy />;
     case "about":

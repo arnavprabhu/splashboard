@@ -30,3 +30,4 @@
 .dlr-entry-meta { overflow-wrap: anywhere; margin: 0; }
 .dlr-id { flex: 1 1 320px; min-width: 0; }
 .dlr-result { border-top: var(--rule-minor) solid var(--rule); padding-top: 12px; }
+.dlr-plan-files { list-style: none; margin: 0; padding: 0; } .dlr-plan-files > li { gap: 6px 12px; border-bottom: var(--rule-minor) solid var(--rule); padding: 4px 0; overflow-wrap: anywhere; }

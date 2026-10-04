@@ -4,6 +4,7 @@ import {
   clock,
   desktopView,
   entryFile,
+  gatewayModels,
   isLoopbackHost,
   launchCommand,
   normaliseSlots,
@@ -12,6 +13,8 @@ import {
   sdkSnippet,
   slotsSwitchModels,
   snippetOrigin,
+  stepViews,
+  stepsFor,
   tauriOriginState,
   withTauriOrigin,
 } from '../src/routes/integrations/logic';
@@ -105,5 +108,30 @@ describe('desktop rows', () => {
     const roots = new Map([[`${MODEL}:no-think`, MODEL]]);
     expect(slotsSwitchModels({ ...slots, 'claude-sonnet-5': `${MODEL}:no-think` }, MODEL, roots)).toBe(false);
     expect(slotsSwitchModels({ ...slots, 'claude-sonnet-5': 'other/model' }, MODEL, roots)).toBe(true);
+  });
+});
+
+describe('desktop connect steps (5b1c9ad integration.state.step)', () => {
+  it('lists the manager order; only Claude starts the gateway', () => {
+    expect(stepsFor('claude-desktop', 'connect')).toEqual(['quitting_app', 'backing_up', 'starting_gateway', 'writing_config', 'opening_app']);
+    expect(stepsFor('codex-app', 'connect')).toEqual(['quitting_app', 'backing_up', 'writing_config', 'opening_app']);
+    expect(stepsFor('codex-app', 'restore')).toEqual(['quitting_app', 'restoring_files', 'opening_app']);
+  });
+  it('marks steps before the current one done, and all done at the end', () => {
+    const steps = stepsFor('codex-app', 'connect');
+    expect(stepViews(steps, 'writing_config')).toEqual(['done', 'done', 'current', 'pending']);
+    expect(stepViews(steps, 'done')).toEqual(['done', 'done', 'done', 'done']);
+    expect(stepViews(steps, null)).toEqual(['pending', 'pending', 'pending', 'pending']);
+  });
+});
+
+describe('gateway /v1/models preview', () => {
+  it('mirrors the gateway: one entry per slot, target or active model as display name', () => {
+    const out = gatewayModels({ 'claude-sonnet-5': `${MODEL}:no-think`, 'claude-opus-5': '' }, MODEL) as { data: Array<Record<string, unknown>> };
+    expect(out.data.map((d) => d.id)).toEqual(['claude-sonnet-5', 'claude-opus-5']);
+    expect(out.data[0]).toMatchObject({ display_name: `${MODEL}:no-think`, anthropic_family_tier: 'sonnet', type: 'model' });
+    expect(out.data[1]!.display_name).toBe(MODEL);
+    expect(out).toMatchObject({ first_id: 'claude-sonnet-5', last_id: 'claude-opus-5', has_more: false });
+    expect((gatewayModels({ 'claude-haiku-5': '' }, null) as { data: Array<Record<string, unknown>> }).data[0]!.display_name).toBe('Splash');
   });
 });

@@ -1,5 +1,6 @@
 import { useState } from "preact/hooks";
-import { request } from "../api/client";
+import { ApiError, api, request } from "../api/client";
+import type { TokenPieces } from "../api/models";
 import { Banner } from "../components/Banner";
 import { Button } from "../components/Button";
 import { SegmentedControl } from "../components/controls";
@@ -16,7 +17,7 @@ import "../styles/pages/tools.css";
 import { REASONING_EFFORTS } from "./chat/logic";
 import { ToolPage, engineReady } from "./tools";
 import { JsonEditor, jsonProblem } from "./tools/JsonEditor";
-import { countSpecial, reconstructPieces, splitSpecial, utf8Length, visibleWhitespace, type TokenPiece } from "./tools/tokens";
+import { countSpecial, isSpecialText, splitSpecial, utf8Length, visibleWhitespace, type TokenPiece } from "./tools/tokens";
 
 type Tab = "tokenize" | "template" | "count";
 const TABS: readonly Tab[] = ["tokenize", "template", "count"];
@@ -48,6 +49,28 @@ export default function Tokenizer() {
 const tokenizeFn = (model: string | undefined) => async (content: string, add_special: boolean) =>
   (await request<{ tokens: number[] }>("/tokenize", { body: { model, content, add_special } })).tokens;
 
+/**
+ * Pieces from the manager (`POST /tokenizer/pieces`, S3-20: the model's own tokenizer under Splash's
+ * Python); `503 pieces_unavailable` or any failure keeps the IDs only (SPEC Q6 fallback).
+ */
+export async function piecesFor(ids: number[], model: string | undefined): Promise<{ ok: boolean; tokens: TokenPiece[] }> {
+  try {
+    const res = await api.post<TokenPieces>("/tokenizer/pieces", { ids, ...(model ? { model } : {}) });
+    const byIndex = res.pieces;
+    return {
+      ok: true,
+      tokens: ids.map((id, i) => {
+        const p = byIndex[i]?.id === id ? byIndex[i] : byIndex.find((x) => x.id === id);
+        const text = p?.text ?? null;
+        return { id, piece: text, special: isSpecialText(text ?? "") || isSpecialText(p?.piece ?? ""), vocab: p?.piece ?? null };
+      }),
+    };
+  } catch (err) {
+    if (err instanceof ApiError && err.code !== "pieces_unavailable" && err.status !== 503) throw err;
+    return { ok: false, tokens: ids.map((id) => ({ id, piece: null, special: false })) };
+  }
+}
+
 function TokenizeTab({ model, ready }: { model: string | undefined; ready: boolean }) {
   const [text, setText] = useState("The quick brown fox jumps over the lazy dog.");
   const [special, setSpecial] = useState(false);
@@ -61,9 +84,8 @@ function TokenizeTab({ model, ready }: { model: string | undefined; ready: boole
     setBusy(true);
     setError(null);
     try {
-      const tok = tokenizeFn(model);
-      const ids = await tok(text, special);
-      const res = await reconstructPieces(text, ids, special, tok);
+      const ids = await tokenizeFn(model)(text, special);
+      const res = await piecesFor(ids, model);
       setTokens(res.tokens);
       setPiecesOk(res.ok);
       if (!res.ok) setView("ids");
@@ -127,7 +149,7 @@ function TokenizeTab({ model, ready }: { model: string | undefined; ready: boole
                     class="token-piece"
                     data-special={tk.special ? "true" : undefined}
                     data-alt={i % 2 === 1 ? "true" : undefined}
-                    title={t("tools.tok.chip_tip", { id: tk.id, bytes: tk.piece ? utf8Length(tk.piece) : "—" })}
+                    title={`${t("tools.tok.chip_tip", { id: tk.id, bytes: tk.piece ? utf8Length(tk.piece) : "—" })}${(tk as TokenPiece & { vocab?: string | null }).vocab ? ` · ${(tk as TokenPiece & { vocab?: string | null }).vocab}` : ""}`}
                     onClick={() => void copyText(String(tk.id)).then((ok) => ok && toast(t("tools.tok.copied_id", { id: tk.id })))}
                   >
                     {showPieces ? (

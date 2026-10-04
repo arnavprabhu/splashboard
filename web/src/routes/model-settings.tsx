@@ -1,6 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 import { Link, useSearchParams } from "wouter-preact";
-import type { ProfileOut, ProfilesView } from "../api/models";
+import type { ModelFingerprints, ProfileOut, ProfilesView } from "../api/models";
 import { Button } from "../components/Button";
 import { ConfirmSheet } from "../components/ConfirmSheet";
 import { SegmentedControl } from "../components/controls";
@@ -14,7 +14,7 @@ import { StatusChip } from "../components/StatusChip";
 import { SubNav } from "../components/SubNav";
 import { Table } from "../components/Table";
 import { toast, toastError } from "../components/Toast";
-import { DASH, formatRelativeTime } from "../lib/format";
+import { DASH, formatRelativeTime, formatTokens } from "../lib/format";
 import { modelIdFromParams } from "../lib/model-id";
 import { useApi } from "../lib/use-api";
 import { useTitle } from "../lib/title";
@@ -128,6 +128,7 @@ export default function ModelSettingsPage({ params = {} }: { params?: Record<str
                   ),
                 },
                 { key: "last", label: t("settings.model.i.last"), value: detail.data.last_used_at ? formatRelativeTime(detail.data.last_used_at) : t("settings.model.i.load_once") },
+                ...fingerprintRows(detail.data.fingerprints ?? null),
               ]}
             />
           )}
@@ -136,6 +137,20 @@ export default function ModelSettingsPage({ params = {} }: { params?: Record<str
       <SettingsSave form={form} saveText={isActive && form.plan.value.restart ? t("settings.model.save_reload") : undefined} />
     </>
   );
+}
+
+/** Identity from this model's last load (`GET /models/{id}.fingerprints`, S3-21); "load once" before that. */
+export function fingerprintRows(f: ModelFingerprints | null) {
+  const v = (x: string | null | undefined) => (x ? <span class="mono ms-path">{x}</span> : t("settings.model.i.load_once"));
+  const kv = f?.kv_format ? `${f.kv_format}${f.kv_quantization ? ` / ${f.kv_quantization}` : ""}` : null;
+  return [
+    { key: "build", label: t("settings.model.i.build"), value: v(f?.build_id) },
+    { key: "layout", label: t("settings.model.i.layout"), value: v(f?.loaded_model_layout_sha256) },
+    { key: "target", label: t("settings.model.i.target"), value: v(f?.target_model_sha256) },
+    { key: "kv", label: t("settings.model.i.kv"), value: v(kv) },
+    { key: "ctx", label: t("settings.model.i.context"), value: f?.max_context ? formatTokens(f.max_context) : t("settings.model.i.load_once") },
+    { key: "recorded", label: t("settings.model.i.recorded"), value: f?.recorded_at ? formatRelativeTime(f.recorded_at) : t("settings.model.i.load_once") },
+  ];
 }
 
 function SamplingDefaults({ id, view, error, onSaved }: { id: string; view: ProfilesView | null; error: unknown; onSaved: () => void }) {

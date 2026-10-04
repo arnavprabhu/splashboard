@@ -119,10 +119,37 @@ export const INTEGRATIONS = {
     { name: 'pi', label: 'Pi', installed: true, path: '/usr/local/bin/pi', version: '0.9.3', install_url: 'https://pi.dev/', command: 'splash launch pi', changes: { env: {}, args: ['--provider', 'splash'], files: ['~/.pi/agent/models.json'], notes: [] }, entries: ['splash-8000'], last_launched_at: null },
   ],
   desktop: [
-    { name: 'claude-desktop', label: 'Claude Desktop', detected: true, app_path: '/Applications/Claude.app', version: '1.4.0', untested_version: false, running: true, state: 'not_connected', connected_at: null, warning: '' },
-    { name: 'codex-app', label: 'Codex app', detected: true, app_path: '/Applications/Codex.app', version: '1.2026.0925', untested_version: true, running: false, state: 'not_connected', connected_at: null, warning: '' },
+    { name: 'claude-desktop', label: 'Claude Desktop', detected: true, app_path: '/Applications/Claude.app', version: '1.4.0', untested_version: false, running: true, state: 'not_connected', connected_at: null, warning: '', step: null, message: null },
+    { name: 'codex-app', label: 'Codex app', detected: true, app_path: '/Applications/Codex.app', version: '1.2026.0925', untested_version: true, running: false, state: 'not_connected', connected_at: null, warning: '', step: null, message: null },
   ],
   unclean_shutdown: false,
+};
+
+/** `GET /integrations/claude/print` (docs/api.md §12.1 LaunchPrint). */
+export const PRINT_CLAUDE = {
+  client: 'claude',
+  model: 'mlx-community/Qwen3.6-35B-A3B-4bit',
+  exact: true,
+  env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8000', ANTHROPIC_AUTH_TOKEN: '••••', ANTHROPIC_MODEL: 'mlx-community/Qwen3.6-35B-A3B-4bit' },
+  secret_env: ['ANTHROPIC_AUTH_TOKEN'],
+  removed_env: ['ANTHROPIC_API_KEY'],
+  args: ['--disallowedTools', 'WebSearch'],
+  command: 'claude --disallowedTools WebSearch --model mlx-community/Qwen3.6-35B-A3B-4bit --permission-mode default',
+  files: [],
+  notes: [],
+};
+
+export const PRINT_HERMES = {
+  client: 'hermes',
+  model: 'mlx-community/Qwen3.6-35B-A3B-4bit',
+  exact: false,
+  env: { OPENAI_BASE_URL: 'http://127.0.0.1:8000/v1' },
+  secret_env: [],
+  removed_env: [],
+  args: [],
+  command: null,
+  files: [{ path: '~/.hermes/profiles/splash/config.yaml', change: 'model.default = mlx-community/Qwen3.6-35B-A3B-4bit' }],
+  notes: ['A dedicated profile; your default profile is untouched.'],
 };
 
 /** One saved conversation (docs/api.md §8). */
@@ -209,6 +236,22 @@ export async function mockManager(page: Page, opts: MockOptions = {}): Promise<s
     if (path === '/settings') return route.fulfill({ json: SETTINGS });
     if (path === '/alerts') return route.fulfill({ json: { alerts: opts.alerts ?? [] } });
     if (path.endsWith('/dismiss') || path === '/engine/restart') return route.fulfill({ json: { ok: true } });
+    // 5b1c9ad routes: real shapes by default, so pages never see the 501 for them.
+    if (path === '/settings/secret/meta') {
+      return route.fulfill({ json: { name: url.searchParams.get('name'), set: false, prefix: null, last4: null, masked: null, updated_at: null } });
+    }
+    if (path === '/hf/whoami') {
+      return route.fulfill({ json: { status: 'no_token', source: 'none', user: null, orgs: [], http_status: null, message: null } });
+    }
+    const print = /^\/integrations\/([^/]+)\/print$/.exec(path);
+    if (print) {
+      const base = print[1] === 'hermes' || print[1] === 'pi' ? PRINT_HERMES : PRINT_CLAUDE;
+      return route.fulfill({ json: { ...base, client: print[1], model: url.searchParams.get('model') ?? base.model } });
+    }
+    if (path.endsWith('/reveal-backup')) {
+      return route.fulfill({ status: 404, json: { error: { message: 'No backup yet', type: 'not_found', code: 'no_backup' } } });
+    }
+    if (/^\/integrations\/[^/]+\/open$/.test(path)) return route.fulfill({ json: { ok: true, path: '/Applications/App.app' } });
     if (path === '/usage/summary') {
       return usage ? route.fulfill({ json: usage.summary }) : route.fulfill({ status: 501, json: NOT_IMPLEMENTED });
     }

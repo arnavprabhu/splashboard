@@ -10,7 +10,7 @@ import type {
   DiskUsage,
   DownloadItem,
   EngineView,
-  HfTokenTestOut,
+  HfWhoami,
   InspectResult,
   InstalledModel,
   JobAccepted,
@@ -175,6 +175,7 @@ export function getStorage(signal?: AbortSignal): Promise<StorageInfo> {
   return api.get<StorageInfo>('/storage', undefined, signal);
 }
 
-export function testHfToken(): Promise<HfTokenTestOut> {
-  return api.post<HfTokenTestOut>('/settings/secrets/hf-token/test', {});
+/** Which token the manager would use and who it belongs to (read-only; nothing is saved). */
+export function whoami(signal?: AbortSignal): Promise<HfWhoami> {
+  return api.get<HfWhoami>('/hf/whoami', { use: 'active' }, signal);
 }

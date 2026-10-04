@@ -41,3 +41,22 @@ test.describe('pages against the real manager', () => {
     await expect(page.getByText('Top P must be between 0 and 1.')).toBeVisible();
   });
 });
+
+test.describe('5b1c9ad routes against the real manager', () => {
+  test('print and secret meta answer in the shapes the pages read', async ({ page }) => {
+    const print = await (await page.request.get('/api/admin/integrations/hermes/print?model=mlx-community/Qwen3.6-35B-A3B-4bit')).json();
+    expect(print).toMatchObject({ client: 'hermes', exact: false });
+    expect(Array.isArray(print.files)).toBe(true);
+    const claude = await (await page.request.get('/api/admin/integrations/claude/print?model=mlx-community/Qwen3.6-35B-A3B-4bit')).json();
+    expect(typeof claude.exact).toBe('boolean'); // exact only when the engine's install/clients.py is reachable
+    expect(Array.isArray(claude.secret_env)).toBe(true);
+    const meta = await (await page.request.get('/api/admin/settings/secret/meta?name=hf_token')).json();
+    expect(meta).toMatchObject({ name: 'hf_token' });
+    expect('masked' in meta).toBe(true);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto('/admin/integrations');
+    const hermes = page.locator('.integration-row', { has: page.getByRole('heading', { name: /Hermes/ }) });
+    await hermes.getByText('What this changes').click();
+    await expect(hermes.getByText('Static description')).toBeVisible();
+  });
+});

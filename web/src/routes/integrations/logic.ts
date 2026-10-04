@@ -264,3 +264,43 @@ export const DESKTOP_FILES: Record<DesktopIntegration['name'], ReadonlyArray<{ p
     { path: '~/.splash/integrations/state.json, backups/codex-app/<timestamp>/', change: 'integrations.files.backups' },
   ],
 };
+
+// ---------- connect / restore progress (api.md §12.1, `integration.state` step) ----------
+
+export type Step = NonNullable<DesktopIntegration['step']>;
+
+/** The order the manager reports steps in (api.md §12.1). */
+export function stepsFor(name: DesktopIntegration['name'], kind: 'connect' | 'restore'): Step[] {
+  if (kind === 'restore') return ['quitting_app', 'restoring_files', 'opening_app'];
+  return name === 'claude-desktop'
+    ? ['quitting_app', 'backing_up', 'starting_gateway', 'writing_config', 'opening_app']
+    : ['quitting_app', 'backing_up', 'writing_config', 'opening_app'];
+}
+
+export type StepView = 'done' | 'current' | 'pending' | 'failed';
+
+/** Each step's state given the step the manager last reported (`done`/`failed` end the sequence). */
+export function stepViews(steps: readonly Step[], current: Step | null | undefined): StepView[] {
+  if (current === 'done') return steps.map(() => 'done');
+  const i = current ? steps.indexOf(current) : -1;
+  return steps.map((_, k) => (i < 0 ? 'pending' : k < i ? 'done' : k === i ? 'current' : 'pending'));
+}
+
+/**
+ * What the Claude Desktop gateway answers on `/v1/models` for the current slots
+ * (manager/splash_gui/integrations/service.py `models`): one entry per slot, named after its
+ * target, else the active model, else "Splash". Computed here because the gateway listens on
+ * its own loopback port without CORS, and only while connected.
+ */
+export function gatewayModels(slots: Slots, active: string | null): Record<string, unknown> {
+  const entries = Object.entries(slots).map(([slot, target]) => ({
+    id: slot,
+    type: 'model',
+    display_name: target || active || 'Splash',
+    created_at: '2026-10-03T00:00:00Z',
+    max_tokens: 262144,
+    anthropic_family_tier: slot.split('-')[1] ?? null,
+    is_family_default: true,
+  }));
+  return { data: entries, first_id: entries[0]?.id ?? null, last_id: entries[entries.length - 1]?.id ?? null, has_more: false };
+}

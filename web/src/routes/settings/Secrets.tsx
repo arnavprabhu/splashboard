@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import type { HfTokenTestOut } from '../../api/models';
 import { Button, ConfirmSheet, Field, Tag, TextInput, toast, toastError } from '../../components';
+import { useApi } from '../../lib/use-api';
 import { t } from '../../strings/settings';
 import { settingsApi } from './api';
 import type { SettingsForm } from './state';
@@ -14,6 +15,7 @@ export const REMASK_S = 30;
 
 export function ApiKeyField({ form }: { form: SettingsForm }) {
   const set = !!form.envelope.value?.secrets.api_key_set;
+  const meta = useApi((s) => settingsApi.secretMeta('api_key', s), [set, form.envelope.value]);
   const [shown, setShown] = useState<string | null>(null);
   const [once, setOnce] = useState(false);
   const [left, setLeft] = useState(0);
@@ -93,7 +95,7 @@ export function ApiKeyField({ form }: { form: SettingsForm }) {
             )}
           </div>
         ) : (
-          <p class="mono">{set ? '••••••••••••••••' : t('settings.secret.api_key_none')}</p>
+          <p class="mono" data-testid="api-key-masked">{set ? (meta.data?.masked ?? '••••') : t('settings.secret.api_key_none')}</p>
         )}
         <div class="cluster">
           {set ? (
@@ -144,6 +146,7 @@ export function ApiKeyField({ form }: { form: SettingsForm }) {
 
 export function HfTokenField({ form }: { form: SettingsForm }) {
   const secrets = form.envelope.value?.secrets;
+  const meta = useApi((s) => settingsApi.secretMeta('hf_token', s), [secrets?.hf_token_override_set], !!secrets?.hf_token_override_set);
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<HfTokenTestOut | null>(null);
@@ -165,6 +168,7 @@ export function HfTokenField({ form }: { form: SettingsForm }) {
           <p class="meta">
             {t(`settings.secret.hf_source.${source}` as 'settings.secret.hf_source.none')}
             {result?.ok && result.user ? ` (${result.user})` : ''}
+            {source === 'override' && meta.data?.masked ? <span class="mono"> · {meta.data.masked}</span> : null}
           </p>
           <div class="cluster">
             <TextInput

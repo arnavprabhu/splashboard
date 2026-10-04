@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { Link } from "wouter-preact";
-import { api, request } from "../api/client";
-import type { CliIntegration, DesktopIntegration, EntriesRemoved, Integrations } from "../api/models";
+import { ApiError, api, request } from "../api/client";
+import type { CliIntegration, DesktopIntegration, EntriesRemoved, Integrations, LaunchPrint } from "../api/models";
 import {
   Banner,
   Button,
@@ -12,6 +12,7 @@ import {
   ExternalLink,
   KeyValue,
   LoadError,
+  Loading,
   PageHeader,
   Section,
   Select,
@@ -38,6 +39,9 @@ import {
   TAURI_ORIGIN,
   clock,
   desktopView,
+  gatewayModels,
+  stepsFor,
+  stepViews,
   entryFile,
   isLoopbackHost,
   launchCommand,
@@ -50,6 +54,7 @@ import {
   withTauriOrigin,
   type SdkTab,
   type Slots,
+  type Step,
 } from "./integrations/logic";
 import { saveSettings } from "./welcome/api";
 
@@ -291,7 +296,6 @@ function CliRow({
       ? t("integrations.cli.installed", { version: cli.version })
       : t("integrations.cli.installed_unknown")
     : null;
-  const env = Object.entries(cli.changes.env ?? {});
   const kind = cli.name === "hermes" || cli.name === "pi" ? cli.name : null;
   return (
     <article class="integration-row stack" aria-labelledby={`cli-${cli.name}`}>
@@ -345,39 +349,7 @@ function CliRow({
           {t("integrations.cli.terminal_failed_body")}
         </Banner>
       )}
-      <Disclosure summary={t("integrations.cli.changes")} summaryClass="label">
-        <p class="body">{t(`integrations.cli.summary.${cli.name}` as "integrations.cli.summary.claude")}</p>
-        {env.length > 0 && (
-          <KeyValue
-            label={t("integrations.cli.env")}
-            items={env.map(([k, v]) => ({
-              key: k,
-              label: <span class="mono">{k}</span>,
-              value: <span class="mono">{v}</span>,
-            }))}
-          />
-        )}
-        <KeyValue
-          items={[
-            ...(cli.changes.args?.length
-              ? [{ key: "args", label: t("integrations.cli.args"), value: <span class="mono">{cli.changes.args.join(" ")}</span> }]
-              : []),
-            ...(cli.changes.files?.length
-              ? [{ key: "files", label: t("integrations.cli.files"), value: <span class="mono">{cli.changes.files.join(", ")}</span> }]
-              : []),
-            ...(kind ? [{ key: "backups", label: t("integrations.cli.backups"), value: <span class="mono">{BACKUP_DIR}</span> }] : []),
-          ]}
-        />
-        {(cli.changes.notes ?? []).map((n) => (
-          <p class="body" key={n}>
-            {n}
-          </p>
-        ))}
-        {isProfile && (
-          <Banner tone="info">{t("integrations.cli.profile_note", { name: cli.label })}</Banner>
-        )}
-        <p class="meta">{t("integrations.cli.source")}</p>
-      </Disclosure>
+      <ChangesPanel cli={cli} pick={pick} active={active} isProfile={isProfile} local={local} />
       {kind && (
         <ConfirmSheet
           open={removing !== null}
@@ -398,6 +370,101 @@ function CliRow({
         </ConfirmSheet>
       )}
     </article>
+  );
+}
+
+/** "What this changes" (docs/ui/09 §3.3) from `GET /integrations/{client}/print?model=`, fetched when opened. */
+function ChangesPanel({ cli, pick, active, isProfile, local }: { cli: CliIntegration; pick: string; active: string | null; isProfile: boolean; local: boolean }) {
+  const [open, setOpen] = useState(false);
+  const model = pick || active || undefined;
+  const print = useApi((s) => api.get<LaunchPrint>(`/integrations/${cli.name}/print`, model ? { model } : undefined, s), [cli.name, model], open);
+  const kind = cli.name === "hermes" || cli.name === "pi";
+  const p = print.data;
+  const env = Object.entries(p?.env ?? {});
+  return (
+    <details class="disclosure" open={open} onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
+      <summary class="label">
+        <span class="disclosure-glyph" aria-hidden="true">
+          ▸
+        </span>
+        {t("integrations.cli.changes")}
+      </summary>
+      <div class="disclosure-body stack">
+        <p class="body">{t(`integrations.cli.summary.${cli.name}` as "integrations.cli.summary.claude")}</p>
+        {print.error ? (
+          <LoadError thing={t("integrations.cli.changes_thing")} error={print.error} onRetry={print.reload} />
+        ) : !p ? (
+          open && <Loading />
+        ) : (
+          <>
+            {!p.exact && <Tag tone="mute">{t("integrations.cli.static")}</Tag>}
+            {p.model && <p class="meta mono">{p.model}</p>}
+            {env.length > 0 && (
+              <KeyValue
+                label={t("integrations.cli.env")}
+                items={env.map(([k, v]) => ({
+                  key: k,
+                  label: <span class="mono">{k}</span>,
+                  value: <span class="mono">{v}</span>,
+                  meta: p.secret_env?.includes(k) ? t("integrations.cli.secret") : undefined,
+                }))}
+              />
+            )}
+            <KeyValue
+              items={[
+                ...(p.removed_env?.length ? [{ key: "removed", label: t("integrations.cli.removed_env"), value: <span class="mono">{p.removed_env.join(", ")}</span> }] : []),
+                ...(p.command ? [{ key: "command", label: t("integrations.cli.command"), value: <span class="mono">{p.command}</span> }] : p.args?.length ? [{ key: "args", label: t("integrations.cli.args"), value: <span class="mono">{p.args.join(" ")}</span> }] : []),
+                ...(kind ? [{ key: "backups", label: t("integrations.cli.backups"), value: <span class="mono">{BACKUP_DIR}</span> }] : []),
+              ]}
+            />
+            {(p.files ?? []).length > 0 && (
+              <Table
+                caption={t("integrations.cli.files")}
+                rows={p.files ?? []}
+                rowKey={(f) => f.path}
+                columns={[
+                  { key: "path", label: t("integrations.desktop.file"), render: (f) => <span class="mono ms-path">{f.path}</span> },
+                  { key: "change", label: t("integrations.desktop.change"), render: (f) => f.change },
+                ]}
+              />
+            )}
+            {(p.notes ?? []).map((n) => (
+              <p class="body" key={n}>
+                {n}
+              </p>
+            ))}
+          </>
+        )}
+        {isProfile && <Banner tone="info">{t("integrations.cli.profile_note", { name: cli.label })}</Banner>}
+        {kind && <RevealBackup name={cli.name} local={local} />}
+        <p class="meta">{t("integrations.cli.source")}</p>
+      </div>
+    </details>
+  );
+}
+
+/** VIEW BACKUP (docs/ui/09 §4.5, G16): reveals the newest backup folder in Finder. */
+function RevealBackup({ name, local }: { name: string; local: boolean }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <MacOnly local={local}>
+      <Button
+        size="s"
+        variant="text"
+        aria-disabled={!local ? "true" : undefined}
+        loading={busy}
+        onClick={() => {
+          if (!local) return;
+          setBusy(true);
+          void api
+            .post(`/integrations/${name}/reveal-backup`)
+            .catch((err) => (err instanceof ApiError && err.code === "no_backup" ? toast(t("integrations.backup_none")) : toastError(t("integrations.backup_failed"), err)))
+            .finally(() => setBusy(false));
+        }}
+      >
+        {t("integrations.backup_view")}
+      </Button>
+    </MacOnly>
   );
 }
 
@@ -429,16 +496,27 @@ function DesktopRow({
   const port = g.integrations?.claude_desktop?.port ?? 18435;
   const ready = !!engine.value && ["ready", "busy", "idle_released"].includes(engine.value.state);
 
-  async function call(path: string, body?: unknown, ok?: string) {
+  const [seq, setSeq] = useState<"connect" | "restore" | null>(null);
+  const [restarting, setRestarting] = useState(false);
+  /** Runs connect or restore; progress arrives as `integration.state` steps on the row (api.md §12.1). */
+  async function call(path: string, body?: unknown, ok?: string, kind: "connect" | "restore" = "connect"): Promise<DesktopIntegration | null> {
     setBusy(true);
     setError(null);
+    setSeq(kind);
     try {
       const next = await api.post<DesktopIntegration>(path, body);
       onChanged(next);
+      if (next.step === "failed") {
+        setError(next.message ?? t("integrations.desktop.connect_failed"));
+        return null;
+      }
       setSheet(null);
+      setSeq(null);
       if (ok) toast(ok);
+      return next;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      return null;
     } finally {
       setBusy(false);
     }
@@ -448,8 +526,16 @@ function DesktopRow({
     try {
       await api.post(`/integrations/${app.name}/open`);
     } catch (e) {
-      toastError(t("integrations.desktop.open_failed"), e);
+      if (e instanceof ApiError && e.code === "app_not_found") toast(t("integrations.desktop.install_first"));
+      else toastError(t("integrations.desktop.open_failed"), e);
     }
+  }
+  /** RESTART CODEX (09 §4.6): Codex reads config.toml at launch, so re-apply the connection; it quits and reopens. */
+  async function restartCodex() {
+    setRestarting(false);
+    const restored = await call(`/integrations/${app.name}/disconnect`, undefined, undefined, "restore");
+    if (!restored) return;
+    if (await call(`/integrations/${app.name}/connect`, { confirm_restart: true }, t("integrations.codex_restarted"))) setCodexChanged(false);
   }
 
   const since = clock(app.connected_at);
@@ -468,11 +554,11 @@ function DesktopRow({
       </>
     ) : view === "connecting" ? (
       <>
-        {versionText} · <Tag dots>{t("integrations.desktop.connecting")}</Tag>
+        {versionText} · <Tag dots>{app.step && app.step !== "done" ? t(`integrations.step.${app.step}` as "integrations.step.done") : t("integrations.desktop.connecting")}</Tag>
       </>
     ) : view === "restoring" ? (
       <>
-        {versionText} · <Tag dots>{t("integrations.desktop.restoring")}</Tag>
+        {versionText} · <Tag dots>{app.step && app.step !== "done" ? t(`integrations.step.${app.step}` as "integrations.step.done") : t("integrations.desktop.restoring")}</Tag>
       </>
     ) : view === "needs_restore" ? (
       <>
@@ -513,6 +599,20 @@ function DesktopRow({
       {view === "not_detected" && <p class="meta">{t("integrations.desktop.looked")}</p>}
       {app.warning && <p class="meta">{app.warning}</p>}
       {connected && !engine.value?.model && <p class="meta">{t("integrations.desktop.engine_stopped")}</p>}
+      {seq === "restore" && sheet === null && <StepList name={app.name} kind="restore" step={app.step} />}
+      {app.step === "failed" && app.message && sheet === null && (
+        <Banner
+          tone="critical"
+          title={t("integrations.desktop.step_failed")}
+          actions={
+            <Button size="s" onClick={() => void call(`/integrations/${app.name}/disconnect`, undefined, t("integrations.desktop.restored"), "restore")}>
+              {t("integrations.unclean.restore")}
+            </Button>
+          }
+        >
+          <code class="mono">{app.message}</code>
+        </Banner>
+      )}
       <div class="cluster">
         {view === "not_detected" ? (
           <Tooltip text={t("integrations.desktop.install_first")}>
@@ -557,7 +657,14 @@ function DesktopRow({
           <p class="meta" id="codex-default-help">
             {t("integrations.codex_default_help")}
           </p>
-          {codexChanged && <Tag>{t("integrations.desktop.restart_needed")}</Tag>}
+          {codexChanged && (
+            <span class="cluster">
+              <Tag>{t("integrations.desktop.restart_needed")}</Tag>
+              <Button size="s" variant="text" disabled={busy} onClick={() => setRestarting(true)}>
+                {t("integrations.codex_restart")}
+              </Button>
+            </span>
+          )}
         </div>
       )}
       {app.name === "claude-desktop" && view !== "not_detected" && (
@@ -578,6 +685,7 @@ function DesktopRow({
         <p class="meta">
           {app.name === "claude-desktop" ? t("integrations.desktop.restore_note") : t("integrations.desktop.codex_note")}
         </p>
+        {(connected || app.connected_at) && <RevealBackup name={app.name} local={local} />}
       </Disclosure>
 
       <Sheet
@@ -606,6 +714,7 @@ function DesktopRow({
             : t("integrations.desktop.connect_closed", { label: app.label })}
         </p>
         {app.name === "claude-desktop" && <p class="mono">{t("integrations.desktop.connect_gateway", { port })}</p>}
+        {seq === "connect" && <StepList name={app.name} kind="connect" step={app.step} />}
         <Disclosure summary={t("integrations.desktop.changes")}>
           <ul class="integration-files">
             {DESKTOP_FILES[app.name].map((f) => (
@@ -620,7 +729,7 @@ function DesktopRow({
             tone="critical"
             title={t("integrations.desktop.connect_failed")}
             actions={
-              <Button size="s" onClick={() => void call(`/integrations/${app.name}/disconnect`, undefined, t("integrations.desktop.restored"))}>
+              <Button size="s" onClick={() => void call(`/integrations/${app.name}/disconnect`, undefined, t("integrations.desktop.restored"), "restore")}>
                 {t("integrations.unclean.restore")}
               </Button>
             }
@@ -636,7 +745,10 @@ function DesktopRow({
         busy={busy}
         error={error}
         onClose={() => setSheet(null)}
-        onConfirm={() => call(`/integrations/${app.name}/disconnect`, undefined, t("integrations.desktop.restored"))}
+        onConfirm={() => {
+          setSheet(null);
+          void call(`/integrations/${app.name}/disconnect`, undefined, t("integrations.desktop.restored"), "restore");
+        }}
       >
         <ul>
           <li>
@@ -647,7 +759,32 @@ function DesktopRow({
           <li>{t("integrations.desktop.disconnect_restart", { label: app.label })}</li>
         </ul>
       </ConfirmSheet>
+      <ConfirmSheet
+        open={restarting}
+        title={t("integrations.codex_restart_title")}
+        confirmLabel={t("integrations.codex_restart")}
+        onClose={() => setRestarting(false)}
+        onConfirm={() => void restartCodex()}
+      >
+        <p class="body">{t("integrations.codex_restart_body")}</p>
+      </ConfirmSheet>
     </article>
+  );
+}
+
+/** Connect / restore progress from the manager's steps (api.md §12.1). */
+function StepList({ name, kind, step }: { name: DesktopIntegration["name"]; kind: "connect" | "restore"; step: Step | null | undefined }) {
+  const steps = stepsFor(name, kind);
+  const views = stepViews(steps, step);
+  return (
+    <ol class="integration-steps" aria-live="polite" data-testid={`steps-${kind}`}>
+      {steps.map((st, i) => (
+        <li key={st} data-state={views[i]} class={views[i] === "pending" ? "mute" : views[i] === "current" ? "loading-dots" : undefined}>
+          {t(`integrations.step.${st}` as "integrations.step.done")}
+          {views[i] === "done" ? " ✓" : ""}
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -708,6 +845,10 @@ function SlotsEditor({ options, roots }: { options: { value: string; label: stri
       />
       {slotsSwitchModels(slots, active, roots) && <Banner tone="warn">{t("integrations.slots.switch_warn")}</Banner>}
       <p class="meta">{t("integrations.slots.autoload")}</p>
+      <Disclosure summary={t("integrations.slots.preview")}>
+        <p class="meta">{t("integrations.slots.preview_note")}</p>
+        <CodeBlock code={JSON.stringify(gatewayModels(slots, active), null, 2)} label="GET /v1/models" />
+      </Disclosure>
       <div class="cluster" style={{ justifyContent: "space-between" }}>
         <Button
           variant="text"
