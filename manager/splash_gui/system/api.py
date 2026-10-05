@@ -27,6 +27,7 @@ from ..schemas import (
     Versions,
 )
 from ..state import ManagerState, get_state
+from ..units import format_bytes
 from .info import system_info
 
 router = APIRouter()
@@ -158,15 +159,13 @@ def doctor(state: State) -> DoctorReport:
             id="disk",
             label="Free disk space",
             status="ok" if system.disk.models.free_bytes > 2 * 1024**3 else "warn",
-            message=f"{system.disk.models.free_bytes} bytes free",
+            # Bytes on disk: base 1024, as the web shows them (docs/ui/00 §9).
+            message=f"{format_bytes(system.disk.models.free_bytes)} free on the models volume",
+            fix=None
+            if system.disk.models.free_bytes > 2 * 1024**3
+            else "Free space, or move the models folder in Settings → Storage",
         ),
-        DoctorCheck(
-            id="permissions",
-            label="Private data directory",
-            status="ok" if state.paths.base.stat().st_mode & 0o077 == 0 else "warn",
-            message=str(state.paths.base),
-            fix="chmod 700 " + str(state.paths.base),
-        ),
+        _permissions_check(state.paths.base),
     ]
     hidden = []
     for name in (".zshrc", ".zprofile", ".bashrc", ".bash_profile"):
@@ -188,7 +187,21 @@ def doctor(state: State) -> DoctorReport:
         )
     )
     checks.extend(_more_checks(state))
+    # A fix is advice for a check that is not ok; never shown beside a passing one.
+    checks = [c if c.status != "ok" else c.model_copy(update={"fix": None}) for c in checks]
     return DoctorReport(ok=all(c.status != "fail" for c in checks), checks=checks)
+
+
+def _permissions_check(base: Path) -> DoctorCheck:
+    """~/.splash holds secrets-adjacent data (chats, usage, logs): owner-only, 700."""
+    private = base.stat().st_mode & 0o077 == 0
+    return DoctorCheck(
+        id="permissions",
+        label="Private data directory",
+        status="ok" if private else "warn",
+        message=f"{base} is private (700)" if private else f"{base} is readable by other users",
+        fix=None if private else "chmod 700 " + str(base),
+    )
 
 
 def _more_checks(state: ManagerState) -> list[DoctorCheck]:

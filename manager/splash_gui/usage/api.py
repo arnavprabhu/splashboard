@@ -115,6 +115,23 @@ def summary(
     )
 
 
+def bucket_start(dt: datetime, bucket: str) -> datetime:
+    """The start of `dt`'s bucket. `hour` and `day` are the Mac's local hours and days
+    (docs/ui/02 F1: local day bounds), as the heatmap; `minute` is unaffected.
+    - hour: `dt` in local time floored to the hour, keeping its own UTC offset, so
+      the repeated 01:00 hour of a daylight-saving fall-back night is two buckets
+      (01:00 CDT and 01:00 CST), never merged;
+    - day: local midnight, given the offset in force at midnight (a day that changes
+      daylight saving time starts at its own midnight)."""
+    if bucket == "minute":
+        return dt.astimezone(UTC).replace(second=0, microsecond=0)
+    local = dt.astimezone()
+    if bucket == "hour":
+        return local.replace(minute=0, second=0, microsecond=0)
+    midnight = local.replace(tzinfo=None, hour=0, minute=0, second=0, microsecond=0)
+    return midnight.astimezone()  # naive → the local zone's offset at that wall time
+
+
 @router.get("/usage/timeseries", response_model=UsageTimeseries)
 def timeseries(
     state: State,
@@ -126,12 +143,13 @@ def timeseries(
 ) -> UsageTimeseries:
     """Points per bucket (tokens per day per model, requests over time) and, with
     `view=heatmap`, the 7 × 24 local-time grid. `group` is an alias of `group_by`.
-    Without `start`, the window is the last 30 days."""
+    Without `start`, the window is the last 30 days. `hour`/`day` points are local
+    buckets: `t` is the local bucket start with its UTC offset."""
     grouping = group_by or group or "model"
     end = flt.end or iso()
     start = flt.start or iso(datetime.now(UTC) - timedelta(days=30))
     rows = state.usage.iter_requests(flt.request_filter(start=start, end=end))
-    points: dict[tuple[str, str | None], UsagePoint] = {}
+    points: dict[tuple[datetime, str | None], UsagePoint] = {}
     heatmap = [[0] * 24 for _ in range(7)]
     heatmap_tokens = [[0] * 24 for _ in range(7)]
     for row in rows:
@@ -140,16 +158,12 @@ def timeseries(
         tokens = (row.get("prompt_tokens") or 0) + (row.get("completion_tokens") or 0)
         heatmap[local.weekday()][local.hour] += 1
         heatmap_tokens[local.weekday()][local.hour] += tokens
-        dt = dt.replace(second=0, microsecond=0)
-        if bucket in ("hour", "day"):
-            dt = dt.replace(minute=0)
-        if bucket == "day":
-            dt = dt.replace(hour=0)
+        begins = bucket_start(dt, bucket)
         key_group = None if grouping == "none" else row.get(grouping)
-        key = (iso(dt), key_group)
+        key = (begins, key_group)
         if key not in points:
             points[key] = UsagePoint(
-                t=key[0],
+                t=iso(begins) if bucket == "minute" else begins.isoformat(),
                 group=key_group,
                 requests=0,
                 prompt_tokens=0,
@@ -169,7 +183,7 @@ def timeseries(
         group_by=grouping,
         start=start,
         end=end,
-        points=sorted(points.values(), key=lambda p: (p.t, p.group or "")),
+        points=[points[k] for k in sorted(points, key=lambda k: (k[0], k[1] or ""))],
         heatmap=heatmap if view == "heatmap" else None,
         heatmap_tokens=heatmap_tokens if view == "heatmap" else None,
     )

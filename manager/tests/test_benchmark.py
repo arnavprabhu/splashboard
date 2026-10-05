@@ -197,8 +197,34 @@ def test_an_interrupted_run_is_marked_failed_at_startup(
 
 
 def test_running_gpu_apps() -> None:
-    assert running_gpu_apps(["launchd", "Blender", "ollama"]) == ["Blender", "ollama"]
-    assert running_gpu_apps(["zsh"]) == []
+    assert running_gpu_apps(["launchd", "Blender", "UnrealEditor"], []) == [
+        "Blender",
+        "Unreal Editor",
+    ]
+    assert running_gpu_apps(["zsh"], ["-zsh"]) == []
+
+
+def test_gpu_apps_ignore_helpers_and_idle_model_servers() -> None:
+    """QA row 20: "Unreal" matched `UnrealEditorServices`, a background helper, and an
+    idle `ollama serve` counted as GPU-heavy."""
+    names = ["UnrealEditorServices", "UnityHub", "Ollama", "ollama", "MotionCore"]
+    idle = ["/Applications/Ollama.app/Contents/Resources/ollama serve"]
+    assert running_gpu_apps(names, idle) == []
+    loaded = [
+        *idle,
+        "/Applications/Ollama.app/Contents/Resources/ollama runner --model /x/blobs/sha256-1",
+    ]
+    assert running_gpu_apps(names, loaded) == ["Ollama (model loaded)"]
+    assert running_gpu_apps([], ["/usr/local/bin/ollama_llama_server --model x"]) == [
+        "Ollama (model loaded)"
+    ]
+    assert running_gpu_apps(["Python"], ["python3 -m mlx_lm.server --model m"]) == ["mlx_lm"]
+    assert running_gpu_apps([], ["/opt/bin/mlx_lm.server --model m"]) == ["mlx_lm"]
+    console_script = "/venv/bin/python3.12 /venv/bin/mlx_lm.server --model m --port 8080"
+    assert running_gpu_apps(["Python"], [console_script]) == ["mlx_lm"]
+    assert running_gpu_apps(["Python"], ["/venv/bin/python3.12 /venv/bin/other.py"]) == []
+    # A shell whose command line only mentions them is not one of them.
+    assert running_gpu_apps([], ["zsh -c echo ollama runner; python -m mlx_lm"]) == []
 
 
 def test_summaries_and_headline() -> None:

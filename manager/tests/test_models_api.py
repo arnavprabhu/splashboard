@@ -222,3 +222,153 @@ def test_a_held_engine_refuses_loads_and_auto_loads(
     finally:
         h.state.supervisor._holds.clear()
     assert h.client.post("/api/admin/engine/load", json={"model": MODEL}).status_code == 202
+
+
+def test_catalog_download_bytes_match_the_inspect_download_plan(hub_harness) -> None:
+    """Bug 3: a row's size was the target alone ("MLX · 15 GB") while the download
+    also fetched the draft (19.93 GB). `download_bytes` is the whole fetch, from the
+    same file plan as /inspect's download_plan, before and after an inspection."""
+    h = hub_harness(installed=())
+    before = entries(h.client.get("/api/admin/catalog").json())
+
+    def plan(model: str) -> dict[str, Any]:
+        response = h.client.get(f"/api/admin/inspect?id={model}&refresh=1")
+        assert response.status_code == 200, response.text
+        return dict(response.json())
+
+    mlx = before["mlx-community/Qwen3.8-27B-4bit"]
+    inspected = plan("mlx-community/Qwen3.8-27B-4bit")
+    assert mlx["download_bytes"] == inspected["download_plan"]["total_bytes"]
+    assert mlx["language_only_download_bytes"] == inspected["language_only_plan"]["total_bytes"]
+    drafts = {f["repo_id"] for f in inspected["download_plan"]["files"]}
+    assert drafts == {"mlx-community/Qwen3.8-27B-4bit", "incoai/Qwen3.8-27B-DFlash2"}
+    assert mlx["download_bytes"] > mlx["size_bytes"], "the draft is part of the download"
+
+    gguf = before["unsloth/Qwen3.6-35B-A3B-GGUF"]
+    variant = next(v for v in gguf["variants"] if v["name"] == "UD-Q4_K_M")
+    inspected = plan("unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_M")
+    assert variant["download_bytes"] == inspected["download_plan"]["total_bytes"]
+    assert (
+        variant["language_only_download_bytes"]
+        == inspected["language_only_plan"]["total_bytes"]
+        < variant["download_bytes"]
+    ), "language-only skips the projector"
+    default = next(v for v in gguf["variants"] if v["name"] == gguf["recommended_variant"])
+    assert gguf["download_bytes"] == default["download_bytes"]
+
+    # After an inspection the catalog uses Splash's own file set: same totals.
+    after = entries(h.client.get("/api/admin/catalog").json())
+    assert after["mlx-community/Qwen3.8-27B-4bit"]["download_bytes"] == mlx["download_bytes"]
+
+
+def test_catalog_download_bytes_are_null_without_hub_data(hub_harness) -> None:
+    h = hub_harness()
+    h.patch_settings({"global": {"hf": {"offline": True}}})
+    rows = entries(h.client.get("/api/admin/catalog").json())
+    assert all(r["download_bytes"] is None for r in rows.values())
+
+
+# Real listings (huggingface.co, 2026-10-04), trimmed to the root GGUFs.
+QWEN35_GGUF: dict[str, int | None] = {
+    "Qwen3.6-35B-A3B-MXFP4_MOE.gguf": 21706144736,
+    "Qwen3.6-35B-A3B-Q8_0.gguf": 36903140320,
+    "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf": 13211155424,
+    "Qwen3.6-35B-A3B-UD-IQ4_NL_XL.gguf": 19500506080,
+    "Qwen3.6-35B-A3B-UD-Q2_K_XL.gguf": 12290628576,
+    "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf": 22134528992,
+    "Qwen3.6-35B-A3B-UD-Q4_K_S.gguf": 20893015008,
+    "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf": 22360456160,
+    "Qwen3.6-35B-A3B-UD-Q5_K_M.gguf": 26456194016,
+    "Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf": 38451182560,
+    "mmproj-BF16.gguf": 902822624,
+    "mmproj-F16.gguf": 899283680,
+}
+QWEN27_GGUF: dict[str, int | None] = {
+    "Qwen3.8-27B-Q4_0.gguf": 16056478688,
+    "Qwen3.8-27B-Q4_1.gguf": 17540705248,
+    "Qwen3.8-27B-UD-IQ3_XXS.gguf": 10934860704,
+    "Qwen3.8-27B-UD-Q4_K_M.gguf": 16464440224,
+    "Qwen3.8-27B-UD-Q4_K_XL.gguf": 17559178144,
+    "Qwen3.8-27B-UD-Q8_K_XL.gguf": 31457991680,
+    "imatrix_unsloth.gguf": 13642656,
+    "mmproj-BF16.gguf": 931146432,
+    "BF16/Qwen3.8-27B-BF16-00001-of-00002.gguf": 27_000_000_000,
+}
+BONSAI_GGUF: dict[str, int | None] = {
+    "Ternary-Bonsai-2-27B-F16.gguf": 53808408928,
+    "Ternary-Bonsai-2-27B-PQ2_0.gguf": 7206168928,
+    "Ternary-Bonsai-2-27B-PTQ1_0.gguf": 5946648928,
+    "Ternary-Bonsai-2-27B-mmproj-BF16.gguf": 931145856,
+    "Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf": 629246976,
+}
+
+
+class _Info:
+    def __init__(self, files: dict[str, int | None]) -> None:
+        self.files, self.license, self.last_modified = files, "apache-2.0", None
+
+
+def test_recommended_variant_stops_at_ud_q4_k_m() -> None:
+    """QA row 13: UD-Q4_K_XL was recommended because only bits ≤ 4 was checked;
+    SPEC §9.1 says "at or below UD-Q4_K_M-class"."""
+    for repo, files in (
+        ("unsloth/Qwen3.6-35B-A3B-GGUF", QWEN35_GGUF),
+        ("unsloth/Qwen3.8-27B-GGUF", QWEN27_GGUF),
+    ):
+        facts = cat.entry_facts(repo, "gguf", _Info(files), 64 * GIB)
+        assert facts["recommended_variant"] == "UD-Q4_K_M", repo
+    # Smaller Macs fall back below the ceiling: at 32 GiB the 35B UD-Q4_K_M is only
+    # Tight, UD-Q4_K_S fits; at 24 GiB the 3-bit class.
+    repo = "unsloth/Qwen3.6-35B-A3B-GGUF"
+    assert (
+        cat.entry_facts(repo, "gguf", _Info(QWEN35_GGUF), 32 * GIB)["recommended_variant"]
+        == "UD-Q4_K_S"
+    )
+    assert cat.entry_facts(repo, "gguf", _Info(QWEN35_GGUF), 24 * GIB)["recommended_variant"] in (
+        "UD-IQ3_XXS",
+        "UD-Q2_K_XL",
+    )
+    assert not cat.within_ceiling("Q4_1", 1, None) and not cat.within_ceiling("UD-Q4_K_XL", 1, None)
+    assert cat.within_ceiling("UD-IQ4_NL_XL", 19_500_506_080, 22_134_528_992)
+    assert not cat.within_ceiling("UD-IQ4_NL_XL", 19_500_506_080, 18_000_000_000)
+
+
+def test_projectors_are_named_as_splash_names_them() -> None:
+    """QA row 14: Prism's `MODEL-mmproj-BF16.gguf` was a model variant and the row
+    said text only; Splash matches `mmproj` anywhere in the stem (upstream.py:62)."""
+    facts = cat.entry_facts(
+        "prism-ml/Ternary-Bonsai-2-27B-gguf", "gguf", _Info(BONSAI_GGUF), 64 * GIB
+    )
+    names = {v["name"] for v in facts["variants"]}
+    assert names == {"F16", "PQ2_0", "PTQ1_0"}
+    assert facts["vision"] is True
+    assert cat.projector(BONSAI_GGUF) == "Ternary-Bonsai-2-27B-mmproj-BF16.gguf"
+    assert facts["recommended_variant"] == "PQ2_0"
+    assert cat.is_projector("mmproj-F16.gguf") and not cat.is_projector("Qwen3.8-27B-Q4_0.gguf")
+
+
+def test_catalog_variants_carry_what_splash_cannot_load() -> None:
+    """QA row 15: every catalog variant had `loadable: null`, so the imatrix file,
+    F16 and UD-Q8_K_XL were offered as downloads."""
+    facts = cat.entry_facts("unsloth/Qwen3.8-27B-GGUF", "gguf", _Info(QWEN27_GGUF), 64 * GIB)
+    by = {v["name"]: v for v in facts["variants"]}
+    assert by["imatrix_unsloth"]["loadable"] is False
+    assert by["imatrix_unsloth"]["reason"] == cat.NOT_A_MODEL
+    assert by["UD-Q8_K_XL"]["loadable"] is False and by["UD-Q8_K_XL"]["reason"]
+    assert "mmproj-BF16" not in by and "BF16" not in by  # projector; BF16/ is a subfolder
+    assert by["UD-Q4_K_M"]["loadable"] is None, "the rest is checked by /inspect"
+    assert facts["size_bytes"] != QWEN27_GGUF["imatrix_unsloth.gguf"]
+    bonsai = cat.entry_facts(
+        "prism-ml/Ternary-Bonsai-2-27B-gguf", "gguf", _Info(BONSAI_GGUF), 64 * GIB
+    )
+    f16 = next(v for v in bonsai["variants"] if v["name"] == "F16")
+    assert f16["loadable"] is False and "F16" in f16["reason"]
+
+
+def test_language_only_selection_drops_prism_s_projector() -> None:
+    """Review finding: `selected_files` kept Prism's `MODEL-mmproj-BF16.gguf` in a
+    language-only selection (931 MB too many in `language_only_download_bytes`)."""
+    files = ["Ternary-Bonsai-2-27B-PQ2_0.gguf", "Ternary-Bonsai-2-27B-mmproj-BF16.gguf"]
+    chosen = cat.selected_files("gguf", BONSAI_GGUF, files, language_only=True)
+    assert chosen == ["Ternary-Bonsai-2-27B-PQ2_0.gguf"]
+    assert cat.selected_files("gguf", BONSAI_GGUF, files, language_only=False) == files

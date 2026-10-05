@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..engine.flags import engine_env
 from ..errors import ApiError
+from ..hubcache import blobs_dir
 from ..jobs import Job, JobFailed
 from ..paths import splash_models_dir
 from ..schemas import (
@@ -41,6 +42,7 @@ from ..schemas import (
 )
 from ..settings.parsers import parse_model_id, split_model_id
 from ..usage.db import iso
+from . import catalog as cat
 from .hf import HfClient, HubError, strip_front_matter
 from .layout import directory_size, execute_delete, plan_delete, read_all
 
@@ -85,7 +87,7 @@ def inspect_timeout(files: dict[str, int | None], variant: str | None) -> float:
     allow 20 s plus 4 s per variant beyond the first, up to 150 s."""
     if variant is not None:
         return 20.0
-    roots = [n for n in files if "/" not in n and n.endswith(".gguf") and "mmproj" not in n.lower()]
+    roots = [n for n in files if "/" not in n and n.endswith(".gguf") and not cat.is_projector(n)]
     return min(150.0, 20.0 + 4.0 * max(0, len(roots) - 1))
 
 
@@ -370,12 +372,12 @@ class Models:
             if variant
             else next(iter(supported), None)
         )
+        # SPEC §9.1: at or below UD-Q4_K_M-class, the same rule as the catalog.
+        ceiling = cat.q4_k_m_ceiling({v.name: v.size_bytes for v in variants})
         candidates = [
             v
             for v in variants
-            if v.loadable
-            and v.fit == "fits"
-            and not re.search(r"(Q[5-9]|BF16|F16|F32)", v.name, re.I)
+            if v.loadable and v.fit == "fits" and cat.within_ceiling(v.name, v.size_bytes, ceiling)
         ]
         recommended = max(candidates, key=lambda v: v.size_bytes or 0) if candidates else None
         if recommended:
@@ -452,35 +454,7 @@ class Models:
             return None
         _, variant = split_model_id(model)
         models_dir = self.state.settings.models_dir()
-        files: list[PlannedFile] = []
-
-        def present(repo_id: str, info: Any, name: str) -> bool:
-            blob = info.blobs.get(name)
-            if not blob:
-                return False
-            folder = models_dir / ("models--" + repo_id.replace("/", "--"))
-            return (folder / "blobs" / str(blob)).is_file()
-
-        for name in selected:
-            files.append(
-                PlannedFile(
-                    name=name,
-                    repo_id=result.repo_id,
-                    bytes=repo.files.get(name),
-                    present=present(result.repo_id, repo, name),
-                )
-            )
-        if draft is not None and result.draft:
-            for name, size in draft.files.items():
-                if name == "config.json" or name.startswith("model.safetensors"):
-                    files.append(
-                        PlannedFile(
-                            name=name,
-                            repo_id=result.draft,
-                            bytes=size,
-                            present=present(result.draft, draft, name),
-                        )
-                    )
+        files = planned_files(models_dir, result.repo_id, repo, selected, result.draft, draft)
         total = sum(f.bytes or 0 for f in files)
         remaining = sum(f.bytes or 0 for f in files if not f.present)
         models_dir.mkdir(parents=True, exist_ok=True)
@@ -574,6 +548,14 @@ class Models:
         self.catalog_cache[repo_id] = (time.time(), info)
         return info
 
+    def _checked_variants(self, repo: str, sha: str | None) -> dict[str, tuple[bool, str | None]]:
+        """Each variant's `loadable`/`reason` from a cached full `/inspect` of `repo`
+        at `sha` (SPEC §9.2, drift row 6), else {}."""
+        hit = self.cache.get(f"{repo}@{sha}") if sha else None
+        if hit is None or time.time() - hit[0] >= 86400:
+            return {}
+        return {v.name: (v.loadable, v.reason) for v in hit[1].variants if v.loadable is not None}
+
     async def catalog(self, refresh: bool = False) -> Catalog:
         """SPEC §9.1: the seed (Appendix C) plus Splash's official list, grouped by
         family then format, each row filled from the Hub (sizes, license, vision,
@@ -581,7 +563,6 @@ class Models:
         for this Mac" mark (the §8.6 pick for the wizard's use case, else coding)."""
         from ..paths import splash_data_dir
         from ..settings.presets import recommend
-        from . import catalog as cat
 
         if refresh:
             self.catalog_cache.clear()
@@ -607,6 +588,42 @@ class Models:
         infos: list[Any] = (
             [None] * len(rows) if offline else await asyncio.gather(*(fetch(r[1]) for r in rows))
         )
+        # Each family's draft is part of every MLX/GGUF download (§9.1 "download size").
+        draft_ids = sorted(
+            {cat.DRAFT_REPOS[r[0]] for r in rows if r[2] != "legacy" and r[0] in cat.DRAFT_REPOS}
+        )
+        draft_infos: dict[str, Any] = (
+            {}
+            if offline
+            else dict(
+                zip(draft_ids, await asyncio.gather(*(fetch(d) for d in draft_ids)), strict=True)
+            )
+        )
+        models_dir = self.state.settings.models_dir()
+
+        def sizes(
+            model: str, family: str, kind: str, info: Any, variant_files: list[str] | None
+        ) -> dict[str, int | None]:
+            """`download_bytes` / `language_only_download_bytes`: the total of what
+            downloading `model` fetches (target + vision + draft), through the same
+            `planned_files` as `/inspect`'s `download_plan`. The file set is Splash's
+            own when `model` has been inspected, else estimated from the listing."""
+            draft_id = cat.DRAFT_REPOS.get(family) if kind != "legacy" else None
+            draft = draft_infos.get(draft_id) if draft_id else None
+            out: dict[str, int | None] = {}
+            keys = ((False, "download_bytes"), (True, "language_only_download_bytes"))
+            for language_only, key in keys:
+                known = (self.language_file_sets if language_only else self.file_sets).get(model)
+                selected = known or cat.selected_files(
+                    kind, info.files, variant_files, language_only=language_only
+                )
+                if not selected or (draft_id and draft is None):
+                    out[key] = None  # the draft's size is unknown: no partial total
+                    continue
+                files = planned_files(models_dir, info.repo_id, info, selected, draft_id, draft)
+                out[key] = sum(f.bytes or 0 for f in files)
+            return out
+
         refreshed = None
         families: list[CatalogFamily] = []
         for family in dict.fromkeys(row[0] for row in rows):
@@ -626,14 +643,33 @@ class Models:
                     if variants is not None and pick_repo == repo and pick_variant:
                         for variant in variants:
                             variant["recommended"] = variant["name"] == pick_variant
+                    default_variant = (
+                        pick_variant if pick_repo == repo and pick_variant else recommended_variant
+                    )
+                    if info is not None:
+                        checked = self._checked_variants(repo, info.sha)
+                        for variant in variants or []:
+                            model = f"{repo}:{variant['name']}"
+                            variant.update(sizes(model, fam, kind, info, variant["files"]))
+                            # Splash's own verdict once /inspect has read the headers.
+                            if variant["name"] in checked:
+                                variant["loadable"], variant["reason"] = checked[variant["name"]]
+                        default = next(
+                            (v for v in variants or [] if v["name"] == default_variant), None
+                        )
+                        if kind != "gguf":
+                            facts.update(sizes(repo, fam, kind, info, None))
+                        elif default is not None:
+                            facts["download_bytes"] = default.get("download_bytes")
+                            facts["language_only_download_bytes"] = default.get(
+                                "language_only_download_bytes"
+                            )
                     entries.append(
                         CatalogEntry.model_validate(
                             {
                                 "id": repo,
                                 "repo_id": repo,
-                                "recommended_variant": pick_variant
-                                if pick_repo == repo and pick_variant
-                                else recommended_variant,
+                                "recommended_variant": default_variant,
                                 "family": fam,
                                 "format": kind,
                                 "notes": notes,
@@ -662,6 +698,46 @@ class Models:
             refreshed_at=refreshed,
             offline=offline,
         )
+
+
+def planned_files(
+    models_dir: Path,
+    repo_id: str,
+    repo: Any,
+    selected: list[str],
+    draft_id: str | None,
+    draft: Any,
+) -> list[PlannedFile]:
+    """SPEC §9.4 "expected size": the target's selected files, then the draft's
+    `config.json` and `model.safetensors*` (install/upstream.py `_draft_files`), each
+    marked present when its blob is already in the models directory. `/inspect`'s
+    `download_plan` and the catalog's `download_bytes` both come from here."""
+
+    def present(owner: str, info: Any, name: str) -> bool:
+        blob = info.blobs.get(name)
+        return bool(blob) and (blobs_dir(models_dir, owner) / str(blob)).is_file()
+
+    files = [
+        PlannedFile(
+            name=name,
+            repo_id=repo_id,
+            bytes=repo.files.get(name),
+            present=present(repo_id, repo, name),
+        )
+        for name in selected
+    ]
+    if draft is not None and draft_id:
+        files += [
+            PlannedFile(
+                name=name,
+                repo_id=draft_id,
+                bytes=size,
+                present=present(draft_id, draft, name),
+            )
+            for name, size in draft.files.items()
+            if name == "config.json" or name.startswith("model.safetensors")
+        ]
+    return files
 
 
 def create(state: ManagerState) -> Models:

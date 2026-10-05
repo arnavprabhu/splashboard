@@ -80,13 +80,77 @@ SEED: list[tuple[str, str, str, str, str | None]] = [
     ),
 ]
 
+# Each family's DFlash2 draft, which every install fetches beside the target
+# (splash/install/families.py:74, :105; install/upstream.py `_draft_files`).
+DRAFT_REPOS: dict[str, str] = {
+    "Qwen3.8-27B": "incoai/Qwen3.8-27B-DFlash2",
+    "Qwen3.6-35B-A3B": "incoai/Qwen3.6-35B-A3B-DFlash2",
+}
+
 _SHARD = re.compile(r"-\d{5}-of-\d{5}$")
 _BITS = re.compile(r"(?:I?Q|PQ)(\d)", re.I)
-# Variants Splash cannot load (SPEC §3.2, §9.1).
+# Variants Splash cannot load, known from the name before `/inspect` reads headers
+# (SPEC §3.2, §9.1). splash/DEVELOPMENT.md "GGUF targets" (:599-613): the loader
+# takes Q2_K…Q8_0, the IQ formats, MXFP4 and PQ2_0, so every Unsloth file of both
+# families loads but UD-Q8_K_XL and BF16; F16/F32 linears are in no accepted list.
 UNLOADABLE = {
     "UD-Q8_K_XL": "Splash has no kernels for this variant (UD-Q8_K_XL)",
     "BF16": "Splash has no kernels for BF16 tensors yet",
+    "F16": "this GGUF stores F16 tensors Splash cannot load; choose another variant",
+    "F32": "this GGUF stores F32 tensors Splash cannot load; choose another variant",
 }
+# A llama.cpp importance matrix (`imatrix*.gguf`) is calibration data, not a model.
+# Splash's own check of unsloth/Qwen3.8-27B-GGUF's `imatrix_unsloth.gguf` says this
+# (install/gguf.py via the compatibility helper, run 2026-10-04).
+NOT_A_MODEL = "missing or invalid GGUF metadata: general.architecture"
+
+# SPEC §9.1: recommend "the largest variant at or below UD-Q4_K_M-class". Splash
+# has no quant order of its own, so the ceiling is the repository's own Q4_K_M
+# file size when it has one (Unsloth's UD-Q4_K_XL and Q4_1 are larger), and by
+# name otherwise: llama.cpp's quantize table lists Q4_1 larger than Q4_K_M (4.78 G
+# vs 4.58 G for Llama-3-8B; tools/quantize/quantize.cpp QUANT_OPTIONS, **[code]**
+# https://github.com/ggml-org/llama.cpp/blob/master/tools/quantize/quantize.cpp),
+# and Unsloth's _L/_XL variants are larger than their _M (unsloth/Qwen3.8-27B-GGUF:
+# UD-Q4_K_XL 17.6 GB vs UD-Q4_K_M 16.5 GB on the Hub, 2026-10-04).
+CEILING_QUANT = "Q4_K_M"
+ABOVE_CEILING = frozenset({"Q4_1", "Q4_K_L", "Q4_K_XL"})
+
+
+def is_projector(filename: str) -> bool:
+    """A vision projector GGUF, as Splash names one: `mmproj` anywhere in the stem
+    (`mmproj-BF16.gguf`, Prism's `MODEL-mmproj-BF16.gguf`), install/upstream.py:59-62."""
+    return "mmproj" in Path(filename).stem.lower()
+
+
+def quant(name: str) -> str:
+    """`UD-Q4_K_M` → `Q4_K_M`: the llama.cpp quant type behind a variant name."""
+    upper = name.upper()
+    return upper[3:] if upper.startswith("UD-") else upper
+
+
+def unloadable_reason(name: str, files: list[str] | None = None) -> str | None:
+    """Why Splash cannot load this variant, when its name or file tells."""
+    reason = UNLOADABLE.get(name.upper())
+    if reason:
+        return reason
+    if any(Path(f).stem.lower().startswith("imatrix") for f in files or [name]):
+        return NOT_A_MODEL
+    return None
+
+
+def q4_k_m_ceiling(sizes: dict[str, int | None]) -> int | None:
+    """The size of the repository's own Q4_K_M-class file (largest of `Q4_K_M` and
+    `UD-Q4_K_M`), the §9.1 recommendation ceiling; None when it has none."""
+    found = [size for name, size in sizes.items() if quant(name) == CEILING_QUANT and size]
+    return max(found) if found else None
+
+
+def within_ceiling(name: str, size: int | None, ceiling: int | None) -> bool:
+    """At or below UD-Q4_K_M-class: 4 bits or fewer, not a larger 4-bit type, and
+    no bigger than the repository's Q4_K_M file."""
+    if (bits(name) or 99) > 4 or quant(name) in ABOVE_CEILING:
+        return False
+    return ceiling is None or (size or 0) <= ceiling
 
 
 def family_guess(repo_id: str) -> str | None:
@@ -138,7 +202,7 @@ def variant_name(repo_id: str, filename: str) -> str | None:
     if "/" in filename or not filename.lower().endswith(".gguf"):
         return None
     stem = _SHARD.sub("", filename[: -len(".gguf")])
-    if stem.lower().startswith("mmproj"):
+    if is_projector(filename):
         return None
     base = repo_id.split("/", 1)[1]
     base = re.sub(r"-gguf$", "", base, flags=re.I)
@@ -164,7 +228,7 @@ class Variant:
 
     @property
     def unloadable(self) -> str | None:
-        return UNLOADABLE.get(self.name.upper()) or UNLOADABLE.get(self.name)
+        return unloadable_reason(self.name, self.files)
 
 
 def gguf_variants(repo_id: str, files: dict[str, int | None]) -> list[Variant]:
@@ -181,8 +245,9 @@ def gguf_variants(repo_id: str, files: dict[str, int | None]) -> list[Variant]:
 
 def projector(files: dict[str, int | None]) -> str | None:
     """The vision projector Splash would take: BF16 preferred, F32 accepted, F16
-    refused (install/upstream.py)."""
-    names = [f for f in files if "/" not in f and f.lower().startswith("mmproj")]
+    refused (install/upstream.py `select_vision`; Splash reads the headers, this
+    goes by name)."""
+    names = [f for f in files if "/" not in f and f.lower().endswith(".gguf") and is_projector(f)]
     for kind in ("BF16", "F32"):
         hit = next((f for f in names if kind in f.upper()), None)
         if hit:
@@ -191,9 +256,14 @@ def projector(files: dict[str, int | None]) -> str | None:
 
 
 def pick_variant(variants: list[Variant], memory: int, vision: bool) -> Variant | None:
-    """The largest loadable variant at or below 4 bits that fits; else the largest
-    that is at least tight; else none."""
-    usable = [v for v in variants if not v.unloadable and (bits(v.name) or 99) <= 4 and v.size > 0]
+    """SPEC §9.1: the largest loadable variant at or below UD-Q4_K_M-class that
+    fits; else the largest that is at least tight; else none."""
+    ceiling = q4_k_m_ceiling({v.name: v.size for v in variants})
+    usable = [
+        v
+        for v in variants
+        if not v.unloadable and v.size > 0 and within_ceiling(v.name, v.size, ceiling)
+    ]
     for wanted in ("fits", "tight"):
         candidates = [
             v for v in usable if fit_for(memory_need(v.size, vision=vision), memory) == wanted
@@ -201,6 +271,46 @@ def pick_variant(variants: list[Variant], memory: int, vision: bool) -> Variant 
         if candidates:
             return max(candidates, key=lambda v: v.size)
     return None
+
+
+# The tokenizer files an MLX target may supply (splash/install/upstream.py:26-34).
+TOKENIZER_FILES = (
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "chat_template.jinja",
+    "vocab.json",
+    "merges.txt",
+    "added_tokens.json",
+    "special_tokens_map.json",
+)
+
+
+def selected_files(
+    fmt: str, files: dict[str, int | None], variant_files: list[str] | None, *, language_only: bool
+) -> list[str]:
+    """The target files Splash's installer fetches, from the Hub listing alone, for a
+    row that has not been through `/inspect` (which asks Splash itself):
+    - MLX (install/upstream.py `_mlx_target`, :167-212): config, tokenizer files, the
+      processor config unless language-only, the shard index and every root shard
+      (language-only still fetches every shard holding a tensor);
+    - GGUF (`_gguf_target`, :140-164): the variant's files, plus the projector unless
+      language-only (`variant_files` carries it last when there is one);
+    - legacy package: every file, as the compatibility helper lists it."""
+    if fmt == "legacy":
+        return list(files)
+    if fmt == "gguf":
+        chosen = list(variant_files or [])
+        if language_only:
+            chosen = [f for f in chosen if not is_projector(f)]
+        return chosen
+    wanted = {"config.json", "model.safetensors.index.json", *TOKENIZER_FILES}
+    if not language_only:
+        wanted.add("preprocessor_config.json")
+    return [
+        name
+        for name in files
+        if "/" not in name and (name in wanted or name.endswith(".safetensors"))
+    ]
 
 
 def weights_bytes(files: dict[str, int | None]) -> int:
@@ -226,6 +336,7 @@ def entry_facts(repo_id: str, fmt: str, info: Any, memory: int) -> dict[str, Any
                 "name": v.name,
                 "size_bytes": v.size + ((files.get(mmproj) or 0) if mmproj else 0),
                 "bits_per_weight": float(b) if (b := bits(v.name)) else None,
+                # False with the reason when the name tells; null = checked by /inspect.
                 "loadable": False if v.unloadable else None,
                 "reason": v.unloadable,
                 "fit": fit_for(memory_need(v.size, vision=vision), memory),
@@ -234,7 +345,8 @@ def entry_facts(repo_id: str, fmt: str, info: Any, memory: int) -> dict[str, Any
             }
             for v in variants
         ]
-        target = picked or (variants[0] if variants else None)
+        loadable = [v for v in variants if not v.unloadable]
+        target = picked or (loadable[0] if loadable else None)
         if target is not None:
             size = target.size + ((files.get(mmproj) or 0) if mmproj else 0)
             facts["size_bytes"] = size

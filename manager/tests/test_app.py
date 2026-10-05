@@ -583,6 +583,41 @@ def test_doctor_covers_the_spec_checks(client: TestClient) -> None:
     assert by["integrations"]["status"] == "ok"
 
 
+def test_doctor_formats_sizes_and_offers_fixes_only_for_problems(
+    app: Any, client: TestClient
+) -> None:
+    """QA row 4: `disk` said "1177755619328 bytes free" and `permissions` carried
+    `fix: chmod 700 …` on an ok check."""
+    import re
+
+    base = app.state.manager.paths.base
+    base.chmod(0o700)
+    by = {c["id"]: c for c in client.get("/api/admin/doctor").json()["checks"]}
+    message = by["disk"]["message"]
+    assert re.fullmatch(r"\d+(\.\d)? (KB|MB|GB|TB) free on the models volume", message)
+    assert "bytes" not in by["disk"]["message"]
+    assert by["permissions"]["status"] == "ok" and by["permissions"]["fix"] is None
+    assert all(c["fix"] is None for c in by.values() if c["status"] == "ok")
+    base.chmod(0o755)
+    try:
+        check = {c["id"]: c for c in client.get("/api/admin/doctor").json()["checks"]}
+        assert check["permissions"]["status"] == "warn"
+        assert check["permissions"]["fix"] == f"chmod 700 {base}"
+    finally:
+        base.chmod(0o700)
+
+
+def test_format_bytes_matches_the_web_formatter() -> None:
+    from splash_gui.units import format_bytes
+
+    assert format_bytes(1_177_755_619_328) == "1.1 TB"
+    assert format_bytes(21.3 * 1024**3) == "21.3 GB"
+    assert format_bytes(150 * 1024**3) == "150 GB"
+    assert format_bytes(7_200_000_000, base=1000) == "7.2 GB"
+    assert format_bytes(2 * 1024**3) == "2 GB" and format_bytes(0) == "0 B"
+    assert format_bytes(None) == "—"
+
+
 def test_install_homebrew_opens_terminal_with_the_official_command(
     app: Any, client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import statistics
 import subprocess
 import time
@@ -31,21 +32,41 @@ if TYPE_CHECKING:
 
 
 # Apps whose GPU use skews results (SPEC §10.6 "other GPU-heavy apps running",
-# best effort): matched case-insensitively against process names.
-GPU_HEAVY_APPS = (
-    "Final Cut Pro",
-    "DaVinci Resolve",
-    "Blender",
-    "Motion",
-    "Compressor",
-    "Logic Pro",
-    "LM Studio",
-    "ollama",
-    "llama-server",
-    "mlx_lm",
-    "Cinema 4D",
-    "Unreal",
-    "Unity",
+# best effort). Matched on the exact executable name (`ps -c`), never a substring,
+# so helpers such as `UnrealEditorServices` (a background service of the Epic
+# launcher) or `UnityHub` don't count: (label, executable names, lowercase).
+GPU_HEAVY_APPS: tuple[tuple[str, frozenset[str]], ...] = (
+    ("Final Cut Pro", frozenset({"final cut pro"})),
+    ("DaVinci Resolve", frozenset({"resolve", "davinci resolve"})),
+    ("Blender", frozenset({"blender"})),
+    ("Motion", frozenset({"motion"})),
+    ("Compressor", frozenset({"compressor"})),
+    ("Logic Pro", frozenset({"logic pro", "logic pro x"})),
+    ("LM Studio", frozenset({"lm studio"})),
+    ("llama-server", frozenset({"llama-server"})),
+    ("Cinema 4D", frozenset({"cinema 4d"})),
+    ("Unreal Editor", frozenset({"unrealeditor"})),
+    ("Unity", frozenset({"unity"})),
+)
+# Model servers that use the GPU only with a model loaded, told apart by the
+# command line: an idle `ollama serve` does nothing, a loaded model runs as
+# `ollama runner …` (older releases: `ollama_llama_server`); mlx_lm runs in Python.
+GPU_HEAVY_COMMANDS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    # The executable is the first word (anchored, so a shell whose command line
+    # merely mentions these never counts).
+    (
+        "Ollama (model loaded)",
+        re.compile(r"^(?:\S*/)?(?:ollama\s+runner\b|ollama_llama_server\b)", re.I),
+    ),
+    (
+        "mlx_lm",
+        # `python -m mlx_lm…`, a console script run directly (`…/bin/mlx_lm.server`)
+        # or through its interpreter (`…/bin/python3.12 …/bin/mlx_lm.server`).
+        re.compile(
+            r"^(?:\S*/)?(?:python[\d.]*\s+(?:-\S+\s+)*(?:-m\s+mlx_lm\b|(?:\S*/)?mlx_lm)"
+            r"|mlx_lm\.)"
+        ),
+    ),
 )
 # The /status.metrics counters a scenario reports as deltas (SPEC §10.6 Metrics).
 STATUS_DELTAS = (
@@ -59,22 +80,37 @@ STATUS_DELTAS = (
 )
 
 
-def running_gpu_apps(process_names: list[str] | None = None) -> list[str]:
-    """Known GPU-heavy apps among the running processes (best effort, never raises)."""
+def _ps(*options: str) -> list[str]:
+    try:
+        out = subprocess.run(
+            ["/bin/ps", *options],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return out.splitlines()
+
+
+def running_gpu_apps(
+    process_names: list[str] | None = None, command_lines: list[str] | None = None
+) -> list[str]:
+    """Known GPU-heavy apps among the running processes (best effort, never raises):
+    exact executable names, plus model servers with a model loaded."""
     if process_names is None:
-        try:
-            out = subprocess.run(
-                ["/bin/ps", "-axco", "comm="],
-                capture_output=True,
-                text=True,
-                timeout=3,
-                check=False,
-            ).stdout
-        except (OSError, subprocess.SubprocessError):
-            return []
-        process_names = out.splitlines()
-    names = [n.strip().lower() for n in process_names]
-    return [app for app in GPU_HEAVY_APPS if any(app.lower() in n for n in names)]
+        process_names = _ps("-axco", "comm=")
+    if command_lines is None:
+        command_lines = _ps("-axo", "args=")
+    names = {n.strip().lower() for n in process_names}
+    found = [label for label, executables in GPU_HEAVY_APPS if names & executables]
+    found += [
+        label
+        for label, pattern in GPU_HEAVY_COMMANDS
+        if any(pattern.search(line.strip()) for line in command_lines)
+    ]
+    return found
 
 
 def _rate(tokens: Any, ms: Any) -> float | None:

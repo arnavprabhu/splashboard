@@ -194,3 +194,59 @@ def test_facets(app: FastAPI, client: TestClient) -> None:
     assert facets["statuses"] == ["2xx", "4xx", "5xx", "cancelled"]
     ranged = client.get("/api/admin/usage/facets", params={"start": "2026-09-03"}).json()
     assert ranged["models"] == ["org/b"]
+
+
+def test_day_and_hour_buckets_are_local(app: FastAPI, client: TestClient) -> None:
+    """QA row 10: day buckets were UTC days, so one local (CDT) day split into two
+    bars labelled 19:00. Buckets are the Mac's local days and hours (docs/ui/02 F1)."""
+    import os
+    import time
+
+    saved = os.environ.get("TZ")
+    os.environ["TZ"] = "America/Chicago"
+    time.tzset()
+    try:
+        db = app.state.manager.usage
+        # 2026-10-04 09:00 and 22:30 CDT (UTC-5); the second is 03:30 UTC on 10-05.
+        # 2026-11-01 is the day CDT ends: 23:30 CST is 05:30 UTC on 11-02.
+        for ts in (
+            "2026-10-04T14:00:00+00:00",
+            "2026-10-05T03:30:00+00:00",
+            "2026-11-02T05:30:00+00:00",
+        ):
+            db.insert_request(
+                {"ts": ts, "model": "org/a", "endpoint": "/v1/chat/completions", "status": 200}
+            )
+        params = {"start": "2026-10-01", "end": "2026-11-05", "group": "none"}
+        days = client.get("/api/admin/usage/timeseries", params={**params, "bucket": "day"})
+        points = days.json()["points"]
+        assert [(p["t"], p["requests"]) for p in points] == [
+            ("2026-10-04T00:00:00-05:00", 2),
+            ("2026-11-01T00:00:00-05:00", 1),  # midnight was still CDT
+        ]
+        hours = client.get("/api/admin/usage/timeseries", params={**params, "bucket": "hour"})
+        assert [p["t"] for p in hours.json()["points"]] == [
+            "2026-10-04T09:00:00-05:00",
+            "2026-10-04T22:00:00-05:00",
+            "2026-11-01T23:00:00-06:00",
+        ]
+        minutes = client.get("/api/admin/usage/timeseries", params={**params, "bucket": "minute"})
+        assert minutes.json()["points"][0]["t"].startswith("2026-10-04T14:00:00")
+        # The fall-back night: 01:30 CDT (06:30Z) and 01:30 CST (07:30Z) are different
+        # hours with the same wall clock; each keeps its own offset.
+        assert client.delete("/api/admin/usage").status_code == 200
+        for ts in ("2026-11-01T06:30:00+00:00", "2026-11-01T07:30:00+00:00"):
+            db.insert_request(
+                {"ts": ts, "model": "org/a", "endpoint": "/v1/chat/completions", "status": 200}
+            )
+        night = client.get("/api/admin/usage/timeseries", params={**params, "bucket": "hour"})
+        assert [(p["t"], p["requests"]) for p in night.json()["points"]] == [
+            ("2026-11-01T01:00:00-05:00", 1),
+            ("2026-11-01T01:00:00-06:00", 1),
+        ]
+    finally:
+        if saved is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = saved
+        time.tzset()
