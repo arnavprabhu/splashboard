@@ -107,6 +107,18 @@ struct MenuModelTests {
         ] + Self.tail)
     }
 
+    // UI QA pass 2026-10-04, bug 4: the install's progress, size and the can't-resume warning.
+    @Test func installing() {
+        let e = engine("starting", phase: "installing", extra: ["install": ["repo": "mlx-community/Qwen3.8-27B-4bit", "revision": "4c0d1e2", "files": 9, "total_bytes": 19930000000, "done_bytes": 8600000000, "speed_bps": 84000000, "eta_s": 135]])
+        let s = snap(running(e))
+        #expect(Array(s[2...5]) == [
+            "[x] Preparing model (43 % · 84.0 MB/s · 2 m 15 s left)… · Loading weights · Warming up",
+            "[x] mlx-community/Qwen3.8-27B-4bit · 9 files · 8.6 GB of 19.9 GB",
+            "[x] Stopping now restarts the file in progress from zero.",
+            "Cancel Loading",
+        ])
+    }
+
     @Test func recovering() {
         let e = engine("recovering", extra: ["transport": ["recovering": true, "error": "Metal command buffer failed"]])
         let s = snap(running(e))

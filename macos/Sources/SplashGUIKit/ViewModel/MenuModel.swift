@@ -182,7 +182,11 @@ public enum MenuModel {
 
         case .starting:
             let download = input.downloads.first { $0.model == engine.model && $0.isActive }
-            entries.append(.text(Presentation.progressLine(phase: engine.phase, download: download)))
+            entries.append(.text(Presentation.progressLine(phase: engine.phase, download: download, install: engine.install)))
+            if let install = engine.install {
+                entries.append(.text(Format.truncate(Presentation.installLine(install), to: 80)))
+                entries.append(.text(Presentation.installWarning))
+            }
             entries.append(.button(MenuItem("Cancel Loading", .cancelLoading)))
             entries.append(stats)
 

@@ -169,10 +169,17 @@ public enum Presentation {
         return parts.joined(separator: " · ")
     }
 
-    /// `Preparing model ✓ · Loading weights… · Warming up` (10-menubar §3.2 Loading).
-    public static func progressLine(phase: EnginePhase?, download: DownloadItem?) -> String {
+    /// `Preparing model ✓ · Loading weights… · Warming up` (10-menubar §3.2 Loading). While Splash
+    /// installs, the bracket carries the install's percent, speed and ETA.
+    public static func progressLine(phase: EnginePhase?, download: DownloadItem?, install: EngineInstall? = nil) -> String {
         var preparing = "Preparing model"
-        if phase == .installing || phase == nil, let d = download, d.isActive {
+        if phase == .installing, let i = install {
+            var bits: [String] = []
+            if let p = i.fraction { bits.append("\(Int((p * 100).rounded())) %") }
+            if let s = i.speedBps, s > 0 { bits.append("\(Format.bytes(Int(s), base: 1000))/s") }
+            if let eta = i.etaS { bits.append("\(Format.duration(eta)) left") }
+            if !bits.isEmpty { preparing += " (\(bits.joined(separator: " · ")))" }
+        } else if phase == .installing || phase == nil, let d = download, d.isActive {
             var bits: [String] = []
             if let p = d.progress { bits.append("\(Int((p * 100).rounded())) %") }
             if let s = d.speedBps { bits.append("\(Format.bytes(Int(s)))/s") }
@@ -183,6 +190,25 @@ public enum Presentation {
         case .loading: return "Preparing model ✓ · Loading weights… · Warming up"
         case .warming: return "Preparing model ✓ · Loading weights ✓ · Warming up…"
         }
+    }
+}
+
+public extension Presentation {
+    /// `mlx-community/Qwen3.8-27B-4bit · 9 files · 8.6 GB of 19.9 GB` under the progress line.
+    static func installLine(_ i: EngineInstall) -> String {
+        let files = i.files == 1 ? "1 file" : "\(i.files) files"
+        return "\(i.repo) · \(files) · \(Format.bytes(i.doneBytes, base: 1000)) of \(Format.bytes(i.totalBytes, base: 1000))"
+    }
+
+    /// Splash cannot resume a file (SPEC Q24).
+    static let installWarning = "Stopping now restarts the file in progress from zero."
+
+    /// The alert before a Load or Restart interrupts an install.
+    static func interruptInstall(_ engine: EngineView?) -> (message: String, info: String, confirmTitle: String) {
+        let repo = engine?.install?.repo ?? engine?.model ?? "the model"
+        return ("Splash is downloading \(repo).",
+                "Interrupt it? Finished files are kept, but the file in progress starts again from zero; Splash can't resume it.",
+                "Interrupt")
     }
 }
 

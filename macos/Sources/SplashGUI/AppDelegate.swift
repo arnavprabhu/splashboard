@@ -43,6 +43,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarHost {
 
     // MARK: NSApplicationDelegate
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // A second copy (another build path) activates the running one and leaves. `exit` skips
+        // the quit flow, which could stop the shared server; nothing has started yet (start() runs later).
+        if bundled, SingleInstance.deferToRunningInstance() { exit(0) }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         FontLoader.registerBundledFonts()

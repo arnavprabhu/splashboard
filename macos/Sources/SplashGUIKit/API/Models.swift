@@ -59,6 +59,39 @@ public struct EngineErrorInfo: Sendable, Equatable {
     }
 }
 
+/// What `splash serve` downloads before it loads (`starting.installing`, `EngineView.install`).
+/// Splash cannot resume a file (SPEC Q24), so interrupting restarts the file in progress.
+public struct EngineInstall: Sendable, Equatable {
+    public var repo: String
+    public var revision: String
+    public var files: Int
+    public var totalBytes: Int
+    public var doneBytes: Int
+    public var speedBps: Double?
+    public var etaS: Double?
+
+    public init(repo: String, revision: String = "", files: Int = 0, totalBytes: Int = 0, doneBytes: Int = 0,
+                speedBps: Double? = nil, etaS: Double? = nil) {
+        self.repo = repo
+        self.revision = revision
+        self.files = files
+        self.totalBytes = totalBytes
+        self.doneBytes = doneBytes
+        self.speedBps = speedBps
+        self.etaS = etaS
+    }
+
+    public init?(json: JSONValue?) {
+        guard let json, let repo = json["repo"]?.string else { return nil }
+        self.init(repo: repo, revision: json["revision"]?.string ?? "", files: json["files"]?.int ?? 0,
+                  totalBytes: json["total_bytes"]?.int ?? 0, doneBytes: json["done_bytes"]?.int ?? 0,
+                  speedBps: json["speed_bps"]?.double, etaS: json["eta_s"]?.double)
+    }
+
+    /// 0…1, or nil when the total is unknown.
+    public var fraction: Double? { totalBytes > 0 ? min(1, Double(doneBytes) / Double(totalBytes)) : nil }
+}
+
 public struct EngineView: Sendable, Equatable {
     public var state: EngineState
     public var phase: EnginePhase?
@@ -72,12 +105,14 @@ public struct EngineView: Sendable, Equatable {
     public var engineVersion: String?
     public var engineFound: Bool?
     public var engineSource: String?
+    /// Set while `starting.installing` downloads files.
+    public var install: EngineInstall?
 
     public init(
         state: EngineState, phase: EnginePhase? = nil, model: String? = nil, uptimeS: Double? = nil,
         requestsInFlight: Int = 0, queued: Int = 0, transportError: String? = nil, restartAttempt: Int = 0,
         error: EngineErrorInfo? = nil, engineVersion: String? = nil, engineFound: Bool? = nil,
-        engineSource: String? = nil
+        engineSource: String? = nil, install: EngineInstall? = nil
     ) {
         self.state = state
         self.phase = phase
@@ -91,6 +126,7 @@ public struct EngineView: Sendable, Equatable {
         self.engineVersion = engineVersion
         self.engineFound = engineFound
         self.engineSource = engineSource
+        self.install = install
     }
 
     public init(json: JSONValue) {
@@ -106,7 +142,11 @@ public struct EngineView: Sendable, Equatable {
         engineVersion = json["engine"]?["version"]?.string
         engineFound = json["engine"]?["found"]?.bool
         engineSource = json["engine"]?["source"]?.string
+        install = phase == .installing ? EngineInstall(json: json["install"]) : nil
     }
+
+    /// Splash is downloading files for the model it is starting (a Load or Restart interrupts it).
+    public var isInstalling: Bool { state == .starting && phase == .installing }
 }
 
 // MARK: Live metrics (§5.1)

@@ -374,4 +374,64 @@ struct ViewModelTests {
         await vm.perform(.connectIntegration("claude-desktop"))
         #expect(host.opened.last?.absoluteString == "http://127.0.0.1:8000/admin/integrations?connect=claude-desktop")
     }
+
+    // UI QA pass 2026-10-04, bug 4: a Load or Restart during an install asks first (SPEC Q24).
+    static let installing = engineJSON("starting", phase: "installing", extra: ["install": ["repo": "mlx-community/Qwen3.8-27B-4bit", "revision": "4c0d1e2a9b", "files": 9, "total_bytes": 19930000000, "done_bytes": 8600000000, "speed_bps": 84000000, "eta_s": 135]])
+
+    @Test func loadDuringInstallAsksThenForces() async {
+        let api = MockAPI(engine: Self.installing)
+        let (vm, host) = make(api: api)
+        await vm.refreshEngine()
+        await vm.perform(.loadModel("mlx-community/Qwen3.6-35B-A3B-4bit"))
+        #expect(host.confirms.first?.message == "Splash is downloading mlx-community/Qwen3.8-27B-4bit.")
+        #expect(host.confirms.first?.title == "Interrupt")
+        #expect(api.mutating.last?.body?["force"]?.bool == true)
+    }
+
+    @Test func loadDuringInstallCancelledSendsNothing() async {
+        let api = MockAPI(engine: Self.installing)
+        let (vm, host) = make(api: api)
+        host.confirmAnswer = false
+        await vm.refreshEngine()
+        await vm.perform(.loadModel("mlx-community/Qwen3.6-35B-A3B-4bit"))
+        #expect(host.confirms.count == 1)
+        #expect(api.mutating.isEmpty)
+    }
+
+    @Test func restartDuringInstallAsksThenForces() async {
+        let api = MockAPI(engine: Self.installing)
+        let (vm, host) = make(api: api)
+        await vm.refreshEngine()
+        await vm.perform(.restartEngine)
+        #expect(host.confirms.first?.title == "Interrupt")
+        #expect(api.posted("/api/admin/engine/restart?force=true"))
+    }
+
+    @Test func installConflictAsksThenRetriesWithForce() async {
+        let api = MockAPI(engine: engineJSON("ready"))
+        api.set("POST", "/api/admin/engine/load", .failure(.http(status: 409, code: "install_in_progress", message: "installing")))
+        let (vm, host) = make(api: api)
+        await vm.refreshEngine()
+        await vm.perform(.loadModel("mlx-community/Qwen3.6-35B-A3B-4bit"))
+        #expect(host.confirms.count == 1)
+        #expect(api.mutating.map { $0.body?["force"]?.bool ?? false } == [false, true])
+    }
+
+    @Test func sameModelInstallConflictIsNotAnErrorAndNeedsNoConfirm() async {
+        let api = MockAPI(engine: engineJSON("ready"))
+        api.set("POST", "/api/admin/engine/load", .failure(.http(status: 409, code: "install_in_progress", message: "installing",
+                                                                   details: ["same_model": true])))
+        let (vm, host) = make(api: api)
+        await vm.refreshEngine()
+        await vm.perform(.loadModel("mlx-community/Qwen3.8-27B-4bit"))
+        #expect(host.confirms.isEmpty)
+        #expect(host.errors.isEmpty)
+        #expect(api.mutating.count == 1)
+    }
+
+    @Test func apiErrorCarriesDetails() {
+        let data = Data(#"{"error":{"message":"m","type":"conflict_error","code":"install_in_progress","details":{"same_model":true}}}"#.utf8)
+        #expect(APIError.from(status: 409, data: data).isSameModelInstall)
+        #expect(!APIError.http(status: 409, code: "install_in_progress", message: "m").isSameModelInstall)
+    }
 }

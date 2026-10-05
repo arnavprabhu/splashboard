@@ -488,7 +488,7 @@ public final class MenuBarViewModel {
                                           confirmTitle: "Restart") == true
                 else { return }
             }
-            await call { try await $0.restartEngine(force: inFlight > 0) }
+            await interruptingInstall(model: nil) { api, force in try await api.restartEngine(force: force || inFlight > 0) }
         case .openAdmin(let path):
             openAdmin(path)
         case .connectIntegration(let name):
@@ -535,6 +535,39 @@ public final class MenuBarViewModel {
         await call { try await $0.stopEngine() }
     }
 
+    /// Asks before a Load or Restart stops an install (Splash can't resume the file in progress,
+    /// SPEC Q24): up front while the engine shows `starting.installing`, and again on a 409
+    /// `install_in_progress`; Yes reruns the call with `force`. Loading the model that is being
+    /// installed doesn't ask: the manager answers 202 and keeps the install (an older manager
+    /// answered 409 with `details.same_model`, which is treated the same way, since `force` would
+    /// change nothing).
+    private func confirmInterruptInstall() async -> Bool {
+        let q = Presentation.interruptInstall(engine)
+        return await host?.confirm(message: q.message, info: q.info, confirmTitle: q.confirmTitle) == true
+    }
+
+    private func interruptingInstall(model: String?, _ body: (AdminAPI, Bool) async throws -> Any) async {
+        var force = false
+        if let e = engine, e.isInstalling, model == nil || model != e.model {
+            guard await confirmInterruptInstall() else { return }
+            force = true
+        }
+        do {
+            _ = try await body(api, force)
+        } catch let e as APIError where e.isSameModelInstall {
+            // Nothing to interrupt: the model asked for is the one installing.
+        } catch let e as APIError where e.code == "install_in_progress" && !force {
+            guard await confirmInterruptInstall() else { return }
+            await call { try await body($0, true) }
+            return
+        } catch let e as APIError {
+            host?.showError(title: "Splash GUI", message: e.userMessage)
+        } catch {
+            host?.showError(title: "Splash GUI", message: error.localizedDescription)
+        }
+        await refreshEngine()
+    }
+
     private func load(_ id: String) async {
         var force = false
         if let e = engine, e.state.isServing, e.requestsInFlight > 0 {
@@ -545,8 +578,17 @@ public final class MenuBarViewModel {
             else { return }
             force = true
         }
+        if let e = engine, e.isInstalling, e.model != id {
+            guard await confirmInterruptInstall() else { return }
+            force = true
+        }
         do {
             applyEngine(try await api.loadModel(id, force: force))
+        } catch let e as APIError where e.isSameModelInstall {
+            await refreshEngine()
+        } catch let e as APIError where e.code == "install_in_progress" && !force {
+            guard await confirmInterruptInstall() else { return }
+            await call { try await $0.loadModel(id, force: true) }
         } catch let e as APIError where e.code == "model_switch_busy" {
             guard await host?.confirm(message: "Requests are running.",
                                       info: "Switch models anyway? Clients will get an error.",

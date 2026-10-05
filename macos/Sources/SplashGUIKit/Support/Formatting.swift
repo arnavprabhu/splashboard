@@ -6,14 +6,15 @@ import Foundation
 public enum Format {
     public static let unknown = "—"
 
-    /// `21.3 GB`, `512 MB`, `0 B` (base 1024; one decimal below 100, none above).
-    public static func bytes(_ value: Int?) -> String {
+    /// `21.3 GB`, `512 MB`, `0 B` (base 1024; one decimal below 100, none above). Hub download
+    /// sizes pass `base: 1000`, as the web's downloads panel does.
+    public static func bytes(_ value: Int?, base: Double = 1024) -> String {
         guard let value, value >= 0 else { return unknown }
         let units = ["B", "KB", "MB", "GB", "TB", "PB"]
         var v = Double(value)
         var i = 0
-        while v >= 1024, i < units.count - 1 {
-            v /= 1024
+        while v >= base, i < units.count - 1 {
+            v /= base
             i += 1
         }
         if i == 0 { return "\(value) B" }
@@ -70,6 +71,18 @@ public enum Format {
         let h = m / 60
         if h < 48 { return String(format: "up %d h %02d m", h, m % 60) }
         return "up \(h / 24) d \(h % 24) h"
+    }
+
+    /// Seconds for an ETA: `45 s`, `2 m 15 s`, `1 h 05 m` (as the web's formatDuration).
+    public static func duration(_ seconds: Double?) -> String {
+        guard let seconds, seconds.isFinite, seconds >= 0 else { return unknown }
+        let s = Int(seconds)
+        if s < 60 { return "\(s) s" }
+        let m = s / 60
+        if m < 60 { return String(format: "%d m %02d s", m, s % 60) }
+        let h = m / 60
+        if h < 24 { return String(format: "%d h %02d m", h, m % 60) }
+        return "\(h / 24) d \(h % 24) h"
     }
 
     /// Cuts a single line to `limit` characters with an ellipsis.

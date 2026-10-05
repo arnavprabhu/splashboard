@@ -102,6 +102,19 @@ struct PresentationTests {
         #expect(Presentation.progressLine(phase: .installing, download: d)
             == "Preparing model (42 % · 84.0 MB/s)… · Loading weights · Warming up")
     }
+
+    // UI QA pass 2026-10-04, bug 4: install progress in the menu.
+    @Test func installProgress() {
+        let e = engine("starting", phase: "installing", extra: ["install": ["repo": "mlx-community/Qwen3.8-27B-4bit", "revision": "4c0d1e2a9b", "files": 9, "total_bytes": 19930000000, "done_bytes": 8600000000, "speed_bps": 84000000, "eta_s": 135]])
+        let i = e.install!
+        #expect(Presentation.progressLine(phase: .installing, download: nil, install: i)
+            == "Preparing model (43 % · 84.0 MB/s · 2 m 15 s left)… · Loading weights · Warming up")
+        #expect(Presentation.installLine(i) == "mlx-community/Qwen3.8-27B-4bit · 9 files · 8.6 GB of 19.9 GB")
+        #expect(Presentation.interruptInstall(e).message == "Splash is downloading mlx-community/Qwen3.8-27B-4bit.")
+        #expect(engine("starting", phase: "loading", extra: ["install": ["repo": "mlx-community/Qwen3.8-27B-4bit", "revision": "4c0d1e2a9b", "files": 9, "total_bytes": 19930000000, "done_bytes": 8600000000, "speed_bps": 84000000, "eta_s": 135]]).install == nil)
+        #expect(Format.duration(45) == "45 s")
+        #expect(Format.duration(3725) == "1 h 02 m")
+    }
 }
 
 @Suite("Title text and gauges (10-menubar §2.2; acceptance 2)")

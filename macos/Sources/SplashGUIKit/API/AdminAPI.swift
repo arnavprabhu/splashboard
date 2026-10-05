@@ -3,25 +3,33 @@ import Foundation
 /// An error from the admin API, in Splash's shape `{"error": {message, type, code, …}}`
 /// (docs/api.md §1.3), or a transport failure.
 public enum APIError: Error, Sendable, Equatable, CustomStringConvertible {
-    case http(status: Int, code: String, message: String)
+    /// `details` is the error's `details` object, when the manager sent one.
+    case http(status: Int, code: String, message: String, details: JSONValue? = nil)
     case unreachable(String)
     case invalidResponse
 
     public var status: Int? {
-        if case .http(let status, _, _) = self { return status }
+        if case .http(let status, _, _, _) = self { return status }
         return nil
     }
 
     public var code: String? {
-        if case .http(_, let code, _) = self { return code }
+        if case .http(_, let code, _, _) = self { return code }
         return nil
     }
 
     public var isNotImplemented: Bool { status == 501 }
 
+    /// A 409 `install_in_progress` for the model already being installed (`details.same_model`):
+    /// the load changes nothing, so it is not an error and needs no confirmation.
+    public var isSameModelInstall: Bool {
+        guard case .http(409, "install_in_progress", _, let details) = self else { return false }
+        return details?["same_model"]?.bool == true
+    }
+
     public var description: String {
         switch self {
-        case .http(let status, let code, let message): return "\(message) (\(status) \(code))"
+        case .http(let status, let code, let message, _): return "\(message) (\(status) \(code))"
         case .unreachable(let why): return "Splash GUI is not reachable: \(why)"
         case .invalidResponse: return "Unexpected response from Splash GUI"
         }
@@ -30,7 +38,7 @@ public enum APIError: Error, Sendable, Equatable, CustomStringConvertible {
     /// The human message to show in a follow-up notification.
     public var userMessage: String {
         switch self {
-        case .http(_, _, let message): return message
+        case .http(_, _, let message, _): return message
         default: return description
         }
     }
@@ -41,7 +49,7 @@ public enum APIError: Error, Sendable, Equatable, CustomStringConvertible {
         let message = err?["message"]?.string
             ?? json?["detail"]?.string
             ?? HTTPURLResponse.localizedString(forStatusCode: status)
-        return .http(status: status, code: err?["code"]?.string ?? "http_\(status)", message: message)
+        return .http(status: status, code: err?["code"]?.string ?? "http_\(status)", message: message, details: err?["details"])
     }
 }
 
