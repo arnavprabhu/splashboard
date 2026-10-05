@@ -34,3 +34,8 @@
 .dlr-id { flex: 1 1 320px; min-width: 0; }
 .dlr-result { border-top: var(--rule-minor) solid var(--rule); padding-top: 12px; }
 .dlr-plan-files { list-style: none; margin: 0; padding: 0; } .dlr-plan-files > li { gap: 6px 12px; border-bottom: var(--rule-minor) solid var(--rule); padding: 4px 0; overflow-wrap: anywhere; }
+/* local GGUF drop-in (SPEC §9.6) */
+.local-head { justify-content: space-between; align-items: baseline; gap: 8px 24px; }
+.local-head > .body { margin: 0; overflow-wrap: anywhere; }
+.local-errors { list-style: none; margin: 0; padding: 0; border-top: var(--rule-minor) solid var(--rule); }
+.local-error { display: flex; flex-wrap: wrap; gap: 4px 16px; border-bottom: var(--rule-minor) solid var(--rule); padding: 10px 0; overflow-wrap: anywhere; }

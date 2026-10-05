@@ -811,6 +811,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/models/local": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Local Models
+         * @description Loose `.gguf` files in the models folder and what became of each (SPEC §9.6).
+         */
+        get: operations["local_models_api_admin_models_local_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/models/local/rescan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rescan Local
+         * @description Look for dropped `.gguf` files now; `restore_ignored` re-adds ones deleted in the GUI.
+         */
+        post: operations["rescan_local_api_admin_models_local_rescan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/models/{model_id}/verify": {
         parameters: {
             query?: never;
@@ -1169,7 +1209,8 @@ export interface paths {
          * Timeseries
          * @description Points per bucket (tokens per day per model, requests over time) and, with
          *     `view=heatmap`, the 7 × 24 local-time grid. `group` is an alias of `group_by`.
-         *     Without `start`, the window is the last 30 days.
+         *     Without `start`, the window is the last 30 days. `hour`/`day` points are local
+         *     buckets: `t` is the local bucket start with its UTC offset.
          */
         get: operations["timeseries_api_admin_usage_timeseries_get"];
         put?: never;
@@ -6977,6 +7018,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    local_models_api_admin_models_local_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    rescan_local_api_admin_models_local_rescan_post: {
+        parameters: {
+            query?: {
+                restore_ignored?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

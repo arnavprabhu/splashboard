@@ -268,6 +268,9 @@ export async function mockManager(page: Page, opts: MockOptions = {}): Promise<s
     if (path.endsWith('/reveal-backup')) {
       return route.fulfill({ status: 404, json: { error: { message: 'No backup yet', type: 'not_found', code: 'no_backup' } } });
     }
+    // Local GGUF drop-in (SPEC §9.6): nothing dropped, nothing added.
+    if (path === '/models/local') return route.fulfill({ json: { files: {}, ignored: [] } });
+    if (path === '/models/local/rescan') return route.fulfill({ json: { added: [], files: {}, ignored: [] } });
     if (path === '/mcp/servers' && req.method() === 'GET') return route.fulfill({ json: { servers: MCP_SERVERS } });
     if (path === '/mcp/tools') return route.fulfill({ json: { tools: [{ server: 'github', name: 'search_issues' }], errors: [] } });
     if (/^\/integrations\/[^/]+\/open$/.test(path)) return route.fulfill({ json: { ok: true, path: '/Applications/App.app' } });

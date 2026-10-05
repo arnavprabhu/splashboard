@@ -22,6 +22,7 @@ import * as flows from './actions';
 import { getCard, getModel, inspectModel } from './api';
 import { CompatTag } from './bits';
 import { formatLabel, hfUrl, installedVariants, isClefId, isProjector, pickVariant, repoOf, sha7, shortName } from './logic';
+import { isLocalId } from './local';
 import { Markdown } from './markdown';
 import { VariantTable } from './VariantTable';
 
@@ -46,8 +47,10 @@ export function ModelDrawer({ id, installed, activeId, onClose, onDelete, onVeri
   const installedHere = id ? installed.filter((m) => repoOf(m.id).toLowerCase() === repo.toLowerCase()) : [];
   const exact = installedHere.find((m) => m.id === id) ?? (requestedVariant ? undefined : installedHere[0]);
   const detail = useApi<ModelDetail | null>((signal) => (exact ? getModel(exact.id, signal) : Promise.resolve(null)), [exact?.id], open && Boolean(exact));
-  const inspect = useApi<InspectResult>((signal) => inspectModel(repo, signal), [repo], open);
-  const card = useApi<ModelCard>((signal) => getCard(repo, signal), [repo], open);
+  // A dropped `.gguf` (`local/…`) has no Hub repo: no compatibility check, card or Hub link.
+  const local = id ? isLocalId(id) : false;
+  const inspect = useApi<InspectResult>((signal) => inspectModel(repo, signal), [repo], open && !local);
+  const card = useApi<ModelCard>((signal) => getCard(repo, signal), [repo], open && !local);
 
   if (!open || !id) return null;
   const ins = inspect.data;
@@ -144,6 +147,11 @@ export function ModelDrawer({ id, installed, activeId, onClose, onDelete, onVeri
           <span class="mono">{id}</span>
           {isActive ? <StatusChip state={engineState.value} announce={false} /> : ins ? <CompatTag state={ins.badge} acc={false} /> : inspect.loading ? <CompatTag state="checking" /> : null}
           {model && !isActive && <Tag tone="ink">{t('models.status.installed')}</Tag>}
+          {local && (
+            <Tag tone="mute" title={t('models.local.tag_title')}>
+              {t('models.local.tag')}
+            </Tag>
+          )}
         </div>
         {install && <Install install={install} />}
 
@@ -195,9 +203,11 @@ export function ModelDrawer({ id, installed, activeId, onClose, onDelete, onVeri
               <Button onClick={() => void flows.revealModel(model.id)}>{t('models.action.reveal')}</Button>
             </>
           )}
-          <ExternalLink href={hfUrl(id)} class="btn" data-variant="text">
-            {t('models.action.hf')}
-          </ExternalLink>
+          {!local && (
+            <ExternalLink href={hfUrl(id)} class="btn" data-variant="text">
+              {t('models.action.hf')}
+            </ExternalLink>
+          )}
         </div>
 
         {isClefId(id) && (
@@ -218,6 +228,8 @@ export function ModelDrawer({ id, installed, activeId, onClose, onDelete, onVeri
             <p class="body">
               <span class="mono">{ins.reason ?? DASH}</span>
             </p>
+          ) : local ? (
+            <p class="body tnum">{t('models.local.drawer_line', { size: formatBytes(det?.size_bytes ?? model?.size_bytes ?? null) })}</p>
           ) : isGguf ? (
             <VariantTable
               variants={ins?.variants ?? []}

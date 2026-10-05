@@ -22,6 +22,7 @@ import {
   useInstalled,
   useModelsTitle,
 } from "./models/hooks";
+import { LocalDrop } from "./models/LocalDrop";
 import { deletePlan, shortName, sortInstalled } from "./models/logic";
 import { ManagerRow } from "./models/ManagerRow";
 import { ModelDrawer } from "./models/ModelDrawer";
@@ -362,6 +363,10 @@ export default function ModelsManager() {
         </>
       )}
 
+      <LocalDrop
+        modelsDir={disk?.models_dir ?? null}
+        onRescanned={() => void installed.reload()}
+      />
       <DiskBand disk={disk} loading={installed.loading && !installed.data} />
 
       <ModelDrawer

@@ -15,6 +15,7 @@ import { t } from '../../strings/models';
 import * as flows from './actions';
 import { downloadMeta } from './DownloadsPanel';
 import { hfUrl, itemProgress, percent, rowLabel, sha7, shortName } from './logic';
+import { isLocalId } from './local';
 import { Row } from './Row';
 
 export interface ManagerRowProps {
@@ -89,6 +90,11 @@ export function ManagerRow(props: ManagerRowProps) {
       {model?.pinned && (
         <Tag tone="mute" title={t('models.row.pinned_title', { sha: sha7(model.revision ?? model.commit) ?? '' })}>
           {t('models.status.pinned')}
+        </Tag>
+      )}
+      {isLocalId(id) && (
+        <Tag tone="mute" title={t('models.local.tag_title')}>
+          {t('models.local.tag')}
         </Tag>
       )}
       {model?.language_only && <Tag tone="ink">{t('models.row.language_only')}</Tag>}
@@ -172,9 +178,11 @@ export function ManagerRow(props: ManagerRowProps) {
       <Button size="s" onClick={() => void flows.revealModel(id)} aria-label={t('models.action.reveal_label', { id })}>
         {t('models.action.reveal')}
       </Button>
-      <ExternalLink href={hfUrl(id)} class="btn" data-size="s" data-variant="text">
-        {t('models.action.hf')}
-      </ExternalLink>
+      {!isLocalId(id) && (
+        <ExternalLink href={hfUrl(id)} class="btn" data-size="s" data-variant="text">
+          {t('models.action.hf')}
+        </ExternalLink>
+      )}
     </>
   ) : null;
 
