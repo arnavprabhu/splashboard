@@ -47,6 +47,7 @@ def h(
             self.http: Any = _Shared(harness.client)
 
     monkeypatch.setattr(cli_module, "Client", Client)
+    monkeypatch.delenv("SPLASH_PORT", raising=False)
     return harness
 
 
@@ -58,20 +59,23 @@ def run(capsys: pytest.CaptureFixture[str], *argv: str) -> tuple[int, str, str]:
 
 def test_ls_load_status_unload(h: EngineHarness, capsys: pytest.CaptureFixture[str]) -> None:
     code, out, _ = run(capsys, "ls", "--json")
-    assert code == 0 and [m["id"] for m in json.loads(out)["models"]] == [MODEL]
-    code, out, _ = run(capsys, "ls")
-    assert code == 0 and MODEL in out and "ready" in out
-    code, out, _ = run(capsys, "load", f"{MODEL}:no-think")
-    assert code == 0 and out.strip() == f"{MODEL}:no-think"
+    assert code == 0 and [m["id"] for m in json.loads(out)] == [MODEL]
+    code, out, err = run(capsys, "ls")
+    assert code == 0 and MODEL in out and "GGUF" in out
+    assert "1 model ·" in err, "the summary line goes to stderr"
+    code, out, err = run(capsys, "load", f"{MODEL}:no-think")
+    assert code == 0 and f"{MODEL} ready in" in out
+    assert "profiles apply per request" in err
     assert h.engine()["state"] in ("ready", "busy") and h.engine()["model"] == MODEL
     code, out, _ = run(capsys, "status")
-    assert code == 0 and f"Engine:   ready  {MODEL}" in out
-    assert "OpenAI:   http://127.0.0.1:8000/v1" in out
+    assert code == 0 and f"Engine     ready · Splash 1.2.0 · {MODEL}" in out
+    assert "Endpoints  OpenAI  http://127.0.0.1:8000/v1" in out
     code, out, _ = run(capsys, "ps")
-    assert code == 0 and "Requests: 0 in flight" in out and "OpenAI" not in out
+    assert code == 0 and "IN FLIGHT" in out and MODEL in out and "OpenAI" not in out
     code, out, _ = run(capsys, "status", "--json")
-    assert json.loads(out)["model"] == MODEL
-    assert run(capsys, "unload")[0] == 0
+    assert json.loads(out)["engine"]["model"] == MODEL
+    code, out, _ = run(capsys, "unload")
+    assert code == 0 and "Engine stopped" in out
     assert h.engine()["state"] == "stopped"
 
 
@@ -81,8 +85,9 @@ def test_config_get_set_unset_validates(
     assert run(capsys, "config", "set", "routing.load_timeout", "60")[0] == 0
     code, out, _ = run(capsys, "config", "get", "routing.load_timeout")
     assert code == 0 and float(out) == 60
+    # docs/ui/11 §11, §13.2: a validation error is `✗ key: message`, exit 2.
     code, _, err = run(capsys, "config", "set", "serve.queue_size", "0")
-    assert code == 1 and "splash:" in err
+    assert code == 2 and err.startswith("✗ ") and "serve.queue_size" in err
     assert h.settings_document()["global"]["serve"]["queue_size"] == 32
     assert run(capsys, "config", "unset", "routing.load_timeout")[0] == 0
     assert h.settings_document()["global"]["routing"]["load_timeout"] == 120
@@ -90,11 +95,13 @@ def test_config_get_set_unset_validates(
 
 def test_rm_and_version(h: EngineHarness, capsys: pytest.CaptureFixture[str]) -> None:
     code, out, _ = run(capsys, "version")
-    assert code == 0 and "1.2.0" in out
-    assert run(capsys, "rm", MODEL, "--yes")[0] == 0
+    assert code == 0 and "Splash 1.2.0" in out
+    code, out, _ = run(capsys, "rm", MODEL, "--yes")
+    assert code == 0 and "Deleted ·" in out and "freed" in out
     assert h.client.get("/api/admin/models").json()["models"] == []
+    # §13.2: a model that is not installed is exit 5.
     code, _, err = run(capsys, "rm", MODEL, "--yes")
-    assert code == 1 and "not installed" in err.lower()
+    assert code == 5 and "not installed" in err.lower()
 
 
 def test_launch_hands_the_profile_to_splash_s_configurator_and_records_it(
@@ -167,7 +174,7 @@ def test_serve_passthrough_warns_when_the_manager_has_the_port(
     monkeypatch.setattr(httpx, "get", lambda *a, **k: httpx.Response(200, json=health))
     with pytest.raises(SystemExit):
         cli_module.main(["serve", "--model", "x"])
-    assert "Splash GUI is serving on port 8000" in capsys.readouterr().err
+    assert "manager is already listening on 8000" in capsys.readouterr().err
     with pytest.raises(SystemExit):
         cli_module.main(["serve", "--model", "x", "--port=9999"])
     assert "warning" not in capsys.readouterr().err
@@ -175,7 +182,7 @@ def test_serve_passthrough_warns_when_the_manager_has_the_port(
     monkeypatch.setattr(httpx, "get", lambda *a, **k: httpx.Response(200, json={"status": "ok"}))
     with pytest.raises(SystemExit):
         cli_module.main(["serve", "--model", "x"])
-    assert "Splash GUI is serving" not in capsys.readouterr().err
+    assert "already listening" not in capsys.readouterr().err
     assert len(calls) == 3
 
 

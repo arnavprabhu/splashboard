@@ -313,9 +313,15 @@ def test_main_errors_are_reported_without_a_traceback(monkeypatch, capsys):
             return False
 
     monkeypatch.setattr(cli_module, "Client", Down)
-    assert cli_module.main(["status"]) == 1
-    assert "splash:" in capsys.readouterr().err
-    assert "Traceback" not in capsys.readouterr().err
+    # docs/ui/11 §4.1, §13.2: the manager being down is exit 3.
+    assert cli_module.main(["status"]) == 3
+    out, err = capsys.readouterr()
+    assert out == "Manager    not running · start with: splash start\n"
+    assert "Traceback" not in err
+    assert cli_module.main(["ls"]) == 3
+    err = capsys.readouterr().err
+    assert "Splash GUI is not running" in err and "splash start" in err
+    assert "Traceback" not in err
 
 
 def test_the_shim_path_is_not_written_without_being_asked(app, tmp_path, monkeypatch):
