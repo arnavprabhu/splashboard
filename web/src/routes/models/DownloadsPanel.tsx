@@ -17,6 +17,8 @@ import { verifyModel } from './api';
 import { CancelSheet } from './CancelSheet';
 import { ACTIVE_DOWNLOAD_STATES, downloadErrorView, itemProgress, percent, shortName, summarizeDownloads, type DownloadAction } from './logic';
 import { globalSetting, writeGlobalSetting } from './settings';
+// The panel also appears in the welcome wizard, which doesn't load the Models page styles.
+import '../../styles/pages/models.css';
 
 const HUB = { base: 1000 } as const;
 

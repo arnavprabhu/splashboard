@@ -10,6 +10,7 @@
 .drawer-id, .dl-model { overflow-wrap: anywhere; }
 .drawer-section { border-top: 1px solid var(--rule); padding-top: 20px; }
 .drawer-file, .dl-file, .delete-item { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; border-bottom: 1px solid var(--rule); padding: 10px 0; overflow-wrap: anywhere; }
+.dl-list { list-style: none; margin: 0; padding: 0; }
 .dl-row { padding: 24px 0; border-bottom: 1px solid var(--rule); }
 .dl-meta, .dl-actions { margin-top: 12px; }
 .dl-files { margin-top: 16px; }

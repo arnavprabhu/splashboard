@@ -116,9 +116,7 @@ export default function Downloader() {
       {tab === "supported" && <Supported installedIds={installedIds} memory={s?.memory_bytes ?? null} onDetails={openDrawer} />}
       {tab === "id" && <ById initial={params.get("id") ?? ""} free={free} memory={s?.memory_bytes ?? null} installedIds={installedIds} />}
       {tab === "search" && <Search onOpen={openDrawer} />}
-      <div id="downloads">
-        <DownloadsPanel installedIds={installedIds} />
-      </div>
+      <DownloadsPanel installedIds={installedIds} />
       <ModelDrawer id={drawerId} installed={installed.data?.models ?? []} activeId={engine.value?.model ?? null} onClose={closeDrawer} />
     </>
   );

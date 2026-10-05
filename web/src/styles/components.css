@@ -1471,6 +1471,8 @@ textarea.input {
   font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--rule); padding: 9px 12px; max-width: 100%;
 }
 .band textarea, .chat-layout textarea { display: block; width: 100%; resize: vertical; }
+/* The rule above has the same specificity as `.select select`; keep the room for the ▾ arrow. */
+.band .select select, .chat-layout .select select { padding-right: 36px; }
 .band pre, .chat-layout pre { max-width: 100%; overflow-x: auto; }
 .markdown p { white-space: pre-wrap; }
 .markdown h3 { margin: 20px 0 8px; }
