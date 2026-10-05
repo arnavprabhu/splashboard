@@ -24,6 +24,11 @@ import { engine } from "../store";
 import { t } from "../strings/usage";
 import { useTitle } from "../lib/title";
 import { STATUS_TABS } from "./tabs";
+
+/** A model ID that may wrap after "/" and ":" (owner / repo : variant), never mid-name (not at its hyphens). */
+function breakable(id: string) {
+  return id.split(/(?<=[/:])/).map((part, i) => [i ? <wbr key={`b${i}`} /> : null, <span key={i} class="nowrap">{part}</span>]);
+}
 import {
   FILTER_KEYS,
   HISTORY_PAGE_SIZE,
@@ -568,10 +573,7 @@ function RequestLog({
       key: "model",
       label: t("usage.history.l.model"),
       render: (r) => (
-        <span class="mono history-model">
-          {r.model ?? DASH}
-          {r.profile ? `:${r.profile}` : ""}
-        </span>
+        <span class="mono history-model">{r.model ? breakable(r.model + (r.profile ? ":" + r.profile : "")) : DASH}</span>
       ),
     },
     { key: "endpoint", label: t("usage.history.l.endpoint"), render: (r) => <span class="mono">{r.endpoint}</span> },

@@ -52,7 +52,7 @@ export const getDoctor = (signal?: AbortSignal) => orNull(api.get<DoctorReport>(
 export const installEngine = () => api.post<JobAccepted>('/engine/install');
 export const upgradeEngine = () => api.post<JobAccepted>('/engine/upgrade');
 export const getEngine = () => api.get<EngineView>('/engine');
-export const loadEngine = (model: string) => api.post<EngineView>('/engine/load', { model, force: false });
+export const loadEngine = (model: string, force = false) => api.post<EngineView>('/engine/load', { model, force });
 
 // ---------- settings ----------
 

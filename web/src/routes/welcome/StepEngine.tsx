@@ -15,7 +15,7 @@ import { t } from '../../strings/welcome';
 import { getBrew, getDoctor, installEngine, notBuilt, upgradeEngine } from './api';
 import { Glyph, StepLayout, useWizard } from './frame';
 import { HOMEBREW_INSTALL_COMMAND, openHomebrewInstaller, openTerminal, SPLASH_INSTALL_COMMAND, SPLASH_UPGRADE_COMMAND } from './host';
-import { brewStatus, doctorCheck, engineStepReady, macStatus, splashStatus, type CheckStatus } from './logic';
+import { brewStatus, doctorCheck, engineStepReady, macStatus, shellStatus, splashStatus, type CheckStatus } from './logic';
 import { nextStep } from './steps';
 
 export const BREW_POLL_MS = 2000;
@@ -155,7 +155,8 @@ export function StepEngine() {
   const stillWaiting = waiting && now - waitingSince! > BREW_PATIENCE_MS;
 
   const report: DoctorReport | null | 'unavailable' = doctor.data === null && !doctor.loading && !doctor.error ? 'unavailable' : doctor.data;
-  const shadow = doctorCheck(report, 'path_shadowing');
+  // The manager's id is `path` (system/api.py doctor); `path_shadowing` was its old name in docs/api.md.
+  const shadow = doctorCheck(report, 'path') ?? doctorCheck(report, 'path_shadowing');
   const perms = doctorCheck(report, 'permissions');
 
   const macValue = system
@@ -323,13 +324,23 @@ export function StepEngine() {
           <>
             <CheckRow
               label={t('welcome.engine.row.shell')}
-              status={!report ? 'pending' : shadow ? (shadow.status === 'skip' ? 'skip' : shadow.status) : 'ok'}
+              status={shellStatus(report, shadow)}
               testId="check-shell"
-              value={!report ? t('welcome.engine.checking') : shadow && shadow.status !== 'ok' ? shadow.message : t('welcome.engine.shell_ok')}
+              value={
+                !report ? (
+                  t('welcome.engine.checking')
+                ) : !shadow ? (
+                  <span class="mute">{t('welcome.engine.shell_unknown')}</span>
+                ) : shadow.status === 'ok' ? (
+                  t('welcome.engine.shell_ok')
+                ) : (
+                  shadow.message
+                )
+              }
             >
               {shadow && (shadow.status === 'warn' || shadow.status === 'fail') && (
                 <Disclosure summary={t('welcome.engine.shell_what')}>
-                  {shadow.fix && <CodeBlock code={shadow.fix} what={t('welcome.engine.shell_what')} wrap />}
+                  {shadow.fix && <p class="body">{shadow.fix}</p>}
                   <p class="body">{t('welcome.engine.shell_fix')}</p>
                 </Disclosure>
               )}

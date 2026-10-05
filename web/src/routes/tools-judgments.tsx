@@ -320,16 +320,14 @@ function SystemOne({ model }: { model: string }) {
                     <span class="label">
                       {formatIndex(i + 1)} {key} · {String(a.type)}
                     </span>
-                    <span class="label tnum">
-                      {v.head}
-                      {v.noInference && ` · ${t("tools.jd.no_inference")}`}
+                    {/* Facts are separate items spaced by the gap: no "·" is left dangling when a line wraps or a fact is absent. */}
+                    <span class="label tnum jd-answer-facts" data-testid="jd-answer-facts">
+                      <span>{v.head}</span>
+                      {v.noInference && <span>{t("tools.jd.no_inference")}</span>}
                       {v.confidence !== null && !v.noInference && (
-                        <>
-                          {" · "}
-                          <Tooltip text={t("tools.jd.confidence_tip")}>
-                            <span tabIndex={0}>{t("tools.jd.confidence", { v: v.confidence.toFixed(2) })} ⓘ</span>
-                          </Tooltip>
-                        </>
+                        <Tooltip text={t("tools.jd.confidence_tip")}>
+                          <span tabIndex={0}>{t("tools.jd.confidence", { v: v.confidence.toFixed(2) })} ⓘ</span>
+                        </Tooltip>
                       )}
                     </span>
                   </div>

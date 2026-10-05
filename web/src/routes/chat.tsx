@@ -46,6 +46,7 @@ import {
   type SamplingForm,
   type ToolChoiceKind,
 } from "./chat/logic";
+import { isCancelled, withInstallConfirm } from "../lib/engine-install";
 import { MessageView, type ToolContext, type ToolDraft } from "./chat/MessageView";
 import { ModelSelector } from "./chat/ModelSelector";
 import { PANEL_TABS, SidePanel, type PanelTab } from "./chat/SidePanel";
@@ -112,6 +113,61 @@ function useWidth(ref: { current: HTMLElement | null }): Width {
   return w;
 }
 
+/** Within 48 px of the end: the thread follows new output (07 §2: auto-follow until the user scrolls up). */
+export function nearBottom(el: Pick<HTMLElement, "scrollHeight" | "scrollTop" | "clientHeight">): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+}
+
+/**
+ * Desktop (07 §2.1): the layout fills the viewport under the nav so the thread column is the only
+ * scrolling region, with the composer at its bottom. Phones keep the page scroll.
+ */
+function useThreadScroll(layout: { current: HTMLElement | null }, messages: { current: HTMLElement | null }, width: Width, content: unknown) {
+  const follow = useRef(true);
+  const scroller = (): HTMLElement | null => (width === "narrow" ? (document.scrollingElement as HTMLElement | null) : messages.current);
+  useEffect(() => {
+    const el = layout.current;
+    if (!el) return;
+    const fit = () => {
+      if (width === "narrow") {
+        el.style.height = "";
+        return;
+      }
+      const top = el.getBoundingClientRect().top + window.scrollY;
+      el.style.height = `max(320px, calc(100dvh - ${Math.round(top)}px))`;
+    };
+    fit();
+    // Anything above the layout can change height later (an alert band, a banner, the header wrapping):
+    // re-measure whenever the page's box changes, not only on window resize. fit() converges in one pass.
+    let frame = 0;
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(fit);
+    });
+    ro?.observe(document.body);
+    if (el.parentElement) ro?.observe(el.parentElement);
+    const target: HTMLElement | Window | null = width === "narrow" ? window : messages.current;
+    const onScroll = () => {
+      const s = scroller();
+      if (s) follow.current = nearBottom(s);
+    };
+    window.addEventListener("resize", fit);
+    target?.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("resize", fit);
+      ro?.disconnect();
+      cancelAnimationFrame(frame);
+      target?.removeEventListener("scroll", onScroll);
+      el.style.height = "";
+    };
+  }, [width]);
+  useEffect(() => {
+    const s = scroller();
+    if (s && follow.current) s.scrollTop = s.scrollHeight;
+  }, [content]);
+  return follow;
+}
+
 export default function ChatPage({ params }: { params?: { cid?: string } }) {
   const cid = params?.cid ? decodeURIComponent(params.cid) : null;
   const [, navigate] = useLocation();
@@ -157,6 +213,8 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
   const [tab, setTab] = useState<PanelTab>("sampling");
   const layout = useRef<HTMLDivElement>(null);
   const width = useWidth(layout);
+  const messagesEl = useRef<HTMLDivElement>(null);
+  const following = useThreadScroll(layout, messagesEl, width, chat);
   const [panelOpen, setPanelOpen] = useState(() => readLocal(PANEL_KEY, true));
   const [listSheet, setListSheet] = useState(false);
   const [panelSheet, setPanelSheet] = useState(false);
@@ -400,6 +458,8 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
 
   /** Streams one assistant reply under `doc.active_leaf`. Returns false when it failed before any output. */
   async function generate(doc: Chat, retries = 0, waitForIdle = false): Promise<boolean> {
+    // A new turn scrolls to the end and follows it until the user scrolls up.
+    following.current = true;
     const ctrl = new AbortController();
     abort.current = ctrl;
     setBusy(true);
@@ -461,10 +521,12 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
       }
       const done = apply();
       if (!done.meta?.finish_reason) {
-        done.meta = { ...done.meta, finish_reason: "disconnected", est_out: estimateTokens(acc.content) };
+        // Stop aborts the fetch, which can end the stream instead of throwing: that is "stopped", not a dropped connection.
+        const stopped = ctrl.signal.aborted;
+        done.meta = { ...done.meta, finish_reason: stopped ? "stopped" : "disconnected", est_out: estimateTokens(acc.content) };
         next = { ...next, messages: (next.messages ?? []).map((m) => (m.id === id ? done : m)) };
         setChat(next);
-        setError({ ...classifyError(new Error("disconnected")), kind: "generic", title: t("chat.error.disconnected"), body: null, retries: 0, retryIn: null });
+        if (!stopped) setError({ ...classifyError(new Error("disconnected")), kind: "generic", title: t("chat.error.disconnected"), body: null, retries: 0, retryIn: null });
       }
       saveSoon(next);
       if (requestId) void attachInjected(id, requestId);
@@ -855,9 +917,9 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
     if (!model) return;
     setLoadingModel(true);
     try {
-      await api.post("/engine/load", { model });
+      await withInstallConfirm((force) => api.post("/engine/load", { model, force }), model);
     } catch (err) {
-      toastError(t("chat.model.loading_failed"), err);
+      if (!isCancelled(err)) toastError(t("chat.model.loading_failed"), err);
     } finally {
       setLoadingModel(false);
     }
@@ -999,7 +1061,7 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
             </Button>
           )}
           {error.kind === "failed" && (
-            <Button size="s" variant="solid" onClick={() => void api.post("/engine/restart").catch((err) => toastError(t("chat.restart_failed"), err))}>
+            <Button size="s" variant="solid" onClick={() => void withInstallConfirm((force) => api.post(force ? "/engine/restart?force=true" : "/engine/restart")).catch((err) => isCancelled(err) || toastError(t("chat.restart_failed"), err))}>
               {t("chat.action.restart")}
             </Button>
           )}
@@ -1084,7 +1146,7 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
               {t("chat.empty.no_models")}
             </Banner>
           )}
-          <div class="chat-messages">
+          <div class="chat-messages" ref={messagesEl} data-testid="chat-messages">
             {visible.length === 0 ? (
               <Empty size="l" title={t("chat.empty.statement")}>
                 {t("chat.empty.line")}

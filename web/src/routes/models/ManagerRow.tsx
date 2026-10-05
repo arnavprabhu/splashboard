@@ -3,12 +3,14 @@ import type { DownloadItem, InstalledModel } from '../../api/models';
 import { Banner } from '../../components/Banner';
 import { Button, ExternalLink } from '../../components/Button';
 import { Checkbox } from '../../components/controls';
+import { Install } from '../../components/Install';
 import { ProgressBar } from '../../components/ProgressBar';
 import { StatusChip } from '../../components/StatusChip';
 import { Tag } from '../../components/Tag';
+import { installOf } from '../../lib/engine-install';
 import { formatBytes, formatRelativeTime } from '../../lib/format';
 import { modelSettingsPath } from '../../lib/model-id';
-import { engineState } from '../../store';
+import { engine, engineState } from '../../store';
 import { t } from '../../strings/models';
 import * as flows from './actions';
 import { downloadMeta } from './DownloadsPanel';
@@ -77,6 +79,7 @@ export function ManagerRow(props: ManagerRowProps) {
   const short = shortName(id);
   const dlActive = download && (download.state === 'running' || download.state === 'queued' || download.state === 'paused');
   const size = model?.size_bytes ?? download?.bytes_total ?? null;
+  const install = active ? installOf(engine.value) : null;
 
   const detail = (
     <span class="mrow-meta">
@@ -97,6 +100,7 @@ export function ManagerRow(props: ManagerRowProps) {
 
   const body = (
     <>
+      {install && <Install install={install} />}
       {dlActive && (
         <ProgressBar
           value={download.state === 'queued' ? 0 : itemProgress(download)}
@@ -191,7 +195,7 @@ export function ManagerRow(props: ManagerRowProps) {
       status={active ? <StatusChip state={engineState.value} announce={false} /> : <StatusTags model={model} download={download} verifying={verifying} accentUpdate={props.accentUpdate} />}
       label={rowLabel(index, model?.format ?? null, id, size, model ? 1024 : 1000)}
       detail={detail}
-      body={dlActive || verifyError ? body : undefined}
+      body={dlActive || verifyError || install ? body : undefined}
       actions={actions}
       expanded={Boolean(dlActive)}
     />

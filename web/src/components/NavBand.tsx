@@ -67,20 +67,23 @@ export function NavBand({ engineVersion, model, state, authEnabled, onLogout, to
         Splash GUI
       </Link>
       <div class="navband-meta meta" aria-label="Engine">
-        <span>{engineMissing ? t('nav.engine_missing') : engineVersion ? t('nav.engine', { version: engineVersion }) : t('nav.engine_unknown')}</span>
-        <span aria-hidden="true">·</span>
-        <span class="mono" style={{ overflowWrap: 'anywhere' }}>
-          {model ?? t('nav.no_model')}
+        {/* Each separator trails its item inside one group, so a wrapped line never starts with "·". */}
+        <span class="navband-item">
+          <span>{engineMissing ? t('nav.engine_missing') : engineVersion ? t('nav.engine', { version: engineVersion }) : t('nav.engine_unknown')}</span>
+          <span aria-hidden="true">·</span>
         </span>
-        <span aria-hidden="true">·</span>
-        <StatusChip state={state ?? null} />
+        <span class="navband-item">
+          <span class="mono">{model ?? t('nav.no_model')}</span>
+          <span aria-hidden="true">·</span>
+        </span>
+        <span class="navband-item">
+          <StatusChip state={state ?? null} />
+          {tokps && <span aria-hidden="true">·</span>}
+        </span>
         {tokps && (
-          <>
-            <span aria-hidden="true">·</span>
-            <span class="tnum" data-testid="nav-tokps">
-              {tokps}
-            </span>
-          </>
+          <span class="tnum" data-testid="nav-tokps">
+            {tokps}
+          </span>
         )}
       </div>
       <nav aria-label={t('nav.main')}>

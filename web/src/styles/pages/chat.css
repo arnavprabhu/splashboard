@@ -7,6 +7,13 @@
 .chat-thread-head { justify-content: space-between; padding: 12px 0; border-bottom: var(--rule-minor) solid var(--rule); }
 .chat-thread-title { overflow-wrap: anywhere; }
 .chat-messages { flex: 1 1 auto; padding-bottom: 24px; }
+/* Desktop (07 §2.1): the layout is sized to the viewport (chat.tsx useThreadScroll); the thread's
+   messages are the scrolling region and the composer sits under them; list and panel scroll on their own. */
+.chat-layout:not([data-width='narrow']) { min-height: 0; }
+.chat-layout:not([data-width='narrow']) .chat-thread { min-height: 0; }
+.chat-layout:not([data-width='narrow']) .chat-messages { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.chat-layout:not([data-width='narrow']) .chat-sidebar,
+.chat-layout:not([data-width='narrow']) .chat-options { overflow-y: auto; }
 .chat-bottom { position: sticky; bottom: 0; background: var(--bg); border-top: var(--rule-major) solid var(--rule); padding: 16px 0 20px; display: grid; gap: 12px; }
 
 /* list */

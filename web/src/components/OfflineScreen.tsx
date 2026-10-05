@@ -23,7 +23,8 @@ export function OfflineScreen({ retryIn, onRetry, lastSeen, hostedByApp }: Offli
     const timer = setTimeout(() => setStarting(false), 10_000);
     return () => clearTimeout(timer);
   }, [hostedByApp]);
-  const [before, after] = t('shell.offline.body').split('{cmd}');
+  // {cmd} becomes a <code> element: fill it with a marker and split around it.
+  const [before, after] = t('shell.offline.body', { cmd: '\u0000' }).split('\u0000');
   return (
     <section class="band" data-testid="offline-screen">
       <div class="stack" style={{ gap: '24px' }}>

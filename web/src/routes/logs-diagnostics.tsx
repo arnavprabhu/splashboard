@@ -29,7 +29,7 @@ import {
 import { copyText } from "../components/CopyButton";
 import { DASH, formatBytes } from "../lib/format";
 import { useApi } from "../lib/use-api";
-import { engine } from "../store";
+import { engine, settings } from "../store";
 import { t } from "../strings/logs";
 import { useTitle } from "../lib/title";
 import { LOGS_TABS } from "./tabs";
@@ -476,7 +476,8 @@ function DoctorBand() {
               key: c.id,
               label: c.label,
               value: `${DOCTOR_GLYPH[c.status]} ${c.message}`,
-              meta: c.fix ?? undefined,
+              // A fix is a command or path: mono, never uppercased (copying "CHMOD 700 /USERS/…" would fail).
+              meta: c.fix ? <code class="mono">{c.fix}</code> : undefined,
               accent: c.status === "fail",
             }))}
           />
@@ -494,16 +495,19 @@ function PathsBand() {
   const reveal = (target: string) =>
     void api.post("/system/reveal", { target }).catch((e) => toastError(t("logs.diag.reveal_failed"), e));
   const s = storage.data;
-  const row = (key: string, label: string, path: string | undefined, bytes: number | null | undefined, target: string) => ({
+  const base = (settings.value?.resolved as { base?: string } | undefined)?.base ?? null;
+  const row = (key: string, label: string, path: string | null | undefined, bytes: number | null | undefined, target: string | null) => ({
     key,
     label,
     value: (
       <span class="cluster path-row">
         <span class="mono path-text">{path ?? DASH}</span>
         {bytes != null && <span class="meta tnum">{formatBytes(bytes)}</span>}
-        <Button size="s" variant="text" onClick={() => reveal(target)}>
-          {t("logs.diag.reveal")}
-        </Button>
+        {target && (
+          <Button size="s" variant="text" onClick={() => reveal(target)}>
+            {t("logs.diag.reveal")}
+          </Button>
+        )}
       </span>
     ),
   });
@@ -517,15 +521,16 @@ function PathsBand() {
         <KeyValue
           label={t("logs.diag.paths")}
           items={[
+            row("gui", t("logs.diag.path.gui"), base, null, null),
             row("data", t("logs.diag.path.data"), s.splash_data_dir, s.splash_data_bytes, "splash_data_dir"),
             row("models", t("logs.diag.path.models"), s.models_dir, s.models_bytes, "models_dir"),
             row("cache", t("logs.diag.path.cache"), s.cache_dir, s.cache_bytes, "cache_dir"),
-            row("logs", t("logs.diag.path.logs"), "~/.splash/logs", null, "logs_dir"),
+            row("logs", t("logs.diag.path.logs"), base ? `${base}/logs` : null, null, "logs_dir"),
             {
               key: "perm",
               label: t("logs.diag.path.permissions"),
               value: perm ? `${DOCTOR_GLYPH[perm.status]} ${perm.message}` : doctor.error ? DASH : "…",
-              meta: perm?.fix ?? undefined,
+              meta: perm?.fix ? <code class="mono">{perm.fix}</code> : undefined,
               accent: perm?.status === "fail",
             },
           ]}

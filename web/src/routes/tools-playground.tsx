@@ -27,6 +27,7 @@ import { TimedSseParser, assemble, emptyAssembled, preview, pretty, responseIdOf
 
 type View = "raw" | "parsed" | "headers";
 const KINDS: readonly SnippetKind[] = ["curl", "python_openai", "python_anthropic", "js_fetch"];
+const copyLabel = (k: SnippetKind) => t(`tools.pg.copy.${k}`);
 
 const ms = (v: number | null) => (v === null ? "—" : `${formatCount(Math.round(v))} ms`);
 
@@ -298,12 +299,12 @@ export default function Playground() {
                 variant="text"
                 items={KINDS.map((k) => ({
                   key: k,
-                  label: t(`tools.pg.copy.${k}`),
+                  label: copyLabel(k),
                   disabled: !snippetAvailable(k, ep),
                   detail: snippetAvailable(k, ep) ? undefined : t("tools.pg.copy_disabled"),
                   onSelect: () => {
                     const text = snippet(k, snippetInput);
-                    if (text) void copyText(text).then((ok) => ok && toast(t("tools.pg.copied", { what: t(`tools.pg.copy.${k}`) })));
+                    if (text) void copyText(text).then((ok) => ok && toast(t("tools.pg.copied", { what: copyLabel(k) })));
                   },
                 }))}
               />
@@ -315,7 +316,7 @@ export default function Playground() {
             <div class="cluster pg-status">
               {status ? (
                 <span class={status.code >= 400 ? "label acc" : "label"} data-testid="pg-status">
-                  {t("tools.pg.status", { status: `${status.code} ${status.text}`.trim(), secs: status.secs.toFixed(2) })}
+                  {t("tools.pg.status", { status: (status.code + " " + status.text).trim(), secs: status.secs.toFixed(2) })}
                 </span>
               ) : (
                 <span class="meta">{busy ? "…" : t("tools.pg.idle")}</span>

@@ -205,6 +205,9 @@ export const downloads = signal<DownloadItem[]>([]);
 
 const ACTIVE_DOWNLOAD: ReadonlySet<string> = new Set(['queued', 'running', 'verifying', 'paused']);
 
+/** Queued, running, verifying or paused: the download still owns its model (not done, failed or cancelled). */
+export const isActiveDownload = (d: Pick<DownloadItem, 'state'>): boolean => ACTIVE_DOWNLOAD.has(d.state);
+
 export function upsertDownload(item: DownloadItem): void {
   const rest = downloads.value.filter((d) => d.id !== item.id);
   downloads.value = [...rest, item].sort((a, b) => a.created_at.localeCompare(b.created_at));
@@ -220,7 +223,7 @@ export const downloadProgress = computed<number | null>(() => {
   return ps.reduce((a, b) => a + b, 0) / ps.length;
 });
 
-export const activeDownloads = computed(() => downloads.value.filter((d) => ACTIVE_DOWNLOAD.has(d.state)));
+export const activeDownloads = computed(() => downloads.value.filter(isActiveDownload));
 
 function readDownload(v: unknown): DownloadItem | null {
   return isRecord(v) && typeof v.id === 'string' && typeof v.model === 'string' && typeof v.state === 'string'

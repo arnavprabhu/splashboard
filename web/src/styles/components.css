@@ -30,6 +30,13 @@
   min-width: 0;
 }
 
+.navband-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
 .navband-links {
   display: flex;
   flex-wrap: wrap;
@@ -351,6 +358,17 @@
   transition: opacity 0.2s ease;
 }
 
+/* A model ID or path inside a button wraps instead of widening a 360 px page. */
+.btn {
+  max-width: 100%;
+}
+
+.btn .mono {
+  min-width: 0;
+  white-space: normal;
+  text-align: left;
+}
+
 .btn:hover:not(:disabled) {
   opacity: 0.8;
 }
@@ -664,6 +682,14 @@ textarea.input {
   animation: progress-slide 1.4s linear infinite;
 }
 
+.install-progress {
+  gap: 8px;
+}
+
+.install-progress .mono {
+  overflow-wrap: anywhere;
+}
+
 @keyframes progress-slide {
   from {
     transform: translateX(-100%);
@@ -785,6 +811,13 @@ textarea.input {
 .chart .u-over,
 .chart .u-under {
   position: absolute;
+}
+
+/* uPlot sizes the backing store at devicePixelRatio; without this a DPR-2 canvas shows at 2× and clips. */
+.chart .uplot canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .chart .u-select {
@@ -1513,7 +1546,10 @@ textarea.input {
 .heat-cell:focus-visible { outline: 2px solid var(--acc); outline-offset: 1px; }
 .heat-readout { min-height: 1.4em; margin-top: 8px; }
 .history-log .nowrap, .nowrap { white-space: nowrap; }
-.history-model { overflow-wrap: anywhere; }
+/* In table cells Chrome counts break-word opportunities in min-content (like `anywhere`), so an
+   auto-layout column squeezes IDs to a few characters a line. Tables keep IDs whole (the history
+   model breaks only at its <wbr> after "/" and ":"); a wide table scrolls inside .table-wrap. */
+.table .mono, .history-model { overflow-wrap: normal; }
 .history-pager { margin-top: 16px; gap: 12px; align-items: center; }
 .history-injected { display: grid; gap: 8px; padding: 4px 0 8px; }
 .history-injected pre { margin: 0; max-width: 100%; overflow-x: auto; }

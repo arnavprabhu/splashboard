@@ -26,7 +26,8 @@ const HUB = { base: 1000 } as const;
 const dismissed = new Set<string>();
 
 export interface DownloadsPanelProps {
-  installedIds: ReadonlySet<string>;
+  /** Null while the installed list loads (a finished row then shows neither Load nor "Removed"). */
+  installedIds: ReadonlySet<string> | null;
 }
 
 /**
@@ -119,7 +120,7 @@ export function DownloadsPanel({ installedIds }: DownloadsPanelProps) {
             <DownloadRow
               key={d.id}
               item={d}
-              installed={installedIds.has(d.model)}
+              installed={installedIds ? installedIds.has(d.model) : null}
               onCancel={() => setCancelling(d)}
               onDismiss={() => {
                 dismissed.add(d.id);
@@ -155,6 +156,8 @@ function stateLabel(d: DownloadItem): string {
 
 export function downloadMeta(d: DownloadItem): string {
   const parts: string[] = [];
+  // A finished item has bytes_done null in the API: its size is the total ("0 B of 21.5 GB" was wrong).
+  if (d.state === 'done') return formatBytes(d.bytes_total ?? d.bytes_done ?? null, HUB);
   if (typeof d.bytes_total === 'number') parts.push(t('models.dl.of', { done: formatBytes(d.bytes_done ?? 0, HUB), total: formatBytes(d.bytes_total, HUB) }));
   else if (d.bytes_done) parts.push(formatBytes(d.bytes_done, HUB));
   if (d.state === 'running') {
@@ -166,9 +169,9 @@ export function downloadMeta(d: DownloadItem): string {
   return parts.join(' · ');
 }
 
-function DownloadRow({ item: d, installed, onCancel, onDismiss }: { item: DownloadItem; installed: boolean; onCancel: () => void; onDismiss: () => void }) {
+function DownloadRow({ item: d, installed, onCancel, onDismiss }: { item: DownloadItem; installed: boolean | null; onCancel: () => void; onDismiss: () => void }) {
   const [logOpen, setLogOpen] = useState(false);
-  const err = d.state === 'failed' || d.error ? downloadErrorView(d, installed) : null;
+  const err = d.state === 'failed' || d.error ? downloadErrorView(d, installed === true) : null;
   const files = d.files ?? [];
   const log = d.log_tail ?? [];
   const short = shortName(d.model);
@@ -293,9 +296,15 @@ function DownloadRow({ item: d, installed, onCancel, onDismiss }: { item: Downlo
         )}
         {d.state === 'done' && (
           <>
-            <Button size="s" variant={engineStopped ? 'solid' : 'outline'} onClick={() => void flows.loadModel(d.model)}>
-              {t('models.action.load')}
-            </Button>
+            {installed ? (
+              <Button size="s" variant={engineStopped ? 'solid' : 'outline'} onClick={() => void flows.loadModel(d.model)}>
+                {t('models.action.load')}
+              </Button>
+            ) : (
+              installed === false && <span class="meta" data-testid="dl-removed">
+                {t('models.dl.removed')}
+              </span>
+            )}
             <Button size="s" variant="text" onClick={onDismiss}>
               {t('models.dl.action.dismiss')}
             </Button>

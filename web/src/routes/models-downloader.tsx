@@ -15,6 +15,7 @@ import { Tag } from "../components/Tag";
 import { toast, toastError } from "../components/Toast";
 import { Toggle } from "../components/Toggle";
 import { DASH, formatBytes, formatCompact, formatRelativeTime } from "../lib/format";
+import { isCancelled, withInstallConfirm } from "../lib/engine-install";
 import { useApi } from "../lib/use-api";
 import { engine } from "../store";
 import { t } from "../strings/downloader";
@@ -40,10 +41,13 @@ async function startDownload(id: string, opts: { language_only?: boolean; revisi
     toast(t("models.toast.queued", { model: shortName(id) }));
     requestAnimationFrame(() => document.getElementById("downloads")?.scrollIntoView({ block: "nearest" }));
   } catch (err) {
-    if (err instanceof ApiError && err.code === "already_queued") toast(t("models.toast.already_queued"));
-    else toastError(t("models.toast.download_failed"), err);
+    if (err instanceof ApiError && err.code === "already_queued") toast(t("models.toast.already_queued", { short: shortName(id) }));
+    else toastError(t("models.toast.download_failed", { short: shortName(id) }), err);
   }
 }
+
+/** Hub download sizes are decimal, as in the downloads panel and the plan. */
+const HUB = { base: 1000 } as const;
 
 function variantId(repo: string, v: string | null): string {
   return v ? `${repo}:${v}` : repo;
@@ -116,7 +120,7 @@ export default function Downloader() {
       {tab === "supported" && <Supported installedIds={installedIds} memory={s?.memory_bytes ?? null} onDetails={openDrawer} />}
       {tab === "id" && <ById initial={params.get("id") ?? ""} free={free} memory={s?.memory_bytes ?? null} installedIds={installedIds} />}
       {tab === "search" && <Search onOpen={openDrawer} />}
-      <DownloadsPanel installedIds={installedIds} />
+      <DownloadsPanel installedIds={installed.data ? installedIds : null} />
       <ModelDrawer id={drawerId} installed={installed.data?.models ?? []} activeId={engine.value?.model ?? null} onClose={closeDrawer} />
     </>
   );
@@ -125,10 +129,15 @@ export default function Downloader() {
 // ---------- §3.2 Supported ----------
 
 function EntryRow({ e, index, installedIds, memory, onDetails }: { e: CatalogEntry; index: number; installedIds: ReadonlySet<string>; memory: number | null; onDetails: (id: string) => void }) {
-  const isInstalled = e.installed || installedIds.has(e.id);
   const variants = (e.variants ?? []).filter((v) => !isProjector(v.name));
   const rec = e.recommended_variant ?? null;
   const loadable = variants.filter((v) => v.loadable !== false);
+  // A GGUF repo is installed per variant (`repo:VARIANT`): say which one, and load that one.
+  const installedVariants = variants.filter((v) => installedIds.has(variantId(e.repo_id, v.name))).map((v) => v.name);
+  const loadId = variants.length ? (installedVariants[0] ? variantId(e.repo_id, installedVariants[0]) : null) : e.installed || installedIds.has(e.id) ? e.id : null;
+  // Choosing in the Variant menu selects; only the button downloads (Enter on the menu never starts a download).
+  const [picked, setPicked] = useState<string | null>(null);
+  const choice = variants.find((v) => v.name === (picked ?? rec)) ?? loadable[0] ?? null;
   const meta = [
     e.repo_id,
     e.memory_need_bytes ? t("downloader.needs", { size: formatBytes(e.memory_need_bytes) }) : null,
@@ -139,8 +148,15 @@ function EntryRow({ e, index, installedIds, memory, onDetails }: { e: CatalogEnt
     e.perf_note,
   ].filter(Boolean);
   const [loading, setLoading] = useState(false);
+  // `download_bytes` is what the pick fetches (target + draft + vision, as /inspect's plan);
+  // `size_bytes` is only the weights, so it is labelled as such (bug: "Download · 15 GB" fetched 19.93 GB).
+  const sized = choice ?? e;
+  const dlBytes = sized.download_bytes ?? (choice ? null : e.download_bytes);
+  const dlSize = dlBytes ? formatBytes(dlBytes, HUB) : null;
+  const weights = sized.size_bytes ?? e.size_bytes;
+  const canDownload = variants.length > 0 ? !!choice && choice.loadable !== false && !installedVariants.includes(choice.name) : !loadId;
   return (
-    <li class="dlr-entry" data-installed={isInstalled ? "true" : undefined}>
+    <li class="dlr-entry" data-installed={loadId ? "true" : undefined}>
       <div class="dlr-entry-head">
         <h3 class="heading dlr-entry-name">{shortName(e.id)}</h3>
         <span class="cluster dlr-entry-tags">
@@ -149,12 +165,15 @@ function EntryRow({ e, index, installedIds, memory, onDetails }: { e: CatalogEnt
               {t("downloader.recommended")}
             </Tag>
           )}
-          {isInstalled && <Tag>{t("downloader.installed")}</Tag>}
+          {variants.length > 0
+            ? installedVariants.map((name) => <Tag key={name}>{t("downloader.variant_installed", { name })}</Tag>)
+            : loadId && <Tag>{t("downloader.installed")}</Tag>}
           <span class="label">
             {String(index).padStart(2, "0")} — {formatLabel(e.format, e.id)}
-            {e.size_bytes ? ` · ${formatBytes(e.size_bytes)}` : ""}
+            {dlSize ? ` · ${dlSize}` : weights ? ` · ${t("downloader.weights", { size: formatBytes(weights, HUB) })}` : ""}
           </span>
-          <FitTag fit={e.fit ?? null} needBytes={e.memory_need_bytes} memoryBytes={memory} />
+          {/* The entry's memory need is for its default variant; another pick has only its own `fit` (no need figure). */}
+          <FitTag fit={(choice?.fit ?? e.fit) ?? null} needBytes={!choice || choice.name === rec ? e.memory_need_bytes : null} memoryBytes={memory} />
         </span>
       </div>
       <p class="meta dlr-entry-meta">
@@ -165,44 +184,55 @@ function EntryRow({ e, index, installedIds, memory, onDetails }: { e: CatalogEnt
       </p>
       {e.notes && <p class="meta">{e.notes}</p>}
       <div class="cluster">
-        {isInstalled ? (
+        {loadId && (
           <Button
             size="s"
-            variant={engine.value?.model ? "outline" : "accent"}
+            variant={engine.value?.model || canDownload ? "outline" : "accent"}
             loading={loading}
             onClick={() => {
               setLoading(true);
-              void loadEngine(e.id)
-                .then(() => toast(t("models.toast.loading", { model: shortName(e.id) })))
-                .catch((err) => toastError(t("models.toast.load_failed"), err))
+              void withInstallConfirm((force) => loadEngine(loadId, force), loadId)
+                .then(() => toast(t("models.toast.loading", { model: shortName(loadId) })))
+                .catch((err) => isCancelled(err) || toastError(t("models.toast.load_failed", { short: shortName(loadId) }), err))
                 .finally(() => setLoading(false));
             }}
           >
-            {t("downloader.load")}
+            {installedVariants.length > 0 ? t("downloader.load_variant", { name: installedVariants[0]! }) : t("downloader.load")}
           </Button>
-        ) : variants.length > 0 ? (
+        )}
+        {variants.length > 0 ? (
           <span class="cluster">
-            <Button size="s" variant="solid" onClick={() => void startDownload(variantId(e.repo_id, rec ?? loadable[0]?.name ?? null))}>
-              {t("downloader.download_variant", { name: rec ?? loadable[0]?.name ?? "" })}
+            <Button size="s" variant="solid" disabled={!canDownload} onClick={() => choice && void startDownload(variantId(e.repo_id, choice.name))}>
+              {choice && dlSize ? t("downloader.download_variant_size", { name: choice.name, size: dlSize }) : t("downloader.download_variant", { name: choice?.name ?? "" })}
             </Button>
             <Menu
               label={t("downloader.variant")}
               size="s"
               variant="text"
+              radio
               items={variants.map((v) => ({
                 key: v.name,
                 label: <span class="mono">{v.name}</span>,
                 text: v.name,
+                checked: v.name === choice?.name,
                 disabled: v.loadable === false,
-                detail: [v.size_bytes ? formatBytes(v.size_bytes) : null, v.loadable === false ? (v.reason ?? t("models.variant.unsupported")) : null].filter(Boolean).join(" · ") || undefined,
-                onSelect: () => void startDownload(variantId(e.repo_id, v.name)),
+                detail:
+                  [
+                    v.download_bytes ? formatBytes(v.download_bytes, HUB) : v.size_bytes ? t("downloader.weights", { size: formatBytes(v.size_bytes, HUB) }) : null,
+                    v.loadable === false ? (v.reason ?? t("models.variant.unsupported_default")) : installedVariants.includes(v.name) ? t("downloader.installed") : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ") || undefined,
+                onSelect: () => setPicked(v.name),
               }))}
             />
           </span>
         ) : (
-          <Button size="s" variant="solid" disabled={e.fit === "wont_fit"} onClick={() => void startDownload(e.id)}>
-            {t("downloader.download")}
-          </Button>
+          !loadId && (
+            <Button size="s" variant="solid" disabled={e.fit === "wont_fit"} onClick={() => void startDownload(e.id)}>
+              {dlSize ? t("downloader.download_size", { size: dlSize }) : t("downloader.download")}
+            </Button>
+          )
         )}
         <Button size="s" variant="text" onClick={() => onDetails(e.id)}>
           {t("downloader.details")}
@@ -378,7 +408,7 @@ function ById({ initial, free, memory, installedIds }: { initial: string; free: 
                       {(plan.files ?? []).map((f) => (
                         <li key={`${f.repo_id}/${f.name}`} class="cluster">
                           <span class="mono">{f.name}</span>
-                          <span class="meta tnum">{f.bytes != null ? formatBytes(f.bytes) : DASH}</span>
+                          <span class="meta tnum">{f.bytes != null ? formatBytes(f.bytes, HUB) : DASH}</span>
                           {f.present && <span class="meta">{t("downloader.plan_present")}</span>}
                           {f.repo_id !== result.repo_id && <span class="meta mono">{f.repo_id}</span>}
                         </li>
@@ -386,20 +416,20 @@ function ById({ initial, free, memory, installedIds }: { initial: string; free: 
                     </ul>
                     <p class="meta tnum">
                       {t("downloader.plan_line", {
-                        remaining: formatBytes(plan.remaining_bytes),
-                        total: formatBytes(plan.total_bytes),
-                        free: plan.free_bytes != null ? formatBytes(plan.free_bytes) : DASH,
+                        remaining: formatBytes(plan.remaining_bytes, HUB),
+                        total: formatBytes(plan.total_bytes, HUB),
+                        free: plan.free_bytes != null ? formatBytes(plan.free_bytes, HUB) : DASH,
                       })}
                     </p>
                   </div>
                 ) : (
                   <p class="meta tnum">
-                    {size !== null ? t("downloader.size_free", { size: formatBytes(size), free: free === null ? DASH : formatBytes(free) }) : null}
+                    {size !== null ? t("downloader.size_free", { size: t("downloader.weights", { size: formatBytes(size, HUB) }), free: free === null ? DASH : formatBytes(free, HUB) }) : null}
                   </p>
                 )}
                 {!disk.ok && (
                   <Banner tone="warn" actions={<Link href="/settings/storage">{t("models.disk.storage_settings")} ↗</Link>}>
-                    {t("downloader.no_space", { need: formatBytes(disk.neededBytes), free: formatBytes(disk.freeBytes ?? 0) })}
+                    {t("downloader.no_space", { need: formatBytes(disk.neededBytes, HUB), free: formatBytes(disk.freeBytes ?? 0, HUB) })}
                   </Banner>
                 )}
                 <div class="cluster">
@@ -414,7 +444,7 @@ function ById({ initial, free, memory, installedIds }: { initial: string; free: 
                       })
                     }
                   >
-                    {size !== null ? t("downloader.download_size", { size: formatBytes(size) }) : t("downloader.download")}
+                    {plan ? t("downloader.download_size", { size: formatBytes(plan.remaining_bytes, HUB) }) : t("downloader.download")}
                   </Button>
                   {isInstalled && <Tag>{t("downloader.installed")}</Tag>}
                   <ExternalLink href={hfUrl(repo)}>{t("downloader.hf")}</ExternalLink>
@@ -429,6 +459,16 @@ function ById({ initial, free, memory, installedIds }: { initial: string; free: 
 }
 
 // ---------- §3.4 Search ----------
+
+/**
+ * A search hit's format is a guess from its name and tags (`format_guess`): "MLX 4-bit" only once the
+ * check says Splash can load it (Splash takes MLX at 4-bit, group size 64 only); before, just "MLX".
+ */
+export function searchFormat(guess: SearchResult["format_guess"], id: string, state: CompatState): string {
+  if (guess === "unknown") return DASH;
+  if (guess === "mlx" && state !== "compatible" && state !== "text_only") return t("downloader.format.mlx");
+  return formatLabel(guess, id);
+}
 
 function SearchRow({ r, index, state, onVisible, onOpen }: { r: SearchResult; index: number; state: CompatState; onVisible: () => void; onOpen: () => void }) {
   const ref = useRef<HTMLLIElement>(null);
@@ -454,7 +494,7 @@ function SearchRow({ r, index, state, onVisible, onOpen }: { r: SearchResult; in
         <span class="cluster dlr-entry-tags">
           <CompatTag state={state} />
           <span class="label">
-            {String(index).padStart(2, "0")} — {r.format_guess === "unknown" ? DASH : formatLabel(r.format_guess, r.id)}
+            {String(index).padStart(2, "0")} — {searchFormat(r.format_guess, r.id, state)}
             {r.downloads != null ? ` · ${t("downloader.downloads_n", { n: formatCompact(r.downloads) })}` : ""}
           </span>
         </span>

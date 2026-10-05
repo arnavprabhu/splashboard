@@ -7,6 +7,7 @@
 import { ApiError } from '../../api/client';
 import type { DownloadItem } from '../../api/models';
 import { toast, toastError } from '../../components/Toast';
+import { isCancelled, withInstallConfirm } from '../../lib/engine-install';
 import { formatBytes } from '../../lib/format';
 import { refreshDownloads, upsertDownload } from '../../store';
 import { t } from '../../strings/models';
@@ -15,10 +16,11 @@ import { shortName } from './logic';
 
 export async function loadModel(id: string): Promise<boolean> {
   try {
-    await models.loadEngine(id);
+    await withInstallConfirm((force) => models.loadEngine(id, force), id);
     toast(t('models.toast.loading', { model: shortName(id) }));
     return true;
   } catch (err) {
+    if (isCancelled(err)) return false;
     if (err instanceof ApiError && err.code === 'model_switch_busy') toast(t('models.toast.busy'), { tone: 'error', detail: err.message });
     else toastError(t('models.toast.load_failed', { short: shortName(id) }), err);
     return false;

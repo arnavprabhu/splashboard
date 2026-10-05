@@ -8,8 +8,10 @@ import type {
   Catalog,
   CatalogEntry,
   DoctorReport,
+  DownloadItem,
   EffectiveSettings,
   EngineDiscoveryInfo,
+  InstalledModel,
   PresetList,
   PresetOut,
   SettingsSchema,
@@ -17,6 +19,9 @@ import type {
   VariantOut,
 } from '../../api/models';
 import { parseMaxCacheDisk, parseMaxContext } from '../../lib/size';
+import type { EngineSummary } from '../../api/types';
+import { isServing } from '../../lib/engine-state';
+import { isActiveDownload } from '../../store';
 import { splitModelId } from '../../lib/model-id';
 import { t } from '../../strings/welcome';
 import type { PresetId } from './steps';
@@ -93,6 +98,13 @@ export function splashStatus(engine: EngineDiscoveryInfo | null): CheckStatus {
 export function doctorCheck(doctor: CheckInputs['doctor'], id: string): DoctorReport['checks'][number] | null {
   if (!doctor || doctor === 'unavailable') return null;
   return doctor.checks.find((c) => c.id === id) ?? null;
+}
+
+/** The shell-command row: a check the doctor did not report is unknown (skip), never ✓. */
+export function shellStatus(doctor: CheckInputs['doctor'], check: DoctorReport['checks'][number] | null): CheckStatus {
+  if (!doctor) return 'pending';
+  if (doctor === 'unavailable' || !check) return 'skip';
+  return check.status;
 }
 
 /** Continue on step 1: the Mac is supported and a usable Splash is installed (Homebrew only matters to install it). */
@@ -205,6 +217,12 @@ export function presetDiff(
   });
 }
 
+/** The preset an earlier wizard run applied (`global.wizard.preset` in settings.json), if any. */
+export function savedPreset(globalSettings: unknown): PresetId | null {
+  const v = getPath(globalSettings, 'wizard.preset');
+  return v === 'coding' || v === 'chat' || v === 'speed' ? v : null;
+}
+
 /** The keys and values one PUT would write for this preset (what `apply` does, for tests and the diff). */
 export function presetPatch(preset: PresetOut): Record<string, unknown> {
   return { ...preset.settings, 'wizard.preset': preset.id };
@@ -221,7 +239,10 @@ export interface ModelRow {
   primary: boolean;
   languageOnly: boolean;
   format: 'mlx' | 'gguf' | 'legacy' | 'pq2' | null;
+  /** The weights (target, or the GGUF variant plus its projector): not what a download fetches. */
   sizeBytes: number | null;
+  /** What downloading this pick fetches (as `/inspect`'s `download_plan`); see `downloadBytesOf`. */
+  downloadBytes: number | null;
   memoryNeedBytes: number | null;
   fit: Fit | null;
   vision: boolean | null;
@@ -262,6 +283,17 @@ export function findInCatalog(catalog: Catalog | null, model: string): CatalogHi
   return repoHit;
 }
 
+/**
+ * What downloading a pick fetches: the variant's or entry's `download_bytes` (target + vision +
+ * draft), or `language_only_download_bytes` when the pick is language-only. Null when unknown, or
+ * when a variant was asked for that the catalog does not list.
+ */
+export function downloadBytesOf(hit: CatalogHit | null, model: string, languageOnly: boolean): number | null {
+  if (!hit) return null;
+  const sized = hit.variant ?? (splitModelId(model).variant ? null : hit.entry);
+  return (languageOnly ? sized?.language_only_download_bytes : sized?.download_bytes) ?? null;
+}
+
 function guessFormat(model: string): ModelRow['format'] {
   if (/:PQ2/i.test(model)) return 'pq2';
   if (/gguf/i.test(model)) return 'gguf';
@@ -291,6 +323,7 @@ export function recommendation(
       languageOnly: overrides.language_only === true,
       format: hit?.entry.format ?? guessFormat(pick.model),
       sizeBytes: hit?.variant?.size_bytes ?? hit?.entry.size_bytes ?? null,
+      downloadBytes: downloadBytesOf(hit, pick.model, overrides.language_only === true),
       memoryNeedBytes: hit?.entry.memory_need_bytes ?? null,
       fit,
       vision: overrides.language_only === true ? false : (hit?.entry.vision ?? null),
@@ -302,6 +335,63 @@ export function recommendation(
   // Won't-fit rows go last (docs/ui/04 §5); otherwise the API's order (primary first) stays.
   const ordered = [...rows.filter((r) => !r.disabled), ...rows.filter((r) => r.disabled)];
   return { preset, memoryBytes: list.memory_bytes, reason: rec.reason, rows: ordered };
+}
+
+/**
+ * The catalog tier behind a recommendation (`Recommendation.reason` in manager
+ * settings/presets.py: "≥ 48 GB", "36–47 GB", "24–35 GB", or a full sentence) as a sentence.
+ */
+export function tierSentence(reason: string | null | undefined): string | null {
+  const r = (reason ?? '').trim();
+  if (!r) return null;
+  const min = /^(?:≥|>=)\s*(\d+)\s*GB$/i.exec(r);
+  if (min) return t('welcome.model.tier_min', { min: min[1] });
+  const range = /^(\d+)\s*[–-]\s*(\d+)\s*GB$/i.exec(r);
+  if (range) return t('welcome.model.tier_range', { min: range[1], max: range[2] });
+  return /[.!?]$/.test(r) ? r : t('welcome.model.tier_other', { tier: r });
+}
+
+/** The download that still owns `model` (queued, running, verifying or paused), if any. */
+export function activeDownloadFor<T extends Pick<DownloadItem, 'model' | 'state'>>(items: readonly T[], model: string): T | null {
+  return items.find((d) => d.model === model && isActiveDownload(d)) ?? null;
+}
+
+/** An installed model as step 4 lists it (docs/ui/04 §5, drift: the Installed group). */
+export interface InstalledChoice {
+  id: string;
+  format: string;
+  sizeBytes: number;
+  lastUsedAt: string | null;
+}
+
+/** Installed and loadable now: not still downloading, paused, verifying or broken. */
+const USABLE: ReadonlySet<string> = new Set(['ready', 'active', 'loading', 'update_available']);
+
+/** The engine is serving its model (a failed or stopped engine's `model` is not "active"). */
+export function servingModel(e: Pick<EngineSummary, 'state' | 'model'> | null | undefined): string | null {
+  return e && isServing(e.state) ? e.model : null;
+}
+
+/**
+ * Installed models step 4 offers with **Use**, active first, then most recently used, then by
+ * ID; only usable installs (ready, active, loading, update available), without the recommendation's
+ * own rows (they carry their own Use).
+ */
+export function installedChoices(
+  models: readonly Pick<InstalledModel, 'id' | 'format' | 'size_bytes' | 'last_used_at' | 'status'>[],
+  shown: readonly string[],
+  activeId: string | null,
+): InstalledChoice[] {
+  const at = (s: string | null | undefined) => (s ? Date.parse(s) || 0 : 0);
+  return models
+    .filter((m) => USABLE.has(m.status) && !shown.includes(m.id))
+    .sort((a, b) => Number(b.id === activeId) - Number(a.id === activeId) || at(b.last_used_at) - at(a.last_used_at) || a.id.localeCompare(b.id))
+    .map((m) => ({ id: m.id, format: m.format, sizeBytes: m.size_bytes, lastUsedAt: m.last_used_at ?? null }));
+}
+
+/** The model step 4 preselects when this run has none: the active one, else the most recently used. */
+export function defaultInstalled(models: readonly Pick<InstalledModel, 'id' | 'last_used_at' | 'status'>[], activeId: string | null): string | null {
+  return installedChoices(models.map((m) => ({ format: 'mlx' as const, size_bytes: 0, ...m })), [], activeId)[0]?.id ?? null;
 }
 
 // ---------- step 5: endpoints ----------

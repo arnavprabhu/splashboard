@@ -18,6 +18,8 @@ import { Table } from '../../components/Table';
 import { Tag } from '../../components/Tag';
 import { toast, toastError } from '../../components/Toast';
 import { Tooltip } from '../../components/Tooltip';
+import { Install } from '../../components/Install';
+import { installOf, isCancelled, withInstallConfirm } from '../../lib/engine-install';
 import { formatBytes } from '../../lib/format';
 import { useApi } from '../../lib/use-api';
 import { downloads, engine, settings } from '../../store';
@@ -27,11 +29,13 @@ import { DownloadsPanel } from '../models/DownloadsPanel';
 import { applyPreset, getCatalog, getEffective, getPresets, getSchema, loadEngine, markCompleted, queueDownload } from './api';
 import { StepLayout, progress, updateProgress, useWizard } from './frame';
 import { closeWelcome, openURL } from './host';
-import { curlSample, endpoints, movedOrigin, presetDiff, recommendation } from './logic';
+import { activeDownloadFor, defaultInstalled, servingModel, installedChoices, savedPreset, curlSample, endpoints, movedOrigin, presetDiff, recommendation, tierSentence } from './logic';
 import { probeOrigin } from '../settings/api';
 import type { PresetId } from './steps';
 
 const ORDER: PresetId[] = ['coding', 'chat', 'speed'];
+/** Hub download sizes are decimal, as in the downloads panel. */
+const HUB = { base: 1000 } as const;
 
 // ---------- step 3 ----------
 
@@ -40,7 +44,10 @@ export function StepUseCase() {
   const presets = useApi(getPresets);
   const effective = useApi(getEffective);
   const schema = useApi(getSchema);
-  const [selected, setSelected] = useState<PresetId>(progress.value.preset ?? 'chat');
+  // This run's pick, else the preset saved by an earlier run (settings `wizard.preset`), else Chat.
+  const saved = savedPreset(settings.value?.settings?.global);
+  const [picked, setSelected] = useState<PresetId | null>(progress.value.preset);
+  const selected = picked ?? saved ?? 'chat';
   const [busy, setBusy] = useState(false);
   const list = presets.data?.presets ?? [];
   const sorted = ORDER.map((id) => list.find((p) => p.id === id)).filter((p): p is NonNullable<typeof p> => !!p);
@@ -118,9 +125,23 @@ export function StepModel() {
   const { goTo, hosted } = useWizard();
   const presets = useApi(getPresets);
   const catalog = useApi(getCatalog);
-  const installed = useApi((s) => api.get<InstalledModels>('/models', undefined, s));
+  // Reload the installed list when a download finishes, so its row turns into "Use this model".
+  const finished = downloads.value.filter((d) => d.state === 'done').length;
+  const installed = useApi((s) => api.get<InstalledModels>('/models', undefined, s), [finished]);
   const ids = installed.data?.models.map((m) => m.id) ?? [];
   const rec = recommendation(presets.data, progress.value.preset, catalog.data, ids);
+  // Only a live download blocks its row: a cancelled or failed one leaves Download usable.
+  const live = (model: string) => activeDownloadFor(downloads.value, model);
+  const anyLive = !!rec?.rows.some((r) => live(r.model));
+  const tier = tierSentence(rec?.reason);
+  const activeId = servingModel(engine.value);
+  const others = installed.data ? installedChoices(installed.data.models, rec?.rows.map((r) => r.model) ?? [], activeId) : [];
+  // A re-run with a model already installed: preselect it (the active one, else the last used) so step 5 can load it.
+  useEffect(() => {
+    if (progress.value.model || !installed.data) return;
+    const pick = defaultInstalled(installed.data.models, activeId);
+    if (pick) updateProgress({ model: pick, downloadId: null });
+  }, [installed.data]);
   const [busy, setBusy] = useState<string | null>(null);
   const [tokenSheet, setTokenSheet] = useState(false);
   // A gated or private repo (docs/ui/04 §5): offer the token field here so the wizard is not left.
@@ -141,7 +162,7 @@ export function StepModel() {
   }
   const browse = '/admin/models/downloader?tab=supported';
   return (
-    <StepLayout lead={t('welcome.model.lead')} footer={{ onContinue: () => goTo(5), note: progress.value.downloadId ? t('welcome.model.continue_note') : undefined }}>
+    <StepLayout lead={t('welcome.model.lead')} footer={{ onContinue: () => goTo(5), note: anyLive ? t('welcome.model.continue_note') : undefined }}>
       {presets.error ? (
         <LoadError thing={t('welcome.model.thing')} error={presets.error} onRetry={presets.reload} />
       ) : !rec ? (
@@ -149,10 +170,44 @@ export function StepModel() {
       ) : (
         <>
           <p class="body">{t('welcome.model.reason', { preset: rec.preset?.label ?? '', ram: formatBytes(rec.memoryBytes) })}</p>
-          {rec.reason && <p class="meta">{rec.reason}</p>}
+          {others.length > 0 && (
+            <>
+              <h3 class="label">{t('welcome.model.installed_group')}</h3>
+              <ul class="wz-models" data-testid="wz-installed">
+                {others.map((m) => {
+                  const chosen = progress.value.model === m.id;
+                  return (
+                    <li key={m.id} class="wz-model">
+                      <div class="wz-model-head">
+                        <span class="heading wz-model-name">{m.id.slice(m.id.indexOf('/') + 1)}</span>
+                        <span class="cluster">
+                          {m.id === activeId && <Tag>{t('welcome.model.active')}</Tag>}
+                          <span class="label">
+                            {m.format.toUpperCase()} · {formatBytes(m.sizeBytes)}
+                          </span>
+                        </span>
+                      </div>
+                      <p class="meta">
+                        <span class="mono">{m.id}</span>
+                      </p>
+                      <div class="cluster">
+                        <Button size="s" variant={chosen ? 'solid' : 'outline'} onClick={() => updateProgress({ model: m.id, downloadId: null })}>
+                          {chosen ? t('welcome.model.selected') : t('welcome.model.use')}
+                        </Button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+              <h3 class="label">{t('welcome.model.recommended_group')}</h3>
+            </>
+          )}
+          {tier && <p class="meta">{tier}</p>}
           <ul class="wz-models">
             {rec.rows.map((r, i) => {
               const chosen = progress.value.model === r.model;
+              const busyDl = live(r.model);
+              const size = r.downloadBytes ? formatBytes(r.downloadBytes, HUB) : null;
               return (
                 <li key={r.model} class="wz-model" data-primary={r.primary ? 'true' : undefined}>
                   {i > 0 && !r.primary && rec.rows[i - 1]?.primary && <h3 class="label wz-alt">{t('welcome.model.alternatives')}</h3>}
@@ -164,7 +219,7 @@ export function StepModel() {
                       {r.installed && <Tag>{t('welcome.model.installed')}</Tag>}
                       <span class="label">
                         {r.format?.toUpperCase()}
-                        {r.sizeBytes ? ` · ${formatBytes(r.sizeBytes)}` : ''}
+                        {size ? ` · ${size}` : r.sizeBytes ? ` · ${t('welcome.model.weights', { size: formatBytes(r.sizeBytes, HUB) })}` : ''}
                       </span>
                       <FitTag fit={r.fit} needBytes={r.memoryNeedBytes} memoryBytes={rec.memoryBytes} />
                     </span>
@@ -181,8 +236,8 @@ export function StepModel() {
                     ) : r.disabled ? (
                       <span class="meta">{t('welcome.model.wont_fit', { size: r.memoryNeedBytes ? formatBytes(r.memoryNeedBytes) : '—' })}</span>
                     ) : (
-                      <Button size="s" variant={r.primary ? 'accent' : 'outline'} loading={busy === r.model} disabled={chosen && !!progress.value.downloadId} onClick={() => void download(r.model, r.languageOnly)}>
-                        {r.sizeBytes ? t('welcome.model.download_size', { size: formatBytes(r.sizeBytes) }) : t('welcome.model.download')}
+                      <Button size="s" variant={r.primary ? 'accent' : 'outline'} loading={busy === r.model} disabled={!!busyDl} onClick={() => void download(r.model, r.languageOnly)}>
+                        {busyDl ? t('welcome.model.downloading') : size ? t('welcome.model.download_size', { size }) : t('welcome.model.download')}
                       </Button>
                     )}
                   </div>
@@ -212,7 +267,7 @@ export function StepModel() {
               <span class="mono">{gated.model}</span>
             </Banner>
           )}
-          {progress.value.downloadId && <DownloadsPanel installedIds={new Set(ids)} />}
+          {(progress.value.downloadId || anyLive) && <DownloadsPanel installedIds={installed.data ? new Set(ids) : null} />}
           <HfTokenSheet
             open={tokenSheet}
             onClose={() => setTokenSheet(false)}
@@ -346,9 +401,9 @@ export function StepStart() {
     if (!model) return;
     setBusy(true);
     try {
-      await loadEngine(model);
+      await withInstallConfirm((force) => loadEngine(model, force), model);
     } catch (err) {
-      toastError(t('welcome.start.load_failed'), err);
+      if (!isCancelled(err)) toastError(t('welcome.start.load_failed'), err);
     } finally {
       setBusy(false);
     }
@@ -454,6 +509,7 @@ export function StepStart() {
   const failed = e?.state === 'failed' && e.model === model;
   const phase = e?.model === model && e.state.startsWith('starting') ? (e.phase ?? 'loading') : null;
   const tail = ((e?.view?.log_tail as string[] | undefined) ?? []).slice(-12);
+  const install = e?.model === model ? installOf(e) : null;
   return (
     <StepLayout lead={t('welcome.start.lead')} footer={{ hideContinue: true }}>
       {dl && !isInstalled && (
@@ -484,6 +540,7 @@ export function StepStart() {
           })}
         </ol>
       )}
+      {install && <Install install={install} />}
       {(phase || failed) && tail.length > 0 && <LogPane label={t('welcome.start.log')} lines={tail.map((text, i) => ({ key: i, text }))} height={200} />}
       {failed && (
         <Banner

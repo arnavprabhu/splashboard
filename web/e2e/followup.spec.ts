@@ -173,9 +173,10 @@ test.describe('models follow-up', () => {
     await expect(page.getByText('HF token: no token · gated repos unavailable')).toBeVisible();
     const box = page.getByTestId('download-plan');
     await expect(box).toContainText('already on disk');
-    await expect(box).toContainText('14.8 GB to download of 15.5 GB');
+    // Hub sizes are decimal everywhere a download is sized (wizard, catalog, plan, downloads panel).
+    await expect(box).toContainText('15.9 GB to download of 16.6 GB');
     await expect(page.getByText(/Not enough space/)).toBeVisible();
-    await expect(page.getByRole('button', { name: /Download · 14\.8 GB/ })).toBeDisabled();
+    await expect(page.getByRole('button', { name: /Download · 15\.9 GB/ })).toBeDisabled();
   });
 
   test('per-model Info shows the fingerprints of the last load', async ({ page }) => {

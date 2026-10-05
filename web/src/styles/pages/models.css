@@ -6,6 +6,8 @@
 .mrow-detail { margin-block: 8px; }
 .mrow-meta { color: var(--mute); }
 .disk-paths { overflow-wrap: anywhere; }
+/* Legend items and paths: one item per cell, spaced, wrapping without running together. */
+.disk-line, .disk-paths { display: flex; flex-wrap: wrap; gap: 4px 24px; margin: 0; }
 .disk-link { color: inherit; text-decoration: underline; }
 .drawer-id, .dl-model { overflow-wrap: anywhere; }
 .drawer-section { border-top: 1px solid var(--rule); padding-top: 20px; }

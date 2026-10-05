@@ -13,6 +13,7 @@ import { Sheet } from './components/Sheet';
 import { Loading } from './components/States';
 import { toast, toastError, ToastHost } from './components/Toast';
 import { Kbd } from './components/Tooltip';
+import { forcedAction, isCancelled, withInstallConfirm } from './lib/engine-install';
 import { formatTokPerSec } from './lib/format';
 import { useShortcuts } from './lib/shortcuts';
 import { BARE_PATHS, NotFound, ROUTES } from './routes';
@@ -77,8 +78,11 @@ function useAlertActions() {
   const onAction = (alert: Alert, action: AlertAction) => {
     const key = `${alert.id}:${action.id}`;
     setPending((p) => new Set(p).add(key));
-    runAlertAction(action, navigate)
+    const forced = forcedAction(action);
+    const run = (force: boolean) => runAlertAction(force && forced ? forced : action, navigate);
+    (forced ? withInstallConfirm(run, typeof action.body?.model === 'string' ? action.body.model : undefined) : run(false))
       .catch((err: unknown) => {
+        if (isCancelled(err)) return;
         const why = err instanceof ApiError ? err.message : String(err);
         toastError(t('shell.action_failed', { action: action.label, why }), err);
       })

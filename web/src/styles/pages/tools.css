@@ -40,6 +40,7 @@
 .jd-option .input { min-width: 0; flex: 1 1 140px; }
 .jd-answer { border-bottom: var(--rule-minor) solid var(--rule); padding-bottom: 12px; display: grid; gap: 8px; }
 .jd-answer-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 16px; }
+.jd-answer-facts { display: flex; flex-wrap: wrap; gap: 4px 16px; }
 .jd-bars { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .jd-bars-row { grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); }
 .jd-bar { display: grid; grid-template-columns: minmax(0, 10ch) minmax(60px, 1fr) 5ch; gap: 8px; align-items: center; }

@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { ApiError } from '../../api/client';
 import { toast, toastError } from '../../components/Toast';
+import { isCancelled, withInstallConfirm } from '../../lib/engine-install';
 import { engine, setEngine } from '../../store';
 import { t } from '../../strings/status';
 import { loadModel, restartEngine, stopEngine } from './api';
@@ -18,19 +19,35 @@ export function callKey(call: EngineCall): string {
 }
 
 export async function runEngineCall(call: EngineCall, force = false): Promise<void> {
+  // One toast per call, even when a 409 install_in_progress makes withInstallConfirm run it twice.
+  let toasted = false;
+  const once = (text: string) => {
+    if (!toasted) toast(text);
+    toasted = true;
+  };
   try {
     if (call.kind === 'stop') {
       toast(t('status.toast.stopping'));
       setEngine(await stopEngine());
     } else if (call.kind === 'restart') {
-      toast(t('status.toast.restarting'));
-      setEngine(await restartEngine());
+      setEngine(
+        await withInstallConfirm((f) => {
+          once(t('status.toast.restarting'));
+          return restartEngine(force || f);
+        }),
+      );
     } else {
-      toast(t(call.switching ? 'status.toast.switching' : 'status.toast.loading', { name: shortName(call.model) }));
-      setEngine(await loadModel(call.model, force));
+      setEngine(
+        await withInstallConfirm((f) => {
+          once(t(call.switching ? 'status.toast.switching' : 'status.toast.loading', { name: shortName(call.model) }));
+          return loadModel(call.model, force || f);
+        }, call.model),
+      );
     }
   } catch (err) {
-    if (err instanceof ApiError && err.code === 'model_switch_busy') {
+    if (isCancelled(err)) {
+      /* the install keeps going */
+    } else if (err instanceof ApiError && err.code === 'model_switch_busy') {
       toast(t('status.toast.switch_busy'));
     } else {
       const headline = call.kind === 'stop' ? 'status.toast.failed_stop' : call.kind === 'restart' ? 'status.toast.failed_restart' : 'status.toast.failed_load';

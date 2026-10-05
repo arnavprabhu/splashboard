@@ -24,7 +24,7 @@ import { applyPatch } from './logic';
 
 export const loadModel = (model: string, force = false) => api.post<EngineView>('/engine/load', { model, force });
 export const stopEngine = () => api.post<EngineView>('/engine/stop');
-export const restartEngine = () => api.post<EngineView>('/engine/restart');
+export const restartEngine = (force = false) => api.post<EngineView>(force ? '/engine/restart?force=true' : '/engine/restart');
 /** Raw Splash /status (schema 6, any shape); 503 while the engine is not running. */
 export const rawStatus = (signal?: AbortSignal) => api.get<Record<string, unknown>>('/engine/status', undefined, signal);
 

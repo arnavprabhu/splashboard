@@ -16,7 +16,8 @@ button.wz-rail-row { cursor: pointer; }
 .wz-grow { flex: 1 1 auto; min-width: 0; }
 .wz-full { flex-basis: 100%; margin: 0; }
 .wz-check-dd, .wz-field-dd { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; min-width: 0; }
-.wz-check-value { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.wz-check-value { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; min-width: 0; }
+.wz-check-text { min-width: 0; overflow-wrap: anywhere; }
 .wz-check-extra { flex-basis: 100%; }
 .wz-glyph { font-weight: 700; }
 .wz-glyph[data-status='fail'] { color: var(--acc); }

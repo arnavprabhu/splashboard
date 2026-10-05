@@ -120,7 +120,9 @@ export default function IntegrationsPage() {
         title={t("integrations.title")}
         meta={
           <span class="cluster integrations-meta">
-            <span>{t("integrations.server", { url: origin })}</span>
+            <span>
+              {t("integrations.server_label")} <span class="mono">{origin}</span>
+            </span>
             <span>·</span>
             <span>{auth ? t("integrations.key_on") : t("integrations.key_off")}</span>
           </span>
@@ -764,9 +766,7 @@ function DesktopRow({
       >
         <ul>
           <li>
-            {t("integrations.desktop.disconnect_body", {
-              since: app.connected_at ? ` (${app.connected_at.slice(0, 16).replace("T", " ")})` : "",
-            })}
+            {t("integrations.desktop.disconnect_body", { since: app.connected_at ? " (" + app.connected_at.slice(0, 16).replace("T", " ") + ")" : "" })}
           </li>
           <li>{t("integrations.desktop.disconnect_restart", { label: app.label })}</li>
         </ul>
@@ -935,7 +935,7 @@ function SdkBand({ origin, model, auth }: { origin: string; model: string; auth:
         ) : tab === "bionic" ? (
           <>
             <p class="body">
-              {t("integrations.sdk.bionic_body", { url: `${origin}/v1`, model })}
+              {t("integrations.sdk.bionic_body", { url: origin + "/v1", model })}
             </p>
             <ExternalLink href={BIONIC_GUIDE}>{t("integrations.sdk.bionic_link")}</ExternalLink>
           </>

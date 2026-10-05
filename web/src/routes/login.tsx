@@ -66,7 +66,8 @@ export default function LoginPage() {
       setBusy(false);
     }
   };
-  const [helpBefore, helpAfter] = t("login.help").split("{cmd}");
+  // {cmd} becomes a <code> element: fill it with a marker and split around it.
+  const [helpBefore, helpAfter] = t("login.help", { cmd: "\u0000" }).split("\u0000");
   return (
     <>
       <PageHeader title={t("login.title")} />

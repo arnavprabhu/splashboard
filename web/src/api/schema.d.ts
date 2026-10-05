@@ -247,7 +247,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Restart */
+        /**
+         * Restart
+         * @description `force` (query or body) restarts with requests in flight or during an install.
+         */
         post: operations["restart_api_admin_engine_restart_post"];
         delete?: never;
         options?: never;
@@ -2096,6 +2099,10 @@ export interface components {
             notes?: string | null;
             /** Size Bytes */
             size_bytes?: number | null;
+            /** Download Bytes */
+            download_bytes?: number | null;
+            /** Language Only Download Bytes */
+            language_only_download_bytes?: number | null;
             /** Memory Need Bytes */
             memory_need_bytes?: number | null;
             /** Fit */
@@ -2816,6 +2823,31 @@ export interface components {
             /** Suggestions */
             suggestions?: components["schemas"]["EngineSuggestion"][];
         };
+        /**
+         * EngineInstall
+         * @description What `splash serve` is downloading before it loads (`starting.installing`), from
+         *     Splash's `Fetching N file(s), X GB, from REPO@REV` line and the Hub cache (§6.3).
+         *     Stopping the engine now loses the file in progress (huggingface_hub 1.28, Q24).
+         */
+        EngineInstall: {
+            /** Repo */
+            repo: string;
+            /** Revision */
+            revision: string;
+            /** Files */
+            files: number;
+            /** Total Bytes */
+            total_bytes: number;
+            /**
+             * Done Bytes
+             * @default 0
+             */
+            done_bytes: number;
+            /** Speed Bps */
+            speed_bps?: number | null;
+            /** Eta S */
+            eta_s?: number | null;
+        };
         /** EngineNotice */
         EngineNotice: {
             /**
@@ -2965,6 +2997,7 @@ export interface components {
             } | null;
             /** Persistent Cache */
             persistent_cache?: boolean | null;
+            install?: components["schemas"]["EngineInstall"] | null;
             engine: components["schemas"]["EngineDiscoveryInfo"];
         };
         /** EntriesRemoved */
@@ -4145,6 +4178,14 @@ export interface components {
             /** Backoff S */
             backoff_s?: number | null;
         };
+        /** RestartRequest */
+        RestartRequest: {
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
+        };
         /** RestoreAllResult */
         RestoreAllResult: {
             /** Restored */
@@ -4993,6 +5034,10 @@ export interface components {
             recommended: boolean;
             /** Files */
             files?: string[];
+            /** Download Bytes */
+            download_bytes?: number | null;
+            /** Language Only Download Bytes */
+            language_only_download_bytes?: number | null;
         };
         /** VerifyRequest */
         VerifyRequest: {
@@ -5618,7 +5663,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RestartRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             202: {

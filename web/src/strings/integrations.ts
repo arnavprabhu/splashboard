@@ -6,7 +6,7 @@ export const integrationsStrings = {
   'integrations.page_title': 'Integrations',
   'integrations.title': 'Integrations.',
   'integrations.lead': 'Session-only: splash launch configures a client for one run. Plain claude, codex, … stay exactly as they were.',
-  'integrations.server': 'Server {url}',
+  'integrations.server_label': 'Server',
   'integrations.key_on': 'Key on',
   'integrations.key_off': 'Key off',
   'integrations.model': 'Model',

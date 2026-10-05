@@ -3,7 +3,9 @@ import { Link } from 'wouter-preact';
 import type { EngineSummary } from '../../api/types';
 import { Banner } from '../../components/Banner';
 import { Button } from '../../components/Button';
+import { Install } from '../../components/Install';
 import { LogPane } from '../../components/LogPane';
+import { installOf } from '../../lib/engine-install';
 import { Section } from '../../components/Section';
 import { toast, toastError } from '../../components/Toast';
 import { formatBytes, formatCount } from '../../lib/format';
@@ -151,6 +153,7 @@ export function StartupBand({ engine: e }: { engine: EngineSummary }) {
   const view = viewOf(e.view);
   const phase = e.phase ?? 'loading';
   const lines = (view.log_tail ?? []).slice(-12);
+  const install = installOf(e);
   const hub = (view.notices ?? []).filter((n) => n.kind === 'hub_unreachable' || n.kind === 'new_commit_not_installed');
   return (
     <Section label={t('status.startup.label')} id="status-startup">
@@ -158,6 +161,7 @@ export function StartupBand({ engine: e }: { engine: EngineSummary }) {
         <p class="lead loading-dots" data-testid="startup-headline">
           {t(phase === 'installing' ? 'status.startup.installing' : phase === 'warming' ? 'status.startup.warming' : 'status.startup.loading').replace(/…$/, '')}
         </p>
+        {install && <Install install={install} />}
         {hub.map((n) => (
           <Banner key={n.ts + n.kind} tone="info" title={t('status.banner.hub')}>
             <code class="mono">{n.message}</code>

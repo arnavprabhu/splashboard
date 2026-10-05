@@ -4,6 +4,7 @@
  */
 import { useState } from 'preact/hooks';
 import { Banner, Button, ConfirmSheet, Sheet, StickySaveBar, toast, toastError } from '../../components';
+import { isCancelled, withInstallConfirm } from '../../lib/engine-install';
 import { engine } from '../../store';
 import { t } from '../../strings/settings';
 import { settingsApi, probeOrigin } from './api';
@@ -37,8 +38,16 @@ export function SettingsSave({ form, rebindPath = '/admin/settings/server', save
       await form.save();
       setSheet(null);
       if (restartNow && restart) {
-        await settingsApi.restartEngine(inFlight > 0);
-        toast(t('settings.saved_restarting'));
+        // Kept installing (No in the install sheet): saved, with the restart still pending.
+        const restarted = await withInstallConfirm((force) => settingsApi.restartEngine(inFlight > 0 || force)).then(
+          () => true,
+          (err: unknown) => {
+            if (isCancelled(err)) return false;
+            throw err;
+          },
+        );
+        toast(t(restarted ? 'settings.saved_restarting' : 'settings.saved'));
+        if (!restarted) setPending(true);
       } else {
         toast(t('settings.saved'));
         if (restart) setPending(true);
@@ -90,10 +99,9 @@ export function SettingsSave({ form, rebindPath = '/admin/settings/server', save
             <Button
               size="s"
               onClick={() =>
-                void settingsApi
-                  .restartEngine()
+                void withInstallConfirm((force) => settingsApi.restartEngine(force))
                   .then(() => setPending(false))
-                  .catch((e) => toastError(t('settings.save_failed'), e))
+                  .catch((e) => isCancelled(e) || toastError(t('settings.save_failed'), e))
               }
             >
               {t('settings.restart_now')}

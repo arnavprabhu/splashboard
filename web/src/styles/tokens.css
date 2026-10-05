@@ -185,6 +185,10 @@ table,
 .mono {
   font-family: var(--mono);
   text-transform: none;
+  /* IDs, paths and URLs have no spaces: break one only when it would overflow. `break-word` keeps
+     the min-content width (unlike `anywhere`), so flex rows and auto tables on desktop don't wrap an
+     ID a character at a time; narrow containers give their mono child `min-width: 0`. */
+  overflow-wrap: break-word;
 }
 
 /* ---------- base elements ---------- */

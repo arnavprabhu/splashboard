@@ -30,11 +30,14 @@ export interface ChartProps {
   time?: boolean;
   /** Bars instead of lines (usage history). */
   bars?: boolean;
+  /** A fixed y range, e.g. [0, 1] for fractions shown as percents (uPlot's empty auto-range is 0–100). */
+  yRange?: [number, number];
 }
 
 let loader: Promise<typeof uPlot> | null = null;
 let bars: uPlot.Series.PathBuilder | null = null;
 let UPlotRef: typeof uPlot | null = null;
+let measure: CanvasRenderingContext2D | null | undefined;
 
 function barsPath(): uPlot.Series.PathBuilder | undefined {
   if (!UPlotRef) return undefined;
@@ -51,17 +54,28 @@ function cssVar(el: Element, name: string): string {
   return getComputedStyle(el).getPropertyValue(name).trim();
 }
 
-function buildOptions(el: HTMLElement, props: ChartProps, width: number): uPlot.Options {
+export function buildOptions(el: HTMLElement, props: ChartProps, width: number): uPlot.Options {
   const ink = cssVar(el, '--ink');
   const mute = cssVar(el, '--mute');
   const acc = cssVar(el, '--acc');
   const font = `600 12px ${cssVar(el, '--font') || 'sans-serif'}`;
-  const axis = (values?: uPlot.Axis['values']): uPlot.Axis => ({
+  const axis = (values?: uPlot.Axis['values'], y?: boolean): uPlot.Axis => ({
     stroke: mute,
     font,
     grid: { stroke: mute, width: 1 },
     ticks: { stroke: mute, width: 1, size: 4 },
     ...(values ? { values } : {}),
+    // The y axis fits its widest label ("55.9 GB" was clipped to "5.9 GB" at the default 50 px).
+    ...(y
+      ? {
+          size: (_u: uPlot, labels: string[] | null) => {
+            measure ??= document.createElement('canvas').getContext('2d');
+            if (!measure) return 50;
+            measure.font = font;
+            return Math.ceil(Math.max(24, ...(labels ?? []).map((l) => measure!.measureText(String(l ?? '')).width))) + 14;
+          },
+        }
+      : {}),
   });
   const yFormat = props.yFormat;
   return {
@@ -69,8 +83,8 @@ function buildOptions(el: HTMLElement, props: ChartProps, width: number): uPlot.
     height: props.height ?? 180,
     legend: { show: false },
     cursor: { y: false, points: { show: false } },
-    scales: { x: { time: props.time !== false } },
-    axes: [axis(), axis(yFormat ? (_u, splits) => splits.map((v) => (v === null ? '' : yFormat(v))) : undefined)],
+    scales: { x: { time: props.time !== false }, ...(props.yRange ? { y: { range: props.yRange } } : {}) },
+    axes: [axis(), axis(yFormat ? (_u, splits) => splits.map((v) => (v === null ? '' : yFormat(v))) : undefined, true)],
     series: [
       {},
       ...props.series.map((s) => {
@@ -128,7 +142,7 @@ export function Chart(props: ChartProps) {
     };
     // Rebuild only when the shape or theme changes; data updates go through setData.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [theme, seriesKey, props.height, props.bars, props.time]);
+  }, [theme, seriesKey, props.height, props.bars, props.time, String(props.yRange)]);
 
   useEffect(() => {
     plot.current?.setData(props.data);

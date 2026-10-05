@@ -20,6 +20,8 @@ interface ChartDef {
   yFormat: Fmt;
   /** Current value shown at the right of the title. */
   current: (lasts: Array<number | null>) => string;
+  /** Fractions shown as percents: a fixed 0–1 axis. */
+  yRange?: [number, number];
 }
 
 const tps: Fmt = (v) => formatTokPerSec(v, { unit: false });
@@ -27,7 +29,7 @@ const pct: Fmt = (v) => formatPercent(v, 0);
 const count: Fmt = (v) => formatCount(v);
 const bytes: Fmt = (v) => formatBytes(v);
 
-function defs(): ChartDef[] {
+export function defs(): ChartDef[] {
   const s = (key: Parameters<typeof t>[0], opts: Partial<ChartSeries> = {}): ChartSeries => ({ label: t(key), ...opts });
   return [
     {
@@ -94,6 +96,7 @@ function defs(): ChartDef[] {
       keys: ['cache.hit_rate', 'cache.efficiency'],
       series: [s('status.charts.s.hit', { primary: true }), s('status.charts.s.eff', { dashed: true })],
       yFormat: pct,
+      yRange: [0, 1],
       current: ([h]) => (h == null ? DASH : formatPercent(h, 0)),
     },
     {
@@ -214,6 +217,7 @@ export function ChartsBand({ windowMin, onWindow, diskEnabled, lanesReported }: 
                 series={d.series}
                 height={160}
                 yFormat={d.yFormat}
+                {...(d.yRange ? { yRange: d.yRange } : {})}
                 empty={t('status.charts.no_samples')}
               />
             </div>

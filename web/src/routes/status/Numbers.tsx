@@ -5,7 +5,7 @@ import { SegmentedControl } from '../../components/controls';
 import { LoadError } from '../../components/States';
 import { Stat } from '../../components/NumbersBand';
 import { toastError } from '../../components/Toast';
-import { DASH, formatCompact, formatCount, formatDate, formatMs, formatPercent, formatTokPerSec } from '../../lib/format';
+import { DASH, formatCompact, formatCount, formatDate, formatDuration, formatMs, formatPercent, formatTokPerSec } from '../../lib/format';
 import { useApi } from '../../lib/use-api';
 import { t } from '../../strings/status';
 import { resetMetrics, usageSummary } from './api';
@@ -46,6 +46,9 @@ export function sessionStats(s: LiveMetrics | null, raw: unknown, narrow = false
   const diskHit = rawNum(raw, 'cache.kv_disk_hit_tokens');
   const wall = rawNum(raw, 'metrics.prefill_wall_ms');
   const unit = t('status.numbers.unit_tps');
+  // Splash reports 0 for TTFT and acceptance before anything ran: that is "no data" (—), not 0 ms / 0%.
+  const noRequests = !tt?.requests_completed;
+  const noDrafts = !s?.draft?.drafted_tokens;
   return [
     {
       key: 'tokens',
@@ -85,7 +88,7 @@ export function sessionStats(s: LiveMetrics | null, raw: unknown, narrow = false
     {
       key: 'draft',
       label: t('status.numbers.draft'),
-      value: formatPercent(s?.draft?.acceptance_rate, 0),
+      value: noDrafts ? DASH : formatPercent(s?.draft?.acceptance_rate, 0),
       sub:
         s?.draft?.drafted_tokens != null
           ? t('status.numbers.accepted', { a: formatCompact(s.draft.accepted_tokens), d: formatCompact(s.draft.drafted_tokens) })
@@ -94,8 +97,8 @@ export function sessionStats(s: LiveMetrics | null, raw: unknown, narrow = false
     {
       key: 'ttft',
       label: t('status.numbers.ttft'),
-      value: formatMs(s?.latency?.ttft_p50_ms),
-      sub: s ? t('status.numbers.p95', { v: formatMs(s.latency?.ttft_p95_ms) }) : undefined,
+      value: noRequests ? DASH : formatMs(s?.latency?.ttft_p50_ms),
+      sub: s ? t('status.numbers.p95', { v: noRequests ? DASH : formatMs(s.latency?.ttft_p95_ms) }) : undefined,
     },
     {
       key: 'requests',
@@ -128,8 +131,8 @@ export function usageStats(u: UsageSummary | null, narrow = false): StatModel[] 
     {
       key: 'ttft',
       label: t('status.numbers.ttft'),
-      value: formatMs(u?.ttft_p50_ms),
-      sub: u ? t('status.numbers.p95', { v: formatMs(u.ttft_p95_ms) }) : undefined,
+      value: u?.completed ? formatMs(u.ttft_p50_ms) : DASH,
+      sub: u ? t('status.numbers.p95', { v: u.completed ? formatMs(u.ttft_p95_ms) : DASH }) : undefined,
     },
     {
       key: 'requests',
@@ -216,7 +219,7 @@ export function NumbersBand({ scope, onScope, sample, sampleAt, raw, stopped, fr
   if (session && stopped) metas.push(t('status.numbers.stopped'));
   if (session && !stopped && cleared) metas.push(t('status.numbers.cleared', { time: timeOf(cleared) }));
   if (session && !stopped && restartedAt) metas.push(t('status.numbers.restarted', { time: timeOf(restartedAt) }));
-  if (stale && ageS !== null) metas.push(t('status.numbers.stale', { age: `${ageS} s` }));
+  if (stale && ageS !== null) metas.push(t('status.numbers.stale', { age: formatDuration(ageS) }));
   if (!session && summary.data?.since) metas.push(t('status.numbers.usage_since', { date: formatDate(Date.parse(summary.data.since)) }));
 
   const clear = async () => {

@@ -295,7 +295,7 @@ function Profiles({ id, view, error, onRetry, onSaved }: { id: string; view: Pro
               <TextInput class="mono" value={editing.name} invalid={!!nameErr} disabled={!!editing.original && view.profiles.find((p) => p.name === editing.original)?.builtin} onChange={(v) => setEditing({ ...editing, name: v })} />
               {nameErr && editing.name && <span class="field-error">{nameErr}</span>}
             </label>
-            <p class="meta">{t("settings.model.p.overlay_meta", { id: `${id}:${editing.name || "…"}` })}</p>
+            <p class="meta">{t("settings.model.p.overlay_meta", { id: id + ":" + (editing.name || "…") })}</p>
             <OverlayEditor value={editing.overlay} onChange={(overlay) => setEditing({ ...editing, overlay })} idPrefix="pf" />
           </div>
         )}

@@ -7,6 +7,7 @@ import { Button } from "../components/Button";
 import { PageHeader } from "../components/Section";
 import { SubNav, TOOLS_TABS } from "../components/SubNav";
 import { toastError } from "../components/Toast";
+import { isCancelled, withInstallConfirm } from "../lib/engine-install";
 import { useTitle } from "../lib/title";
 import { engine, settings } from "../store";
 import { t } from "../strings/tools";
@@ -45,9 +46,8 @@ export function ToolPage({ tool, children, actions }: { tool: ToolName; children
                   loading={loading}
                   onClick={() => {
                     setLoading(true);
-                    void api
-                      .post("/engine/load", { model: fallback })
-                      .catch((err) => toastError(t("tools.load_failed"), err))
+                    void withInstallConfirm((force) => api.post("/engine/load", { model: fallback, force }), fallback)
+                      .catch((err) => isCancelled(err) || toastError(t("tools.load_failed"), err))
                       .finally(() => setLoading(false));
                   }}
                 >

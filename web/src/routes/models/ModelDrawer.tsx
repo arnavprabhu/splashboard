@@ -1,3 +1,4 @@
+import { useState } from 'preact/hooks';
 import { Link } from 'wouter-preact';
 import type { InspectResult, InstalledModel, ModelCard, ModelDetail, ModelFile, VariantOut } from '../../api/models';
 import { Banner } from '../../components/Banner';
@@ -7,13 +8,15 @@ import { Disclosure } from '../../components/Disclosure';
 import { KeyValue, type KeyValueItem } from '../../components/KeyValue';
 import { Menu } from '../../components/Menu';
 import { Sheet } from '../../components/Sheet';
+import { Install } from '../../components/Install';
 import { Loading, LoadError } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
 import { Tag } from '../../components/Tag';
+import { installOf } from '../../lib/engine-install';
 import { DASH, formatBytes, formatDate } from '../../lib/format';
 import { modelSettingsPath, splitModelId } from '../../lib/model-id';
 import { useApi } from '../../lib/use-api';
-import { engineState } from '../../store';
+import { engine, engineState } from '../../store';
 import { t } from '../../strings/models';
 import * as flows from './actions';
 import { getCard, getModel, inspectModel } from './api';
@@ -56,6 +59,7 @@ export function ModelDrawer({ id, installed, activeId, onClose, onDelete, onVeri
   const installedSet = installedVariants(repo, installed);
   const rec = pickVariant(ins, requestedVariant);
   const isActive = model ? model.id === activeId : false;
+  const install = isActive ? installOf(engine.value) : null;
   const files: ModelFile[] = (det?.files?.length ? det.files : card.data?.files) ?? [];
   const tags = card.data?.tags ?? [];
   const latest = det?.latest_commit ?? null;
@@ -68,6 +72,11 @@ export function ModelDrawer({ id, installed, activeId, onClose, onDelete, onVeri
   };
 
   const canDownloadMore = isGguf ? variants.some((v) => v.loadable !== false && !installedSet.has(v.name)) : !model;
+  // As in the Downloader catalog (03 §3.2 "same as the drawer"): the Variant menu selects, only the button downloads.
+  const [picked, setPicked] = useState<string | null>(null);
+  const downloadable = (v: VariantOut) => v.loadable !== false && !installedSet.has(v.name);
+  const choice = variants.find((v) => v.name === picked) ?? variants.find((v) => v.name === rec && downloadable(v)) ?? variants.find(downloadable) ?? null;
+  const choiceSize = choice ? (choice.download_bytes ? formatBytes(choice.download_bytes, { base: 1000 }) : choice.size_bytes ? formatBytes(choice.size_bytes, { base: 1000 }) : null) : null;
   const compatible = ins ? ins.badge !== 'incompatible' : true;
 
   const facts: KeyValueItem[] = [
@@ -136,13 +145,19 @@ export function ModelDrawer({ id, installed, activeId, onClose, onDelete, onVeri
           {isActive ? <StatusChip state={engineState.value} announce={false} /> : ins ? <CompatTag state={ins.badge} acc={false} /> : inspect.loading ? <CompatTag state="checking" /> : null}
           {model && !isActive && <Tag tone="ink">{t('models.status.installed')}</Tag>}
         </div>
+        {install && <Install install={install} />}
 
         <div class="cluster drawer-actions">
           {compatible && canDownloadMore && isGguf && variants.length > 0 && (
+            <span class="cluster">
+            <Button variant="accent" disabled={!choice || !downloadable(choice)} onClick={() => choice && download(choice.name)} data-testid="drawer-download">
+              {choiceSize ? t('models.action.download_variant_size', { variant: choice?.name ?? '', size: choiceSize }) : t('models.action.download_variant', { variant: choice?.name ?? '' })}
+            </Button>
             <Menu
-              label={t('models.action.download_variant', { variant: rec ?? '' })}
-              variant="accent"
-              testId="drawer-download"
+              label={t('models.action.variant')}
+              variant="text"
+              radio
+              testId="drawer-variant"
               items={variants.map((v) => ({
                 key: v.name,
                 label: <span class="mono">{v.name}</span>,
@@ -154,10 +169,11 @@ export function ModelDrawer({ id, installed, activeId, onClose, onDelete, onVeri
                         .filter(Boolean)
                         .join(' · '),
                 disabled: v.loadable === false || installedSet.has(v.name),
-                checked: v.name === rec,
-                onSelect: () => download(v.name),
+                checked: v.name === choice?.name,
+                onSelect: () => setPicked(v.name),
               }))}
             />
+            </span>
           )}
           {compatible && canDownloadMore && !isGguf && (
             <Button variant="accent" onClick={() => download(null)} data-testid="drawer-download">
