@@ -23,6 +23,7 @@ import secrets
 import select
 import signal
 import socket
+import socketserver
 import sys
 import threading
 import time
@@ -1669,6 +1670,14 @@ class FakeServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
     request_queue_size = 128
+
+    def server_bind(self) -> None:
+        """HTTPServer.server_bind without its `socket.getfqdn(host)`: that reverse
+        DNS lookup goes through mDNS and can hang for minutes (GitHub's macOS runners)."""
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = str(host)
+        self.server_port = int(port)
 
     def __init__(
         self,
