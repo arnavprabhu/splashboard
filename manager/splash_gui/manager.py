@@ -14,6 +14,7 @@ import fcntl
 import logging
 import os
 import signal
+import socket
 import sys
 import threading
 from collections.abc import Iterator
@@ -107,6 +108,36 @@ class _Server(uvicorn.Server):
         super().handle_exit(sig, frame)
 
 
+def bound_addresses(server: uvicorn.Server) -> set[tuple[str, int]]:
+    """The addresses `server`'s listening sockets are bound to (getsockname)."""
+    found: set[tuple[str, int]] = set()
+    for listener in getattr(server, "servers", None) or ():
+        for sock in getattr(listener, "sockets", None) or ():
+            with contextlib.suppress(OSError):
+                name = sock.getsockname()
+                if isinstance(name, tuple) and len(name) >= 2:
+                    found.add((str(name[0]), int(name[1])))
+    return found
+
+
+def listening_on(server: uvicorn.Server, host: str, port: int) -> bool:
+    """Whether `server` already listens on `host:port`, compared with the bound
+    sockets, not with the settings it was started from. A host name counts when every
+    address it resolves to is bound on that port."""
+    bound = bound_addresses(server)
+    if not bound or port not in {p for _, p in bound}:
+        return False
+    hosts = {h for h, p in bound if p == port}
+    if host in hosts:
+        return True
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError:
+        return False
+    wanted = {str(info[4][0]) for info in infos}
+    return bool(wanted) and wanted <= hosts
+
+
 class _WithLifespanState:
     """Give every request the lifespan state, as uvicorn does when it runs the lifespan."""
 
@@ -132,19 +163,45 @@ class ManagerRunner:
         self._target: tuple[str, int] | None = None
         self._stopped = False
         self._lock = threading.Lock()
+        # The pending rebind (REBIND_DELAY_S after a save), cancelled by a later save
+        # that puts the address back.
+        self._timer: threading.Timer | None = None
 
     def on_settings_saved(self, changes: list[Change], restart_required: bool) -> None:
         if not any(c.key in ("server.host", "server.port") for c in changes):
             return
         server = self.state.settings.current.global_.server
+        target = (server.host, server.port)
         with self._lock:
-            self._target = (server.host, server.port)
             current = self._server
-        if current is not None:
-            threading.Timer(REBIND_DELAY_S, self._exit, args=(current,)).start()
+            # The saved value can differ from the previous setting yet equal where the
+            # manager listens (it was started with --port, or the setting is set back):
+            # moving to the same address would only cut every SSE stream.
+            if current is not None and (
+                listening_on(current, *target)
+                or (target == (self.host, self.port) and current.started)
+            ):
+                self._target = None
+                if self._timer is not None:
+                    self._timer.cancel()  # a change and change-back: stay where we are
+                    self._timer = None
+                log.info("server.host/port saved as %s:%s, already bound there", *target)
+                return
+            self._target = target
+            if current is not None:
+                if self._timer is not None:
+                    self._timer.cancel()
+                self._timer = threading.Timer(REBIND_DELAY_S, self._exit, args=(current,))
+                self._timer.daemon = True
+                self._timer.start()
 
-    @staticmethod
-    def _exit(server: _Server) -> None:
+    def _exit(self, server: _Server) -> None:
+        """Stop `server` for a rebind, only if a rebind is still wanted: a timer that
+        fires after the address was put back must not stop the only listener."""
+        with self._lock:
+            self._timer = None
+            if self._target is None or self._server is not server:
+                return
         server.should_exit = True
 
     def stop(self) -> None:

@@ -473,6 +473,14 @@ class ProxyPipeline:
                 raise ProxyError(
                     503, error.message, "model_switch_busy", headers={"Retry-After": "10"}
                 ) from None
+            if error.code == "install_in_progress":
+                # An auto-load never stops a download in progress (Q24); retry later.
+                raise ProxyError(
+                    503,
+                    f"Splash GUI is downloading files for {sup.model}; retry when it is ready",
+                    "install_in_progress",
+                    headers={"Retry-After": "30"},
+                ) from None
             raise ProxyError(
                 error.status if error.status != 422 else 503,
                 error.message,

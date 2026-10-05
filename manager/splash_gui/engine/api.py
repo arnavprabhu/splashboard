@@ -7,7 +7,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Request, Response
 
 from ..errors import ApiError, error_responses
-from ..schemas import EngineView, LoadRequest
+from ..schemas import EngineView, LoadRequest, RestartRequest
 from ..state import ManagerState, get_state
 
 router = APIRouter()
@@ -61,8 +61,12 @@ async def stop(state: State) -> EngineView:
     status_code=202,
     responses=error_responses(409),
 )
-async def restart(state: State, force: bool = False) -> EngineView:
-    return await state.supervisor.restart(force=force)  # type: ignore[no-any-return]
+async def restart(
+    state: State, force: bool = False, body: RestartRequest | None = None
+) -> EngineView:
+    """`force` (query or body) restarts with requests in flight or during an install."""
+    forced = force or (body is not None and body.force)
+    return await state.supervisor.restart(force=forced)  # type: ignore[no-any-return]
 
 
 @router.get("/engine/status", response_model=dict[str, Any], responses=error_responses(503))

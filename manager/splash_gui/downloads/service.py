@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import glob
 import json
 import os
 import shutil
@@ -17,10 +16,12 @@ from typing import TYPE_CHECKING, ClassVar
 
 from ..errors import ApiError
 from ..events.alerts import action
+from ..hubcache import blob_partials, blobs_dir
 from ..models.hf import HubError
 from ..models.service import valid_id
 from ..paths import write_atomic
 from ..schemas import DownloadError, DownloadFile, DownloadItem, DownloadRequest, ModelsChangedEvent
+from ..units import format_bytes
 from ..usage.db import iso
 
 if TYPE_CHECKING:
@@ -155,7 +156,9 @@ class Downloads:
             # an item that does not exist.
             self.blobs.pop(item.id, None)
             raise ApiError(
-                507, f"Not enough disk space: need {required} bytes, have {free}", "disk_full"
+                507,
+                f"Not enough disk space: need {format_bytes(required)}, have {format_bytes(free)}",
+                "disk_full",
             )
         self.preexisting[item.id] = [str(p) for p in directory.glob("models--*/blobs/*.incomplete")]
         self.items[item.id] = item
@@ -180,22 +183,13 @@ class Downloads:
         self.schedule()
 
     def blob_path(self, repo_id: str, digest: str) -> Path:
-        return (
-            self.state.settings.models_dir()
-            / ("models--" + repo_id.replace("/", "--"))
-            / "blobs"
-            / digest
-        )
+        return blobs_dir(self.state.settings.models_dir(), repo_id) / digest
 
     def partials(self, repo_id: str, digest: str) -> list[Path]:
         """A blob's partial files. huggingface_hub before 1.x used `<etag>.incomplete`;
         1.28 (bundled with Splash 1.2.0) writes a per-process `<etag>.<uuid8>.incomplete`
         (huggingface_hub/file_download.py `_download_to_tmp_and_move`, PR #4228)."""
-        blob = self.blob_path(repo_id, digest)
-        legacy = blob.with_name(blob.name + ".incomplete")
-        found = [legacy] if legacy.is_file() else []
-        found += sorted(blob.parent.glob(glob.escape(blob.name) + ".*.incomplete"))
-        return found
+        return blob_partials(self.blob_path(repo_id, digest))
 
     def progress(self, item: DownloadItem) -> None:
         for file in item.files:
@@ -223,10 +217,15 @@ class Downloads:
 
     def shared_digests(self, dl: str) -> set[str]:
         """Blobs another unfinished download also needs: their partials are not ours to delete."""
+        return self.active_digests(exclude=dl)
+
+    def active_digests(self, exclude: str | None = None) -> set[str]:
+        """Blobs every unfinished download (queued, running, verifying, paused) needs.
+        The engine supervisor's stale-partial cleanup leaves their partials alone."""
         return {
             blob
             for key, mapping in self.blobs.items()
-            if key != dl
+            if key != exclude
             and key in self.items
             and self.items[key].state not in ("cancelled", "done", "failed")
             for blob in mapping.values()

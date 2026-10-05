@@ -14,6 +14,14 @@
   stopped. A counter drop or a new identity build id means Splash restarted.
 - **Idle unload** (§6.5): stop the process after `lifecycle.idle_unload_minutes`
   without API requests.
+- **Install progress** (§6.3 `starting.installing`): each `Fetching N file(s), …`
+  line starts an `InstallTracker` sampled every second from the Hub cache and shown
+  as `EngineView.install`; a load or restart then needs `force` (409
+  `install_in_progress`), because stopping loses the file in progress (Q24).
+- **Stale partials** (§9.4): at every start and every session end, the per-process
+  `<etag>.<uuid8>.incomplete` files killed runs left in the model's repositories are
+  deleted (never an open one, the legacy `<etag>.incomplete`, or one the Downloader
+  still needs).
 """
 
 from __future__ import annotations
@@ -29,12 +37,14 @@ from collections import deque
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from ..errors import ApiError
 from ..logging_setup import SESSION_END, SESSION_START, EngineLogWriter
+from ..models import catalog as cat
 from ..paths import ensure_private_dir, write_atomic
 from ..schemas import (
     EngineDiscoveryInfo,
@@ -51,6 +61,7 @@ from ..settings import parsers as p
 from ..settings.effective import effective_serve
 from . import status as st
 from .flags import INTERNAL_PORT_RANGE, LaunchError, LaunchSpec, build_launch_for_model
+from .install import FetchLine, InstallTracker, parse_fetching, remove_stale_partials
 from .startup import (
     ErrorEvent,
     Event,
@@ -103,6 +114,8 @@ class _Run:
     saved_identity: dict[str, Any] | None = None
     # Spawned by the crash auto-restart (D45: its startup crash is a crash).
     auto_restart: bool = False
+    # What `starting.installing` is downloading (the latest `Fetching …` line).
+    install: InstallTracker | None = None
 
     @property
     def base_url(self) -> str:
@@ -139,6 +152,7 @@ class Supervisor:
     status_fast_s = 1.0
     status_slow_s = 5.0
     idle_check_s = 15.0
+    install_sample_s = 1.0
     splash_idle_release_s = SPLASH_IDLE_RELEASE_S
 
     def __init__(self, state: ManagerState) -> None:
@@ -272,6 +286,7 @@ class Supervisor:
             with contextlib.suppress(Exception):
                 kv_format = effective_serve(self.app.settings.current, self.model).kv_format
         settings = self.app.settings.current
+        tracker = self._install_tracker()
         uptime = None
         if self._run is not None and self.state in RUNNING_STATES:
             uptime = round(time.monotonic() - self._run.started_mono, 1)
@@ -308,8 +323,15 @@ class Supervisor:
             command=self._run.spec.display() if self._run else None,
             taken_back=dict(self.taken_back) if self.taken_back is not None else None,
             persistent_cache=st.boolean(status, "disk.persistent") if status else None,
+            install=tracker.view() if tracker is not None else None,
             engine=EngineDiscoveryInfo.model_validate(engine.as_dict()),
         )
+
+    def _install_tracker(self) -> InstallTracker | None:
+        run = self._run
+        if run is None or self.state != "starting" or self.phase != "installing":
+            return None
+        return run.install
 
     def _draft(self) -> str | None:
         if not self.model:
@@ -333,6 +355,8 @@ class Supervisor:
             self.since = now_iso()
         self.state = state
         self.phase = phase if state == "starting" else None
+        if self._run is not None and (self.state != "starting" or self.phase != "installing"):
+            self._run.install = None
         if changed:
             for listener in list(self.state_listeners):
                 try:
@@ -442,7 +466,10 @@ class Supervisor:
                 and self.state in RUNNING_STATES
                 and self.state not in ("engine_failed",)
             ):
+                # Already loading or serving it (an install included): nothing stops,
+                # and `wait` waits for it.
                 return self.view()
+            self._check_install(force)
             if self._run is not None and self.busy() and not force:
                 raise ApiError(
                     409,
@@ -474,6 +501,7 @@ class Supervisor:
             raise ApiError(409, "No model is loaded; load one first", "engine_not_loaded")
         async with self._op:
             self._check_hold()
+            self._check_install(force)
             if self._run is not None and self.busy() and not force:
                 raise ApiError(
                     409,
@@ -487,6 +515,27 @@ class Supervisor:
             self._attempt = 0
             await self._spawn(model)
             return self.view()
+
+    def _check_install(self, force: bool) -> None:
+        """A load of another model or a restart stops a `splash serve` that is
+        downloading files; the hub Splash bundles cannot continue the file in progress
+        (Q24), so ask first. A load of the model being installed never gets here."""
+        tracker = self._install_tracker()
+        if tracker is None or force:
+            return
+        view = tracker.view()
+        raise ApiError(
+            409,
+            f"Splash is downloading {view.repo} for {self.model}; stopping it now restarts "
+            "the file in progress from the beginning. Send force to stop it anyway",
+            "install_in_progress",
+            details={
+                "active": self.model,
+                "repo": view.repo,
+                "done_bytes": view.done_bytes,
+                "total_bytes": view.total_bytes,
+            },
+        )
 
     def _cancel_restart(self) -> None:
         if self._restart_task is not None and not self._restart_task.done():
@@ -587,6 +636,7 @@ class Supervisor:
             )
         except Exception:
             log.exception("could not record the engine session")
+        await self._remove_stale_partials(model, spec, "start")
         self._log.write(f"{SESSION_START} · {model} · {spec.display()}", "stdout")
         try:
             process = await asyncio.create_subprocess_exec(
@@ -652,6 +702,10 @@ class Supervisor:
         self.log_tail.append(text)
         for event in run.parser.feed(text):
             self._apply(run, event)
+        if self.state == "starting" and self.phase == "installing":
+            fetch = parse_fetching(text)
+            if fetch is not None:
+                self._track_install(run, fetch)
         if self.state in ("starting", "failed"):
             self._publish()
 
@@ -711,6 +765,107 @@ class Supervisor:
                 "bytes": event.mib * 1024 * 1024,
                 "left_behind": event.left_behind,
             }
+
+    # Install progress (§6.3 starting.installing) -----------------------------------------
+
+    def _models_dir(self, spec: LaunchSpec) -> Path:
+        cache = dict(spec.env).get("HF_HUB_CACHE")
+        return Path(cache) if cache else self.app.settings.models_dir()
+
+    def _track_install(self, run: _Run, fetch: FetchLine) -> None:
+        """One tracker per `Fetching` line: Splash fetches the draft, then the target,
+        one repository at a time (install/upstream.py `_install`: the draft at :428,
+        the target at :435)."""
+        try:
+            run.install = InstallTracker(
+                self._models_dir(run.spec),
+                fetch,
+                excluded=self._downloader_digests,
+                line_wall=time.time(),
+            )
+            run.install.sample()
+        except OSError:
+            log.exception("could not measure the install of %s", fetch.repo)
+            run.install = None
+            return
+        log.info(
+            "engine installing: %s files, %s bytes from %s@%s",
+            fetch.files,
+            fetch.total_bytes,
+            fetch.repo,
+            fetch.revision,
+        )
+        if not any(t.get_name() == "engine-install" for t in run.tasks if not t.done()):
+            run.tasks.append(asyncio.create_task(self._sample_install(run), name="engine-install"))
+        self._publish(force=True)
+
+    def _downloader_digests(self) -> set[str]:
+        """Blobs an unfinished Downloader item is fetching (not this install's)."""
+        downloads = getattr(self.app, "downloads", None)
+        if downloads is None:
+            return set()
+        return set(downloads.active_digests())
+
+    async def _sample_install(self, run: _Run) -> None:
+        while run is self._run and self.state == "starting" and self.phase == "installing":
+            await asyncio.sleep(self.install_sample_s)
+            tracker = run.install
+            if tracker is None or run is not self._run or self.phase != "installing":
+                continue
+            try:
+                await asyncio.to_thread(tracker.sample)
+            except OSError:
+                continue
+            self._publish(force=True)
+
+    # Stale partials (§9.4, Q24) ----------------------------------------------------------
+
+    def _model_repos(self, model: str) -> list[str]:
+        """The Hub repositories a model's files come from: the target (with its vision
+        tower or projector, install/upstream.py:159-161, :204-210) and the draft."""
+        repos: list[str] = []
+        with contextlib.suppress(ValueError):
+            repos.append(p.split_model_id(model)[0])
+        draft = None
+        with contextlib.suppress(Exception):
+            info = self.app.model_info(model)
+            ref = info.get("draft") if info else None
+            draft = ref.get("repo_id") if isinstance(ref, dict) else ref
+        if not draft:
+            with contextlib.suppress(Exception):
+                draft = effective_serve(self.app.settings.current, model).draft_model
+        if isinstance(draft, str) and draft and not Path(draft).is_absolute():
+            repos.append(draft)
+        # A model Splash is installing for the first time has no recorded draft yet.
+        family = cat.family_guess(repos[0]) if repos else None
+        if family in cat.DRAFT_REPOS:
+            repos.append(cat.DRAFT_REPOS[family])
+        return list(dict.fromkeys(repos))
+
+    async def _remove_stale_partials(self, model: str, spec: LaunchSpec, when: str) -> None:
+        protected: set[str] = set()
+        with contextlib.suppress(Exception):
+            protected = self._downloader_digests()
+        try:
+            removed = await asyncio.to_thread(
+                remove_stale_partials,
+                self._models_dir(spec),
+                self._model_repos(model),
+                protected_digests=protected,
+            )
+        except Exception:
+            log.exception("could not remove stale partial downloads for %s", model)
+            return
+        if removed:
+            total = sum(r.size for r in removed)
+            log.info(
+                "removed %d stale partial download(s), %d bytes, for %s at engine %s: %s",
+                len(removed),
+                total,
+                model,
+                when,
+                ", ".join(r.path.name for r in removed),
+            )
 
     # Readiness ---------------------------------------------------------------------------
 
@@ -821,9 +976,13 @@ class Supervisor:
         with contextlib.suppress(OSError):
             self.app.paths.engine_pid.unlink()
         was_ready = self._ready_mono is not None
+        run.install = None
         self._run = None
         self.status = None
         self.in_flight = 0
+        # A run stopped or killed mid-download leaves `<etag>.<uuid8>.incomplete`
+        # files nothing can continue (huggingface_hub 1.28, Q24).
+        await self._remove_stale_partials(run.model, run.spec, "exit")
         if not crashed:
             self.transport = None
             self._set("stopped")

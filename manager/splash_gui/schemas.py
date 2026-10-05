@@ -161,6 +161,20 @@ class TransportInfo(ApiModel):
     error: str | None = None
 
 
+class EngineInstall(ApiModel):
+    """What `splash serve` is downloading before it loads (`starting.installing`), from
+    Splash's `Fetching N file(s), X GB, from REPO@REV` line and the Hub cache (§6.3).
+    Stopping the engine now loses the file in progress (huggingface_hub 1.28, Q24)."""
+
+    repo: str
+    revision: str
+    files: int
+    total_bytes: int
+    done_bytes: int = 0
+    speed_bps: float | None = None
+    eta_s: float | None = None
+
+
 class EngineView(ApiModel):
     """The engine state machine (SPEC §6.3) plus a summary for headers and the menu bar."""
 
@@ -193,17 +207,27 @@ class EngineView(ApiModel):
     # Keys: states, kv_blocks, bytes, left_behind. Null when not persistent/unknown.
     taken_back: dict[str, int] | None = None
     persistent_cache: bool | None = None
+    # Set while `starting.installing` downloads files (null otherwise).
+    install: EngineInstall | None = None
     engine: EngineDiscoveryInfo
 
 
 class LoadRequest(ApiModel):
     model: str
-    # Switch even with requests in flight (they are cut off).
+    # Switch even with requests in flight (they are cut off), or while Splash is
+    # downloading the current model's files (the file in progress is lost).
     force: bool = False
     # Answer only once the model is ready or failed (CLI `load`, G25).
     wait: bool = False
     # Seconds to wait with `wait`; default routing.load_timeout.
     timeout: float | None = Field(default=None, gt=0, le=3600)
+
+
+class RestartRequest(ApiModel):
+    # Restart even with requests in flight, or while Splash is downloading the
+    # model's files (the file in progress starts again from byte 0, Q24). The
+    # `?force=true` query parameter is still accepted.
+    force: bool = False
 
 
 # System ---------------------------------------------------------------------
@@ -886,6 +910,10 @@ class VariantOut(ApiModel):
     fit: Fit | None = None
     recommended: bool = False
     files: list[str] = Field(default_factory=list)
+    # Catalog only (null in /inspect, which has download_plan): what downloading this
+    # variant fetches in total, target + projector + draft, and without the projector.
+    download_bytes: int | None = None
+    language_only_download_bytes: int | None = None
 
 
 class VisionInfo(ApiModel):
@@ -947,7 +975,14 @@ class CatalogEntry(ApiModel):
     family: Family
     format: ModelFormat
     notes: str | None = None
+    # The target weights (GGUF: the default variant plus its projector).
     size_bytes: int | None = None
+    # What downloading the default selection fetches in total (the recommended variant
+    # for GGUF; target + vision + draft), from the same file plan as /inspect's
+    # download_plan.total_bytes; and the same without vision (--language-only).
+    # Null offline or when the draft's listing is unavailable.
+    download_bytes: int | None = None
+    language_only_download_bytes: int | None = None
     memory_need_bytes: int | None = None
     fit: Fit | None = None
     vision: bool | None = None

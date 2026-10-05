@@ -128,4 +128,8 @@ def _mlx_target(repo, language_only):
         raise models.ModelError(f"Splash needs MLX group size 64, not {quant.get('group_size')}")
     files = {name: name for name in sorted(repo.files)}
     files.setdefault("config.json", "config.json")
+    if language_only:
+        # upstream.py `_mlx_target` (1.2.0, :202-210): the processor config is read
+        # and linked only when vision is on.
+        files.pop("preprocessor_config.json", None)
     return Target("mlx-affine", "none" if language_only else "safetensors", config, files)

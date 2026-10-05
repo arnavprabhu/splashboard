@@ -149,6 +149,13 @@ Installer (`install/models.py`, and the install step of `serve`):
 | `FAKE_SPLASH_DL_FAIL` | — | `gated` (401 unless `HF_TOKEN` is set), `network` (Hub unreachable), `network_mid`, `disk_full` (ENOSPC mid-download), `incompatible` |
 | `FAKE_SPLASH_DL_FAIL_AFTER` | half of the first weight file | Bytes written before `network_mid` or `disk_full` |
 
+To watch a load that (re)installs in the UI (`EngineView.install`, docs/api.md §3.1),
+make the files big and slow, then install a model and change its commit so the next
+load fetches again, e.g. `FAKE_SPLASH_DL_SHARD_BYTES=2G FAKE_SPLASH_DL_BPS=50M make dev
+FAKE=1 PORT=8124`, download a model, then restart with `FAKE_SPLASH_DL_COMMIT_SALT=1`
+and load it: `serve` prints `Fetching 1 file(s), … GB, from REPO@REV; cached files are
+reused.` and writes a growing `<hash>.<uuid8>.incomplete`.
+
 Support comes from the repository name: `*35B-A3B*` is Qwen3.6-35B-A3B,
 `*27B*` is Qwen3.8-27B, and anything else is refused as incompatible with
 `families.family_for`'s wording. `prepare` starts each unfinished file again
