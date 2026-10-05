@@ -6,7 +6,7 @@ suffix after `{model_id:path}` must be declared before the bare one.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, cast
+from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, Query
 
@@ -90,6 +90,20 @@ async def inspect(
 @router.get("/card", response_model=ModelCard, responses=_ERR)
 async def card(state: State, id: Annotated[str, Query()]) -> ModelCard:
     return await cast(Models, state.models).card(id)
+
+
+@router.get("/models/local")
+def local_models(state: State) -> dict[str, Any]:
+    """Loose `.gguf` files in the models folder and what became of each (SPEC §9.6)."""
+    return cast(Models, state.models).local.view()
+
+
+@router.post("/models/local/rescan", responses=error_responses(503))
+async def rescan_local(state: State, restore_ignored: bool = False) -> dict[str, Any]:
+    """Look for dropped `.gguf` files now; `restore_ignored` re-adds ones deleted in the GUI."""
+    local = cast(Models, state.models).local
+    added = await local.scan(restore_ignored=restore_ignored, retry=True)
+    return {"added": added, **local.view()}
 
 
 @router.post(

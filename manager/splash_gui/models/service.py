@@ -45,6 +45,7 @@ from ..usage.db import iso
 from . import catalog as cat
 from .hf import HfClient, HubError, strip_front_matter
 from .layout import directory_size, execute_delete, plan_delete, read_all
+from .local import LocalModels
 
 if TYPE_CHECKING:
     from ..state import ManagerState
@@ -106,12 +107,20 @@ class Models:
         self.file_sets: dict[str, list[str]] = {}
         self.language_file_sets: dict[str, list[str]] = {}
         self.catalog_cache: dict[str, tuple[float, Any]] = {}
+        self.local = LocalModels(state, self)
 
     async def start(self) -> None:
-        pass
+        await self.local.start()
 
     async def shutdown(self) -> None:
-        pass
+        await self.local.shutdown()
+
+    async def drop_selection(self, model: str) -> None:
+        """Remove a model's Splash selections and assemblies (not its source file)."""
+        plan = plan_delete(read_all(splash_models_dir()), {model})
+        await asyncio.to_thread(
+            execute_delete, splash_models_dir(), self.state.settings.models_dir(), plan
+        )
 
     def env(self) -> dict[str, str]:
         glob = self.state.settings.current.global_
@@ -253,13 +262,17 @@ class Models:
         if self.state.downloads and self.state.downloads.active_model(model):
             raise ApiError(409, "Cancel the download before deleting this model", "download_active")
         # No auto-load may start the engine between the stop and the deletion.
-        async with self.state.supervisor.hold("model_delete"):
+        # A local model's tombstone is written first (Splash prunes its shell repo with the
+        # selection) and under the watcher's lock so a scan can't re-add it meanwhile.
+        async with self.local.guard(model), self.state.supervisor.hold("model_delete"):
+            self.local.tombstone(model)
             if active:
                 await self.state.supervisor.stop(reason="delete")
             plan = plan_delete(read_all(splash_models_dir()), {model})
             freed = await asyncio.to_thread(
                 execute_delete, splash_models_dir(), self.state.settings.models_dir(), plan
             )
+            self.local.forget(model)
         self.state.events.publish(
             "models.changed", ModelsChangedEvent(reason="deleted", model=model)
         )
