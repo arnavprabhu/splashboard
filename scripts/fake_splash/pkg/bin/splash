@@ -2,6 +2,8 @@
 # Fake `splash` CLI, laid out like Homebrew's opt/splash/bin/splash.
 set -eu
 export PYTHONDONTWRITEBYTECODE=1
+# Splash bundles Python 3.13, whose argparse never colours help; 3.14 would under FORCE_COLOR.
+export PYTHON_COLORS=0
 script=$0
 while [ -L "$script" ]; do
     target=$(readlink -- "$script")

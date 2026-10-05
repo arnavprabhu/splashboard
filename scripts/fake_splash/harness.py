@@ -66,6 +66,8 @@ def fake_env(base: str | os.PathLike, extra: Mapping[str, str] | None = None) ->
         "SPLASH_GUI_FAKE_DATA": str(root / "fake-data"),
         "FAKE_SPLASH_PYTHON": sys.executable,
         "PYTHONUNBUFFERED": "1",
+        # A hung fake dumps every thread's stack on SIGABRT (see `_dump_stacks`).
+        "PYTHONFAULTHANDLER": "1",
     }
     env.pop("SPLASH_API_KEY", None)
     env.update(extra or {})
@@ -176,12 +178,29 @@ class FakeSplash:
                                 return line
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise TimeoutError(f"no line matching {pattern!r}; stdout={self.stdout} stderr={self.stderr}")
+                    break
                 if self.process is not None and self.process.poll() is not None and remaining > 0.5:
                     self._lines.wait(0.2)
                     deadline = min(deadline, time.monotonic() + 0.5)
                     continue
                 self._lines.wait(min(remaining, 0.2))
+        self._dump_stacks()
+        raise TimeoutError(f"no line matching {pattern!r}; stdout={self.stdout} stderr={self.stderr}")
+
+    def _dump_stacks(self) -> None:
+        """Abort a still-running fake (and its installer child) so faulthandler
+        writes their Python stacks to stderr, which the TimeoutError then shows."""
+        if self.process is None or self.process.poll() is not None:
+            return
+        try:
+            os.killpg(self.process.pid, signal.SIGABRT)
+        except OSError:
+            return
+        try:
+            self.process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            return
+        time.sleep(0.3)  # let the pump threads drain the pipes
 
     def wait_ready(self, timeout: float = 20.0) -> None:
         self.wait_for_line(r" Ready · ", timeout, stream="stdout")
