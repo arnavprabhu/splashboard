@@ -1,4 +1,5 @@
 /** The model selector (docs/ui/07 §4): model and profile in one Menu, plus the switch notice. */
+import type { ComponentChildren } from 'preact';
 import { Button } from '../../components/Button';
 import { Menu, type MenuGroup } from '../../components/Menu';
 import { StatusChip } from '../../components/StatusChip';
@@ -19,6 +20,8 @@ export interface ModelSelectorProps {
   autoLoad: boolean;
   onLoadNow: () => void;
   loading: boolean;
+  /** Live numbers (context used, PP, TG, TTFT) shown after the model. */
+  stats?: ComponentChildren;
 }
 
 export function ModelSelector(p: ModelSelectorProps) {
@@ -71,12 +74,10 @@ export function ModelSelector(p: ModelSelectorProps) {
       />
       <span class="meta cluster chat-model-meta">
         {isActive && <StatusChip state={p.engineState} announce={false} />}
-        {row?.context ? <span class="tnum">{row.estimated ? t('chat.model.ctx_est', { ctx: formatTokens(row.context) }) : t('chat.model.ctx', { ctx: formatTokens(row.context) })}</span> : null}
-        {row && row.vision !== null && <span>{row.vision ? t('chat.model.vision') : t('chat.model.text_only')}</span>}
+        {p.stats}
+        {row && row.vision === true && <span>{t('chat.model.vision')}</span>}
         {p.model && !isActive && (stopped ? (
-          p.autoLoad ? (
-            <span>{t('chat.model.stopped')}</span>
-          ) : (
+          p.autoLoad ? null : (
             <span class="cluster">
               {t('chat.model.not_loaded')} ·
               <Button size="s" variant="text" loading={p.loading} onClick={p.onLoadNow}>

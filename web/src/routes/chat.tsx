@@ -48,7 +48,9 @@ import {
 } from "./chat/logic";
 import { isCancelled, withInstallConfirm } from "../lib/engine-install";
 import { MessageView, type ToolContext, type ToolDraft } from "./chat/MessageView";
+import { ChatStats } from "./chat/ChatStats";
 import { ModelSelector } from "./chat/ModelSelector";
+import { liveSample } from "../store/live";
 import { PANEL_TABS, SidePanel, type PanelTab } from "./chat/SidePanel";
 import { branchInfo, defaultLeaf, newId, pathTo, rememberLeaf, removeBranch, replyCount, switchBranch, type LeafMemory } from "./chat/tree";
 import { metaOf, textOf, toolCallsOf, type Chat, type ChatMessage, type ChatSummary, type DraftAttachment, type ModelEntry, type ToolCall } from "./chat/types";
@@ -1128,6 +1130,16 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
         autoLoad={autoLoad}
         onLoadNow={() => void loadNow()}
         loading={loadingModel}
+        stats={
+          <ChatStats
+            thread={thread}
+            busy={busy}
+            progressTotal={progress?.total ?? null}
+            context={row?.context ?? null}
+            contextEstimated={!!row?.estimated}
+            live={liveSample.value}
+          />
+        }
       />
   );
 
