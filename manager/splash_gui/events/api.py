@@ -1,4 +1,4 @@
-"""Events and alerts (SPEC §14 Events, §16.3). SSE event names are in docs/api.md §4."""
+"""Events and alerts."""
 
 from __future__ import annotations
 

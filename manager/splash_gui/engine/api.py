@@ -1,4 +1,4 @@
-"""Engine routes (SPEC §14 Engine; state machine §6.3, docs/api.md §3)."""
+"""Engine routes."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def get_engine(state: ManagerState) -> EngineView:
 
 
 def load_target(state: ManagerState, model: str) -> str:
-    """`ID:profile` loads ID (profiles are per request, SPEC §7.5)."""
+    """`ID:profile` loads ID (profiles are per request)."""
     installed = state.installed_models()
     if installed is None or model in installed:
         return model

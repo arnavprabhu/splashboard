@@ -1,4 +1,4 @@
-"""System routes (SPEC §14 System, plus wizard helpers)."""
+"""System routes."""
 
 from __future__ import annotations
 
@@ -86,7 +86,7 @@ BREW_INSTALL = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Hom
     responses=error_responses(409, 503),
 )
 def install_brew(state: State) -> OpenTerminalResult:
-    """SPEC §10.2 step 1: Homebrew needs the user's password, so its official
+    """Homebrew needs the user's password, so its official
     installer runs in Terminal; the wizard then polls `GET /system/brew`."""
     if get_brew(state).installed:
         raise ApiError(409, "Homebrew is already installed", "brew_installed")
@@ -100,7 +100,7 @@ def install_brew(state: State) -> OpenTerminalResult:
     "/engine/upgrade", response_model=JobAccepted, status_code=202, responses=error_responses(409)
 )
 async def engine_upgrade(state: State) -> JobAccepted:
-    """SPEC §6.7: stop → brew update && brew upgrade → rediscover → restart the model."""
+    """stop → brew update && brew upgrade → rediscover → restart the model."""
     return state.updates.upgrade()  # type: ignore[no-any-return]
 
 
@@ -205,7 +205,7 @@ def _permissions_check(base: Path) -> DoctorCheck:
 
 
 def _more_checks(state: ManagerState) -> list[DoctorCheck]:
-    """The rest of SPEC §12.2 `splash doctor`: the shim's place on PATH, ports,
+    """The rest of `splash doctor`: the shim's place on PATH, ports,
     the Hugging Face token and leftover integration state."""
     from ..cli import install as shim
     from ..secrets import SecretName, SecretsError

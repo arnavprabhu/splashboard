@@ -1,4 +1,4 @@
-"""Storage locations, checked moves, and supported-cache imports (SPEC §5)."""
+"""Storage locations, checked moves, and supported-cache imports."""
 
 from __future__ import annotations
 
@@ -69,7 +69,7 @@ STAGING_SUFFIX = ".splash-moving"
 def move_tree(source: Path, destination: Path) -> None:
     """Move a directory tree: an atomic rename on the same volume, otherwise copy
     to a staging directory beside the destination, rename it into place, then
-    delete the source (SPEC §5 "Moving the base directory").
+    delete the source.
 
     A failure before the staging rename leaves the source untouched and removes
     the partial copy, so nothing is lost and the move can simply be retried.

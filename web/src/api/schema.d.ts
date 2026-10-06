@@ -83,7 +83,7 @@ export interface paths {
         put?: never;
         /**
          * Install Brew
-         * @description SPEC §10.2 step 1: Homebrew needs the user's password, so its official
+         * @description Homebrew needs the user's password, so its official
          *     installer runs in Terminal; the wizard then polls `GET /system/brew`.
          */
         post: operations["install_brew_api_admin_system_brew_install_post"];
@@ -104,7 +104,7 @@ export interface paths {
         put?: never;
         /**
          * Engine Upgrade
-         * @description SPEC §6.7: stop → brew update && brew upgrade → rediscover → restart the model.
+         * @description stop → brew update && brew upgrade → rediscover → restart the model.
          */
         post: operations["engine_upgrade_api_admin_engine_upgrade_post"];
         delete?: never;
@@ -495,7 +495,7 @@ export interface paths {
         put?: never;
         /**
          * Reset Settings
-         * @description Global and per-model settings back to defaults (docs/ui/05 G3).
+         * @description Global and per-model settings back to defaults.
          */
         post: operations["reset_settings_api_admin_settings_reset_post"];
         delete?: never;
@@ -820,7 +820,7 @@ export interface paths {
         };
         /**
          * Local Models
-         * @description Loose `.gguf` files in the models folder and what became of each (SPEC §9.6).
+         * @description Loose `.gguf` files in the models folder and what became of each.
          */
         get: operations["local_models_api_admin_models_local_get"];
         put?: never;
@@ -914,7 +914,7 @@ export interface paths {
         put?: never;
         /**
          * Token Pieces
-         * @description Exact pieces for token ids from `/tokenize` (Tokenizer page, G10; SPEC §22 Q6).
+         * @description Exact pieces for token ids from `/tokenize` (Tokenizer page).
          */
         post: operations["token_pieces_api_admin_tokenizer_pieces_post"];
         delete?: never;
@@ -1722,7 +1722,7 @@ export interface paths {
         };
         /**
          * Diagnostics
-         * @description SPEC §10.8 "Copy diagnostic bundle": everything a Splash issue report asks for.
+         * @description Everything a Splash issue report asks for.
          */
         get: operations["diagnostics_api_admin_diagnostics_get"];
         put?: never;
@@ -2688,7 +2688,7 @@ export interface components {
         };
         /**
          * DownloadPlan
-         * @description SPEC §9.4 "expected size": the files `prepare` will fetch for this ID.
+         * @description The files `prepare` will fetch for this ID.
          */
         DownloadPlan: {
             /** Variant */
@@ -2867,7 +2867,7 @@ export interface components {
         /**
          * EngineInstall
          * @description What `splash serve` is downloading before it loads (`starting.installing`), from
-         *     Splash's `Fetching N file(s), X GB, from REPO@REV` line and the Hub cache (§6.3).
+         *     Splash's `Fetching N file(s), X GB, from REPO@REV` line and the Hub cache.
          *     Stopping the engine now loses the file in progress (huggingface_hub 1.28, Q24).
          */
         EngineInstall: {
@@ -2972,7 +2972,7 @@ export interface components {
         };
         /**
          * EngineView
-         * @description The engine state machine (SPEC §6.3) plus a summary for headers and the menu bar.
+         * @description The engine state machine plus a summary for headers and the menu bar.
          */
         EngineView: {
             /**
@@ -3069,7 +3069,7 @@ export interface components {
         };
         /**
          * ExtraFlag
-         * @description An engine option Appendix A does not know (SPEC §8.4). `value: null` = a bare switch.
+         * @description An engine option Appendix A does not know. `value: null` = a bare switch.
          */
         ExtraFlag: {
             /** Flag */
@@ -3247,7 +3247,7 @@ export interface components {
         };
         /**
          * InspectResult
-         * @description SPEC §9.2 compatibility output, cached by repo@sha for 24 h.
+         * @description Compatibility output, cached by repo@sha for 24 h.
          */
         InspectResult: {
             /** Id */
@@ -3485,7 +3485,7 @@ export interface components {
         };
         /**
          * LaunchPrint
-         * @description What `splash launch <client> --print` reports, as data (SPEC §11.2).
+         * @description What `splash launch <client> --print` reports, as data.
          */
         LaunchPrint: {
             /** Client */
@@ -3541,7 +3541,7 @@ export interface components {
         };
         /**
          * LiveMetrics
-         * @description One derived sample (SPEC §16.1), from two consecutive /status polls.
+         * @description One derived sample, from two consecutive /status polls.
          */
         LiveMetrics: {
             /** T */
@@ -3669,7 +3669,7 @@ export interface components {
         };
         /**
          * McpServer
-         * @description One MCP server, in a shape compatible with `mcp.json` entries (SPEC §10.5).
+         * @description One MCP server, in a shape compatible with `mcp.json` entries.
          *
          *     Every `env` and `headers` value is a secret (D43). A plain string is a new value
          *     (the manager moves it to the Keychain on save); a `{"secret": true, "masked"}`
@@ -3915,7 +3915,7 @@ export interface components {
         /**
          * ModelFingerprints
          * @description What the engine reported at this model's last load (`/status.identity`,
-         *     stored in usage.db `model_facts`; SPEC §10.4 Info).
+         *     stored in usage.db `model_facts`; Info).
          */
         ModelFingerprints: {
             /** Build Id */
@@ -4272,7 +4272,7 @@ export interface components {
         };
         /**
          * SamplingOverlay
-         * @description Request fields a profile or the per-model defaults inject (SPEC §7.5), with
+         * @description Request fields a profile or the per-model defaults inject, with
          *     Splash's ranges (server/frontend.py SAMPLING_NUMBERS and friends). Absent = not set.
          */
         SamplingOverlay: {

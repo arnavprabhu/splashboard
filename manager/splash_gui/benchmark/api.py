@@ -1,4 +1,4 @@
-"""Benchmarks (SPEC §14 Benchmark, §10.6)."""
+"""Benchmarks."""
 
 from __future__ import annotations
 

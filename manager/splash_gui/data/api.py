@@ -1,4 +1,4 @@
-"""Data sizes and explicit clearing of user-selected categories (SPEC §10.9)."""
+"""Data sizes and explicit clearing of user-selected categories."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def _namespaces(cache: Path) -> list[Path]:
     named in lowercase hex, at most 64 characters (`runtime/engine/
     CacheDirectory.cpp` `plainName`; RuntimeResources.mm names them with 32).
     Nothing else under a user-chosen `--cache-dir` is Splash's, so nothing else
-    is counted or cleared; `tmp/` (SPEC §5) never matches."""
+    is counted or cleared; `tmp/` never matches."""
     if not cache.is_dir():
         return []
     return [
@@ -151,7 +151,7 @@ async def clear(state: State, body: DataClearRequest) -> DataClearResult:
             restarted = True
     elif body.target == "models":
         # Deleting every model is done in the Models manager with everything
-        # selected (SPEC §10.9), where reference counting and the active-model
+        # selected, where reference counting and the active-model
         # confirmation apply per model (docs/api.md §12).
         raise ApiError(
             409,

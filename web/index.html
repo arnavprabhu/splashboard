@@ -7,8 +7,8 @@
     <title>Splash GUI</title>
     <link rel="preload" href="/src/assets/fonts/archivo-latin.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <!-- Apply the stored theme before first paint (SPEC §18.1). Keep the key in sync with src/store/theme.ts.
-         Without a stored choice, the menu bar app's `?theme=light|dark` (docs/ui/01 §7) is used. -->
+    <!-- Apply the stored theme before first paint. Keep the key in sync with src/store/theme.ts.
+         Without a stored choice, the menu bar app's `?theme=light|dark` is used. -->
     <script>
       (function () {
         var t = 'light';

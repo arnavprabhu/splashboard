@@ -1,4 +1,4 @@
-"""Installing the `splash` shim from the app and the settings page (SPEC §12.1)."""
+"""Installing the `splash` shim from the app and the settings page."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ def post_shim(state: State, body: ShimInstallRequest | None = None) -> ShimStatu
     home = home_of(state)
     try:
         shim.install_shim(paths)
-        # The user's rc files change only on this explicit request (SPEC §12.1).
+        # The user's rc files change only on this explicit request.
         if body and body.add_to_path:
             for entry in shim.rc_report(home):
                 shim.add_to_rc(Path(str(entry["file"])), paths.bin_dir)

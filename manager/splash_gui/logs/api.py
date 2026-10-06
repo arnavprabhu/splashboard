@@ -1,4 +1,4 @@
-"""Logs, crash traces and diagnostics (SPEC §14 Logs, §10.8)."""
+"""Logs, crash traces and diagnostics."""
 
 from __future__ import annotations
 
@@ -60,7 +60,7 @@ def _tail(path: Path, count: int) -> list[str]:
 
 
 def parse_line(seq: int, raw: str, source: LogSource) -> LogLine:
-    """Heuristic level parsing (SPEC §10.8): manager lines carry a level; engine lines don't."""
+    """Heuristic level parsing: manager lines carry a level; engine lines don't."""
     match = _LINE.match(raw)
     ts, text, stream, level = None, raw, None, "info"
     if match:
@@ -278,7 +278,7 @@ def delete_trace(state: State, name: str) -> Response:
 
 @router.get("/diagnostics", response_model=DiagnosticsBundle)
 def diagnostics(state: State) -> DiagnosticsBundle:
-    """SPEC §10.8 "Copy diagnostic bundle": everything a Splash issue report asks for."""
+    """Everything a Splash issue report asks for."""
     known = state.secrets.known_values()
     settings = redact_mapping(state.settings.current.to_json_dict(), known)
     tail = [

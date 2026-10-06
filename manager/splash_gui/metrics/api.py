@@ -1,4 +1,4 @@
-"""Live metrics (SPEC §14 Metrics, §16.1, docs/api.md §5)."""
+"""Live metrics."""
 
 from __future__ import annotations
 

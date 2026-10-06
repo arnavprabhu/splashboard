@@ -1,4 +1,4 @@
-"""Download queue (SPEC §14 Downloads, §9.4)."""
+"""Download queue."""
 
 from __future__ import annotations
 

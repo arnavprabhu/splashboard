@@ -1,4 +1,4 @@
-"""MCP servers and tools (SPEC §14 MCP, §10.5). Server configs live in settings
+"""MCP servers and tools. Server configs live in settings
 (`global.chat.mcp_servers`)."""
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Admin auth routes (SPEC §14 Auth, §8.2 security.admin_requires_key, §17.1)."""
+"""Admin auth routes."""
 
 from __future__ import annotations
 

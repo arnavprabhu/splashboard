@@ -1,4 +1,4 @@
-"""Integrations (SPEC §14 Integrations, §10.7, §11)."""
+"""Integrations."""
 
 from __future__ import annotations
 

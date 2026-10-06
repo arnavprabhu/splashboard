@@ -1,4 +1,4 @@
-"""Admin API request/response models (SPEC §14; contract in docs/api.md).
+"""Admin API request/response models.
 
 Conventions: snake_case fields; record timestamps are ISO 8601 UTC strings;
 metric sample times (`t`) are Unix seconds; sizes are bytes; durations are
@@ -163,7 +163,7 @@ class TransportInfo(ApiModel):
 
 class EngineInstall(ApiModel):
     """What `splash serve` is downloading before it loads (`starting.installing`), from
-    Splash's `Fetching N file(s), X GB, from REPO@REV` line and the Hub cache (§6.3).
+    Splash's `Fetching N file(s), X GB, from REPO@REV` line and the Hub cache.
     Stopping the engine now loses the file in progress (huggingface_hub 1.28, Q24)."""
 
     repo: str
@@ -176,7 +176,7 @@ class EngineInstall(ApiModel):
 
 
 class EngineView(ApiModel):
-    """The engine state machine (SPEC §6.3) plus a summary for headers and the menu bar."""
+    """The engine state machine plus a summary for headers and the menu bar."""
 
     state: EngineStateName
     phase: EnginePhase | None = None
@@ -203,7 +203,7 @@ class EngineView(ApiModel):
     log_tail: list[str] = Field(default_factory=list)
     command: str | None = None
     # What the persistent cache restored at this start (`/status.disk.taken_back`,
-    # or Splash's startup line), for "Restored at start: N states …" (SPEC §10.3).
+    # or Splash's startup line), for "Restored at start: N states …".
     # Keys: states, kv_blocks, bytes, left_behind. Null when not persistent/unknown.
     taken_back: dict[str, int] | None = None
     persistent_cache: bool | None = None
@@ -541,7 +541,7 @@ class StageLatency(ApiModel):
 
 
 class LiveMetrics(ApiModel):
-    """One derived sample (SPEC §16.1), from two consecutive /status polls."""
+    """One derived sample, from two consecutive /status polls."""
 
     t: float
     engine_state: EngineStateName
@@ -865,7 +865,7 @@ class ModelFile(ApiModel):
 
 class ModelFingerprints(ApiModel):
     """What the engine reported at this model's last load (`/status.identity`,
-    stored in usage.db `model_facts`; SPEC §10.4 Info)."""
+    stored in usage.db `model_facts`; Info)."""
 
     build_id: str | None = None
     loaded_model_layout_sha256: str | None = None
@@ -931,7 +931,7 @@ class PlannedFile(ApiModel):
 
 
 class DownloadPlan(ApiModel):
-    """SPEC §9.4 "expected size": the files `prepare` will fetch for this ID."""
+    """The files `prepare` will fetch for this ID."""
 
     variant: str | None = None
     language_only: bool = False
@@ -945,7 +945,7 @@ class DownloadPlan(ApiModel):
 
 
 class InspectResult(ApiModel):
-    """SPEC §9.2 compatibility output, cached by repo@sha for 24 h."""
+    """Compatibility output, cached by repo@sha for 24 h."""
 
     id: str
     repo_id: str
@@ -1103,7 +1103,7 @@ class DownloadRequest(ApiModel):
     verify: bool = True
 
 
-# Chats (SPEC §15.2) ------------------------------------------------------------------
+# Chats ------------------------------------------------------------------
 
 
 class ChatAttachment(ApiModel):
@@ -1224,7 +1224,7 @@ class McpCallResult(ApiModel):
     duration_ms: float | None = None
 
 
-# Usage (SPEC §15.3) ---------------------------------------------------------------
+# Usage ---------------------------------------------------------------
 
 
 class UsageRow(ApiModel):
@@ -1480,7 +1480,7 @@ class OpenTerminalRequest(ApiModel):
     model: str | None = None
 
 
-# CLI shim (SPEC §12.1) -------------------------------------------------------------
+# CLI shim -------------------------------------------------------------
 
 
 class RcFileStatus(ApiModel):
@@ -1521,7 +1521,7 @@ class PrintedFile(ApiModel):
 
 
 class LaunchPrint(ApiModel):
-    """What `splash launch <client> --print` reports, as data (SPEC §11.2)."""
+    """What `splash launch <client> --print` reports, as data."""
 
     client: str
     model: str | None

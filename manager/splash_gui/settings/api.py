@@ -1,4 +1,4 @@
-"""Settings, secrets, presets and profiles routes (SPEC §14 Settings + Profiles)."""
+"""Settings, secrets, presets and profiles routes."""
 
 from __future__ import annotations
 
@@ -125,7 +125,7 @@ def _restart_required(old: SettingsDocument, new: SettingsDocument, active: str 
 def _change_out(
     change: Change, active: str | None, old: SettingsDocument, new: SettingsDocument
 ) -> SettingChange:
-    """`restart` only when the change alters what the running engine uses (SPEC §8.5)."""
+    """`restart` only when the change alters what the running engine uses."""
     applies = change.applies
     if applies == "restart":
         if active is None or change.model not in (None, active):
@@ -138,7 +138,7 @@ def _change_out(
 
 
 def _check_new_bind(state: ManagerState, raw: Any) -> None:
-    """A new `server.host/port` must be free before the manager moves there (§8.2)."""
+    """A new `server.host/port` must be free before the manager moves there."""
     if state.bound is None:
         return
     result = state.settings.validate(raw, _context(state))
@@ -231,7 +231,7 @@ RESET_KEEPS = ("global.storage", "global.wizard", "global.chat.mcp_servers")
 async def reset_settings(
     state: State, body: SettingsResetRequest | None = None
 ) -> SettingsResetResult:
-    """Global and per-model settings back to defaults (docs/ui/05 G3)."""
+    """Global and per-model settings back to defaults."""
     options = body or SettingsResetRequest()
     sup = state.supervisor
     if options.restart_engine and sup.active_model() and sup.busy() and not options.force:
@@ -571,7 +571,7 @@ async def hf_whoami(
     return HfWhoami(status="ok", source=source, user=data.get("name"), orgs=orgs, http_status=200)
 
 
-# Profiles (SPEC §7.5) -----------------------------------------------------------
+# Profiles -----------------------------------------------------------
 # Registered before the models router: `{model_id:path}` would otherwise swallow
 # the `/profiles` suffix.
 

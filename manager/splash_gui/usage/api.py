@@ -1,4 +1,4 @@
-"""Usage history and CSV export (SPEC §15.3, §16.2)."""
+"""Usage history and CSV export."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ def checked_filter(**kwargs: Any) -> RequestFilter:
 
 @dataclass
 class Filters:
-    """The history filters every usage route takes (SPEC §10.3, docs/ui/02 §12).
+    """The history filters every usage route takes.
 
     `start`/`end` are ISO 8601 timestamps or dates; `from`/`to` are accepted as
     aliases. `status` is a code (`404`), a class (`2xx`/`4xx`/`5xx`) or `cancelled`.
@@ -117,7 +117,7 @@ def summary(
 
 def bucket_start(dt: datetime, bucket: str) -> datetime:
     """The start of `dt`'s bucket. `hour` and `day` are the Mac's local hours and days
-    (docs/ui/02 F1: local day bounds), as the heatmap; `minute` is unaffected.
+    (local day bounds), as the heatmap; `minute` is unaffected.
     - hour: `dt` in local time floored to the hour, keeping its own UTC offset, so
       the repeated 01:00 hour of a daylight-saving fall-back night is two buckets
       (01:00 CDT and 01:00 CST), never merged;

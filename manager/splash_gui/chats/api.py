@@ -1,4 +1,4 @@
-"""Chat history (SPEC §14 Chats, §15.2, docs/api.md §8)."""
+"""Chat history."""
 
 from __future__ import annotations
 

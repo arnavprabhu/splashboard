@@ -274,7 +274,7 @@ function Gallery({ theme }: { theme: "light" | "dark" }) {
           }
           more={
             <p>
-              Injected by the proxy only when a request omits it (SPEC §7.5).
+              Injected by the proxy only when a request omits it.
             </p>
           }
         >

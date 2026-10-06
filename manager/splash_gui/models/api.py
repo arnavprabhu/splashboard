@@ -1,4 +1,4 @@
-"""Models: inventory, catalog, search, compatibility (SPEC §14 Models, §9).
+"""Models: inventory, catalog, search, compatibility.
 
 Model IDs (`OWNER/REPO[:VARIANT]`) appear literally in paths. Routes with a
 suffix after `{model_id:path}` must be declared before the bare one.
@@ -94,7 +94,7 @@ async def card(state: State, id: Annotated[str, Query()]) -> ModelCard:
 
 @router.get("/models/local")
 def local_models(state: State) -> dict[str, Any]:
-    """Loose `.gguf` files in the models folder and what became of each (SPEC §9.6)."""
+    """Loose `.gguf` files in the models folder and what became of each."""
     return cast(Models, state.models).local.view()
 
 
@@ -148,5 +148,5 @@ async def delete_model(
     "/tokenizer/pieces", response_model=TokenPieces, responses=error_responses(404, 409, 503)
 )
 async def token_pieces(state: State, body: TokenPiecesRequest) -> TokenPieces:
-    """Exact pieces for token ids from `/tokenize` (Tokenizer page, G10; SPEC §22 Q6)."""
+    """Exact pieces for token ids from `/tokenize` (Tokenizer page)."""
     return await cast(Models, state.models).token_pieces(body.model, body.ids)

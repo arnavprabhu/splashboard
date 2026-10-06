@@ -55,7 +55,7 @@ def render(launch: list[str]) -> bytes:
     quoted = " ".join(_shell_quote(part) for part in launch)
     return (
         "#!/bin/sh\n"
-        "# splash - Splash GUI CLI (SPEC §12.1). Generated; edits are overwritten.\n"
+        "# splash - Splash GUI CLI. Generated; edits are overwritten.\n"
         "# Our commands are handled here; anything else is exec'd to the real\n"
         "# Splash engine, found by skipping this script on PATH.\n"
         f"# {SHIM_MARKER}: engine discovery skips any file carrying this marker.\n"
@@ -151,7 +151,7 @@ def _write_rc(path: Path, text: str, existed: bool) -> None:
 
 def add_to_rc(path: Path, bin_dir: Path) -> bool:
     """Put the PATH block in `path`. Returns whether the file changed. Only ever
-    called on the user's explicit request (SPEC §12.1)."""
+    called on the user's explicit request."""
     target = _rc_target(path)
     original = _read_rc(target)
     text = original or ""

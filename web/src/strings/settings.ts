@@ -287,7 +287,7 @@ export const settingsStrings = {
   "settings.about.app": "Splash GUI",
   "settings.about.app_versions": "{gui} · manager {manager} · Python {python}",
   "settings.about.check": "Check for updates",
-  "settings.about.app_check_hint": "Splash GUI runs from its source tree for now (packaging is deferred, D30); update it with git pull.",
+  "settings.about.app_check_hint": "Splash GUI runs from its source tree for now (packaging is not built yet); update it with git pull.",
   "settings.about.app_checking": "Asking the menu bar app…",
   "settings.about.engine": "Splash engine",
   "settings.about.engine_line": "{version} · {source} · status schema {schema}",

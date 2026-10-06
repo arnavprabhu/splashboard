@@ -98,7 +98,7 @@ class SecuritySettings(_Strict):
 
 
 class ExtraFlag(_Strict):
-    """An engine option Appendix A does not know (SPEC §8.4). `value: null` = a bare switch."""
+    """An engine option Appendix A does not know. `value: null` = a bare switch."""
 
     flag: str
     value: str | None = None
@@ -288,7 +288,7 @@ McpValue = str | McpSecretRef
 
 
 class McpServer(_Strict):
-    """One MCP server, in a shape compatible with `mcp.json` entries (SPEC §10.5).
+    """One MCP server, in a shape compatible with `mcp.json` entries.
 
     Every `env` and `headers` value is a secret (D43). A plain string is a new value
     (the manager moves it to the Keychain on save); a `{"secret": true, "masked"}`
@@ -531,7 +531,7 @@ def _check_wire_type(name: str, value: Any) -> None:
 
 
 class SamplingOverlay(_Sparse):
-    """Request fields a profile or the per-model defaults inject (SPEC §7.5), with
+    """Request fields a profile or the per-model defaults inject, with
     Splash's ranges (server/frontend.py SAMPLING_NUMBERS and friends). Absent = not set."""
 
     temperature: float | None = None

@@ -157,7 +157,7 @@ export const toolsStrings = {
   'tools.jd.tab.semif': 'SemIf',
   'tools.jd.caveat': 'Local model scores, not calibrated confidence. Calibrate on held-out data before using thresholds.',
   'tools.jd.clef_title': 'This is a Clef backbone, but not Clef.',
-  'tools.jd.clef_body': 'Splash scores with the model’s output layer at single-token answer slots; Cloudflare’s Clef uses its joint schema head over all options. Answers and confidence will differ from Clef’s. (Appendix D.2)',
+  'tools.jd.clef_body': 'Splash scores with the model’s output layer at single-token answer slots; Cloudflare’s Clef uses its joint schema head over all options. Answers and confidence will differ from Clef’s.',
   'tools.jd.clef_link': 'Learn more',
   'tools.jd.state': 'State',
   'tools.jd.state_kind': 'State format',
