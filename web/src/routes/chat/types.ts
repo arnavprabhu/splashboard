@@ -58,6 +58,8 @@ export interface MessageMeta {
   profile?: string | null;
   model?: string | null;
   thinking_ms?: number | null;
+  /** Client-measured send → end of the reply. */
+  duration_ms?: number | null;
   segments?: Segment[];
   /** Estimated output tokens after Stop (text length ÷ 4). */
   est_out?: number;

@@ -127,55 +127,29 @@ export function Composer(p: ComposerProps) {
         </p>
       )}
       {p.attachments.length > 0 && (
-        <ul class="chat-chips">
-          {p.attachments.map((a) => (
-            <li key={a.id} class="tag chat-chip">
-              ▪ <span class="chat-chip-name">{a.name}</span>
-              {a.kind === 'pdf' && ` · ${a.pages === null ? t('chat.att.pages_unknown') : a.pages === 1 ? t('chat.att.page') : t('chat.att.pages', { n: a.pages })}`}
-              {` · ${formatBytes(a.bytes)}`}
-              {a.resize && ` · ${t('chat.att.resize')}`}
-              <button
-                type="button"
-                class="chat-chip-x"
-                aria-label={t('chat.composer.remove_attachment', { name: a.name })}
-                onClick={() => p.onAttachments(p.attachments.filter((x) => x.id !== a.id))}
-              >
-                ×
-              </button>
-            </li>
-          ))}
-        </ul>
+        <div class="chat-chips-row">
+          <ul class="chat-chips">
+            {p.attachments.map((a) => (
+              <li key={a.id} class="tag chat-chip">
+                ▪ <span class="chat-chip-name">{a.name}</span>
+                {a.kind === 'pdf' && ` · ${a.pages === null ? t('chat.att.pages_unknown') : a.pages === 1 ? t('chat.att.page') : t('chat.att.pages', { n: a.pages })}`}
+                {` · ${formatBytes(a.bytes)}`}
+                {a.resize && ` · ${t('chat.att.resize')}`}
+                <button
+                  type="button"
+                  class="chat-chip-x"
+                  aria-label={t('chat.composer.remove_attachment', { name: a.name })}
+                  onClick={() => p.onAttachments(p.attachments.filter((x) => x.id !== a.id))}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+          <span class="meta tnum">{t('chat.composer.counter', { n: p.attachments.length, used: (used / 1024 / 1024).toFixed(1) })}</span>
+        </div>
       )}
       {limit && <p class="field-error">{limit}</p>}
-      <textarea
-        ref={area}
-        class="input chat-input"
-        rows={1}
-        value={p.value}
-        aria-label={t('chat.composer.label')}
-        placeholder={p.placeholder}
-        disabled={p.disabled}
-        onInput={(e) => p.onChange(e.currentTarget.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Escape' && p.streaming) {
-            e.preventDefault();
-            p.onStop();
-          } else if (e.key === 'ArrowUp' && !p.value && !p.editing) {
-            e.preventDefault();
-            p.onEditLast();
-          } else if (e.key === 'Enter' && !e.isComposing && ((e.metaKey || e.ctrlKey) || (!e.shiftKey && !touch))) {
-            e.preventDefault();
-            if (canSend && !p.streaming) p.onSend();
-          }
-        }}
-        onPaste={(e) => {
-          const files = Array.from(e.clipboardData?.files ?? []);
-          if (files.length) {
-            e.preventDefault();
-            void add(files);
-          }
-        }}
-      />
       <div class="chat-composer-bar">
         <input
           ref={file}
@@ -192,25 +166,50 @@ export function Composer(p: ComposerProps) {
         />
         {p.vision === false ? (
           <Tooltip text={t('chat.composer.vision_off')}>
-            <Button size="s" variant="text" aria-disabled="true" aria-label={`${t('chat.composer.attach')} · ${t('chat.composer.vision_off')}`}>
+            <Button size="s" variant="text" class="chat-attach" aria-disabled="true" aria-label={`${t('chat.composer.attach')} · ${t('chat.composer.vision_off')}`}>
               {t('chat.composer.attach')}
             </Button>
           </Tooltip>
         ) : (
-          <Button size="s" variant="text" onClick={() => file.current?.click()}>
+          <Button size="s" variant="text" class="chat-attach" onClick={() => file.current?.click()}>
             {t('chat.composer.attach')}
           </Button>
         )}
-        {!touch && <span class="meta chat-hint">{t('chat.composer.hint')}</span>}
-        {p.attachments.length > 0 && (
-          <span class="meta tnum">{t('chat.composer.counter', { n: p.attachments.length, used: (used / 1024 / 1024).toFixed(1) })}</span>
-        )}
+        <textarea
+          ref={area}
+          class="chat-input"
+          rows={1}
+          value={p.value}
+          aria-label={t('chat.composer.label')}
+          placeholder={touch ? p.placeholder : `${p.placeholder} ${t('chat.composer.hint')}`}
+          disabled={p.disabled}
+          onInput={(e) => p.onChange(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape' && p.streaming) {
+              e.preventDefault();
+              p.onStop();
+            } else if (e.key === 'ArrowUp' && !p.value && !p.editing) {
+              e.preventDefault();
+              p.onEditLast();
+            } else if (e.key === 'Enter' && !e.isComposing && ((e.metaKey || e.ctrlKey) || (!e.shiftKey && !touch))) {
+              e.preventDefault();
+              if (canSend && !p.streaming) p.onSend();
+            }
+          }}
+          onPaste={(e) => {
+            const files = Array.from(e.clipboardData?.files ?? []);
+            if (files.length) {
+              e.preventDefault();
+              void add(files);
+            }
+          }}
+        />
         {p.streaming ? (
-          <Button variant="solid" onClick={p.onStop}>
+          <Button variant="solid" class="chat-send" onClick={p.onStop}>
             {t('chat.composer.stop')}
           </Button>
         ) : (
-          <Button variant={canSend ? 'accent' : 'outline'} disabled={!canSend} title={p.blocked ?? undefined} onClick={p.onSend}>
+          <Button variant={canSend ? 'accent' : 'outline'} class="chat-send" disabled={!canSend} title={p.blocked ?? undefined} onClick={p.onSend}>
             {p.editing ? t('chat.msg.resend') : t('chat.composer.send')}
           </Button>
         )}

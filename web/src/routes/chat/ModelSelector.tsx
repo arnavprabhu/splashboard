@@ -1,8 +1,6 @@
 /** The model selector (docs/ui/07 §4): model and profile in one Menu, plus the switch notice. */
-import type { ComponentChildren } from 'preact';
 import { Button } from '../../components/Button';
 import { Menu, type MenuGroup } from '../../components/Menu';
-import { StatusChip } from '../../components/StatusChip';
 import { formatTokens } from '../../lib/format';
 import type { EngineState } from '../../api/types';
 import { t } from '../../strings/chat';
@@ -20,8 +18,6 @@ export interface ModelSelectorProps {
   autoLoad: boolean;
   onLoadNow: () => void;
   loading: boolean;
-  /** Live numbers (context used, PP, TG, TTFT) shown after the model. */
-  stats?: ComponentChildren;
 }
 
 export function ModelSelector(p: ModelSelectorProps) {
@@ -59,45 +55,34 @@ export function ModelSelector(p: ModelSelectorProps) {
   if (activeRows.length) groups.push({ label: t('chat.model.group.active'), items: toItems(activeRows) });
   if (others.length) groups.push({ label: stopped && !activeRows.length ? t('chat.model.group.stopped') : t('chat.model.group.installed'), items: toItems(others) });
   const value = p.model ? requestModel(p.model, p.profile).replace(/:([^/:]+)$/, ' : $1') : t('chat.model.choose');
-  const row = p.rows.find((r) => r.id === p.model);
   const isActive = !!p.model && p.model === p.active;
+  const loadNow = (
+    <span class="cluster chat-model-notice">
+      {t('chat.model.not_loaded')} ·
+      <Button size="s" variant="text" loading={p.loading} onClick={p.onLoadNow}>
+        {t('chat.model.load_now')}
+      </Button>
+    </span>
+  );
+  // Picking a model that isn't loaded: it switches on the next send, or needs Load now when auto-load is off.
+  const notice = !p.model || isActive ? null : stopped ? (p.autoLoad ? null : loadNow) : p.autoLoad ? (
+    <span class="meta acc chat-model-notice" data-accent="true">
+      {t('chat.model.will_switch', { active: shortModel(p.active), s: 2 })}
+    </span>
+  ) : (
+    loadNow
+  );
   return (
-    <div class="chat-model cluster">
-      <span class="label">{t('chat.model.label')}</span>
+    <div class="chat-model">
       <Menu
         label={<span class="mono chat-model-value">{value}</span>}
         ariaLabel={t('chat.model.menu_label', { value })}
         groups={groups.length ? groups : [{ items: [{ key: 'none', label: t('chat.model.none'), disabled: true }] }]}
         radio
-        variant="text"
+        variant="outline"
         testId="chat-model"
       />
-      <span class="meta cluster chat-model-meta">
-        {isActive && <StatusChip state={p.engineState} announce={false} />}
-        {p.stats}
-        {row && row.vision === true && <span>{t('chat.model.vision')}</span>}
-        {p.model && !isActive && (stopped ? (
-          p.autoLoad ? null : (
-            <span class="cluster">
-              {t('chat.model.not_loaded')} ·
-              <Button size="s" variant="text" loading={p.loading} onClick={p.onLoadNow}>
-                {t('chat.model.load_now')}
-              </Button>
-            </span>
-          )
-        ) : p.autoLoad ? (
-          <span class="acc" data-accent="true">
-            {t('chat.model.will_switch', { active: shortModel(p.active), s: 2 })}
-          </span>
-        ) : (
-          <span class="cluster">
-            {t('chat.model.not_loaded')} ·
-            <Button size="s" variant="text" loading={p.loading} onClick={p.onLoadNow}>
-              {t('chat.model.load_now')}
-            </Button>
-          </span>
-        ))}
-      </span>
+      {notice}
     </div>
   );
 }

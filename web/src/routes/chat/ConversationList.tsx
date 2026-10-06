@@ -95,39 +95,43 @@ function Row({ c, active, streaming, onRename, onDelete, onOpen, snippet }: { c:
 export function ConversationList(p: ConversationListProps) {
   const searching = p.query.trim().length > 0;
   return (
-    <nav class="chat-list stack" aria-label={t('chat.list.label')}>
-      <h2 class="label">{t('chat.list.label')}</h2>
-      <SearchInput value={p.query} onChange={p.onQuery} label={t('chat.list.search')} placeholder={t('chat.list.search_placeholder')} primary />
-      <Button size="s" variant="text" onClick={p.onNew} class="chat-new">
-        {t('chat.list.new')}
-      </Button>
-      {p.error ? (
-        <LoadError thing={t('chat.load_chats')} error={p.error} onRetry={p.onRetry} />
-      ) : p.chats === null ? (
-        <Loading />
-      ) : p.chats.length === 0 ? (
-        <p class="meta">{searching ? t('chat.list.no_match', { q: p.query.trim() }) : t('chat.list.empty')}</p>
-      ) : searching ? (
-        <div>
-          <h3 class="label mute">{t('chat.list.results', { n: p.chats.length })}</h3>
-          <ul class="chat-rows">
-            {p.chats.map((c) => (
-              <Row key={c.id} c={c} snippet active={c.id === p.activeId} streaming={c.id === p.streamingId} onRename={(v) => p.onRename(c.id, v)} onDelete={() => p.onDelete(c)} onOpen={p.onOpen} />
-            ))}
-          </ul>
-        </div>
-      ) : (
-        groupChats(p.chats).map((g) => (
-          <div key={g.group}>
-            <h3 class="label mute">{t(`chat.list.group.${g.group}`)}</h3>
+    <nav class="chat-list" aria-label={t('chat.list.label')}>
+      <h2 class="visually-hidden">{t('chat.list.label')}</h2>
+      <div class="chat-list-head">
+        <Button onClick={p.onNew} class="chat-new">
+          {t('chat.list.new')}
+        </Button>
+        <SearchInput value={p.query} onChange={p.onQuery} label={t('chat.list.search')} placeholder={t('chat.list.search_placeholder')} primary />
+      </div>
+      <div class="chat-list-scroll">
+        {p.error ? (
+          <LoadError thing={t('chat.load_chats')} error={p.error} onRetry={p.onRetry} />
+        ) : p.chats === null ? (
+          <Loading />
+        ) : p.chats.length === 0 ? (
+          <p class="meta">{searching ? t('chat.list.no_match', { q: p.query.trim() }) : t('chat.list.empty')}</p>
+        ) : searching ? (
+          <div>
+            <h3 class="label mute chat-group">{t('chat.list.results', { n: p.chats.length })}</h3>
             <ul class="chat-rows">
-              {g.chats.map((c) => (
-                <Row key={c.id} c={c} snippet={false} active={c.id === p.activeId} streaming={c.id === p.streamingId} onRename={(v) => p.onRename(c.id, v)} onDelete={() => p.onDelete(c)} onOpen={p.onOpen} />
+              {p.chats.map((c) => (
+                <Row key={c.id} c={c} snippet active={c.id === p.activeId} streaming={c.id === p.streamingId} onRename={(v) => p.onRename(c.id, v)} onDelete={() => p.onDelete(c)} onOpen={p.onOpen} />
               ))}
             </ul>
           </div>
-        ))
-      )}
+        ) : (
+          groupChats(p.chats).map((g) => (
+            <div key={g.group}>
+              <h3 class="label mute chat-group">{t(`chat.list.group.${g.group}`)}</h3>
+              <ul class="chat-rows">
+                {g.chats.map((c) => (
+                  <Row key={c.id} c={c} snippet={false} active={c.id === p.activeId} streaming={c.id === p.streamingId} onRename={(v) => p.onRename(c.id, v)} onDelete={() => p.onDelete(c)} onOpen={p.onOpen} />
+                ))}
+              </ul>
+            </div>
+          ))
+        )}
+      </div>
     </nav>
   );
 }

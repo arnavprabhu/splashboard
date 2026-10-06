@@ -301,6 +301,13 @@ function asMarkdown(m: ChatMessage, withThinking: boolean): string {
   return parts.filter(Boolean).join('\n\n');
 }
 
+function headLabel(m: ChatMessage): string {
+  if (m.role !== 'assistant') return roleLabel(m);
+  const meta = metaOf(m);
+  if (!meta.model) return t('chat.role.assistant');
+  return `${shortModel(meta.model)}${meta.profile && meta.profile !== 'default' ? ` : ${meta.profile}` : ''}`;
+}
+
 export function MessageView({ message: m, streaming, thinkingLive, branch, replies, busy, tools, onRegenerate, onEdit, onDelete, onBranch, focusId }: MessageViewProps) {
   const [confirm, setConfirm] = useState(false);
   const meta = metaOf(m);
@@ -311,6 +318,97 @@ export function MessageView({ message: m, streaming, thinkingLive, branch, repli
     if (await copyText(text)) toast(t('chat.msg.copied'));
   };
   const thinkingMs = thinkingLive ? thinkingLive.ms : (meta.thinking_ms ?? null);
+  const isUser = m.role === 'user';
+  const confirmRow = confirm && (
+    <span class="cluster chat-confirm" role="alert">
+      <span class="meta">{replies > 0 ? t('chat.msg.delete_confirm', { n: replies }) : t('chat.msg.delete_confirm_single')}</span>
+      <Button size="s" variant="solid" onClick={() => (setConfirm(false), onDelete())}>
+        {t('common.delete')}
+      </Button>
+      <Button size="s" variant="text" onClick={() => setConfirm(false)}>
+        {t('common.cancel')}
+      </Button>
+    </span>
+  );
+  // Assistant and system messages: the actions sit in the head row (copy, regenerate, more ▾).
+  const headActions = !streaming && !isUser && (
+    <div class="chat-actions cluster" role="group" aria-label={t('chat.msg.actions')}>
+      {m.role === 'assistant' && (
+        <Button size="s" variant="text" onClick={() => void copy(textOf(m))}>
+          {t('chat.msg.copy')}
+        </Button>
+      )}
+      {m.role === 'assistant' && onRegenerate && (
+        <Button size="s" variant="text" disabled={busy} onClick={onRegenerate}>
+          {t('chat.msg.regenerate')}
+        </Button>
+      )}
+      {m.role === 'system' && onEdit && (
+        <Button size="s" variant="text" disabled={busy} onClick={onEdit}>
+          {t('chat.msg.edit')}
+        </Button>
+      )}
+      <Menu
+        label={t('chat.msg.more')}
+        variant="text"
+        size="s"
+        align="end"
+        items={[
+          ...(m.role === 'assistant'
+            ? [
+                { key: 'md', label: t('chat.msg.copy_as_md'), onSelect: () => void copy(asMarkdown(m, false)) },
+                ...(m.reasoning ? [{ key: 'think', label: t('chat.msg.copy_with_thinking'), onSelect: () => void copy(asMarkdown(m, true)) }] : []),
+              ]
+            : []),
+          { key: 'delete', label: t('chat.msg.delete_branch'), disabled: busy, onSelect: () => setConfirm(true) },
+        ]}
+      />
+    </div>
+  );
+  const body = (
+    <div class="chat-body">
+      {m.role === 'assistant' && format && !streaming ? (
+        (() => {
+          const text = textOf(m);
+          let pretty = text;
+          try {
+            pretty = JSON.stringify(JSON.parse(text), null, 2);
+          } catch {
+            /* keep raw */
+          }
+          const res = checkResult(text, format, meta.finish_reason === 'stopped');
+          return (
+            <>
+              <CodeBlock code={pretty} label="JSON" />
+              <p class={res.ok ? 'meta' : 'meta acc'}>{res.line}</p>
+            </>
+          );
+        })()
+      ) : (
+        segments.map((seg, i) =>
+          seg.kind === 'text' ? (
+            seg.text ? <Markdown key={i} text={seg.text} /> : null
+          ) : calls[seg.index] ? (
+            <ToolCallBlock key={calls[seg.index]!.id || i} call={calls[seg.index]!} streaming={streaming} ctx={tools} />
+          ) : null,
+        )
+      )}
+      {streaming && !textOf(m) && !m.reasoning && calls.length === 0 && <p class="meta loading-dots" aria-hidden="true" />}
+    </div>
+  );
+  const attachments = (m.attachments?.length ?? 0) > 0 && (
+    <ul class="chat-attachments">
+      {m.attachments!.map((a, i) => (
+        <li key={a.file ?? i} class="meta">
+          ▪{' '}
+          <a href={a.file ? `/api/admin/chats/attachments/${encodeURIComponent(a.file.split('/').pop() ?? a.file)}` : undefined} target="_blank" rel="noopener noreferrer">
+            {a.name ?? a.file}
+          </a>
+          {meta.attachment_pages?.[i] != null && ` · ${t('chat.att.pages', { n: meta.attachment_pages[i] ?? 0 })}`}
+        </li>
+      ))}
+    </ul>
+  );
   return (
     <article
       class="chat-message"
@@ -318,6 +416,7 @@ export function MessageView({ message: m, streaming, thinkingLive, branch, repli
       tabIndex={-1}
       data-message={m.id}
       id={focusId}
+      aria-label={roleLabel(m)}
       onKeyDown={(e) => {
         if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
           e.preventDefault();
@@ -325,110 +424,63 @@ export function MessageView({ message: m, streaming, thinkingLive, branch, repli
         }
       }}
     >
-      <header class="chat-message-head">
-        <span class="label">{roleLabel(m)}</span>
-        <span class="meta tnum">{clock(m.created_at)}</span>
-      </header>
-      {m.reasoning && (
-        <ThinkingBlock
-          text={m.reasoning}
-          live={!!thinkingLive?.active}
-          ms={thinkingMs}
-          tokens={meta.usage?.completion_tokens_details?.reasoning_tokens}
-        />
-      )}
-      <div class="chat-body">
-        {m.role === 'assistant' && format && !streaming ? (
-          (() => {
-            const text = textOf(m);
-            let pretty = text;
-            try {
-              pretty = JSON.stringify(JSON.parse(text), null, 2);
-            } catch {
-              /* keep raw */
-            }
-            const res = checkResult(text, format, meta.finish_reason === 'stopped');
-            return (
-              <>
-                <CodeBlock code={pretty} label="JSON" />
-                <p class={res.ok ? 'meta' : 'meta acc'}>{res.line}</p>
-              </>
-            );
-          })()
-        ) : (
-          segments.map((seg, i) =>
-            seg.kind === 'text' ? (
-              seg.text ? <Markdown key={i} text={seg.text} /> : null
-            ) : calls[seg.index] ? (
-              <ToolCallBlock key={calls[seg.index]!.id || i} call={calls[seg.index]!} streaming={streaming} ctx={tools} />
-            ) : null,
-          )
-        )}
-        {streaming && !textOf(m) && !m.reasoning && calls.length === 0 && <p class="meta loading-dots" aria-hidden="true" />}
-      </div>
-      {(m.attachments?.length ?? 0) > 0 && (
-        <ul class="chat-attachments">
-          {m.attachments!.map((a, i) => (
-            <li key={a.file ?? i} class="meta">
-              ▪{' '}
-              <a href={a.file ? `/api/admin/chats/attachments/${encodeURIComponent(a.file.split('/').pop() ?? a.file)}` : undefined} target="_blank" rel="noopener noreferrer">
-                {a.name ?? a.file}
-              </a>
-              {meta.attachment_pages?.[i] != null && ` · ${t('chat.att.pages', { n: meta.attachment_pages[i] ?? 0 })}`}
-            </li>
-          ))}
-        </ul>
-      )}
-      <footer class="chat-message-foot">
-        {m.role === 'assistant' && <MetaLine m={m} streaming={streaming} />}
-        <BranchNav {...branch} onMove={onBranch} />
-      </footer>
-      {!streaming && (
-        <div class="chat-actions cluster" role="group" aria-label={t('chat.msg.actions')}>
-          {m.role === 'assistant' && onRegenerate && (
-            <Button size="s" variant="text" disabled={busy} onClick={onRegenerate}>
-              {t('chat.msg.regenerate')}
-            </Button>
-          )}
-          {(m.role === 'user' || m.role === 'system') && onEdit && (
-            <Button size="s" variant="text" disabled={busy} onClick={onEdit}>
-              {t('chat.msg.edit')}
-            </Button>
-          )}
-          {m.role === 'assistant' ? (
-            <Menu
-              label={t('chat.msg.copy')}
-              variant="text"
-              size="s"
-              items={[
-                { key: 'text', label: t('chat.msg.copy_text'), onSelect: () => void copy(textOf(m)) },
-                { key: 'md', label: t('chat.msg.copy_md'), onSelect: () => void copy(asMarkdown(m, false)) },
-                ...(m.reasoning ? [{ key: 'think', label: t('chat.msg.copy_thinking'), onSelect: () => void copy(asMarkdown(m, true)) }] : []),
-              ]}
-            />
-          ) : (
-            m.role === 'user' && (
-              <Button size="s" variant="text" onClick={() => void copy(textOf(m))}>
-                {t('chat.msg.copy')}
-              </Button>
-            )
-          )}
-          {confirm ? (
-            <span class="cluster chat-confirm" role="alert">
-              <span class="meta">{replies > 0 ? t('chat.msg.delete_confirm', { n: replies }) : t('chat.msg.delete_confirm_single')}</span>
-              <Button size="s" variant="solid" onClick={() => (setConfirm(false), onDelete())}>
-                {t('common.delete')}
-              </Button>
-              <Button size="s" variant="text" onClick={() => setConfirm(false)}>
-                {t('common.cancel')}
-              </Button>
+      {isUser ? (
+        <>
+          <div class="chat-user">
+            <header class="chat-message-head">
+              <span class="meta">{t('chat.role.user')}</span>
+              <span class="meta tnum">{clock(m.created_at)}</span>
+            </header>
+            {body}
+            {attachments}
+          </div>
+          <footer class="chat-message-foot">
+            <BranchNav {...branch} onMove={onBranch} />
+            {!streaming && (
+              <div class="chat-actions cluster" role="group" aria-label={t('chat.msg.actions')}>
+                {onEdit && (
+                  <Button size="s" variant="text" disabled={busy} onClick={onEdit}>
+                    {t('chat.msg.edit')}
+                  </Button>
+                )}
+                <Button size="s" variant="text" onClick={() => void copy(textOf(m))}>
+                  {t('chat.msg.copy')}
+                </Button>
+                {!confirm && (
+                  <Button size="s" variant="text" disabled={busy} onClick={() => setConfirm(true)}>
+                    {t('chat.msg.delete_branch')}
+                  </Button>
+                )}
+                {confirmRow}
+              </div>
+            )}
+          </footer>
+        </>
+      ) : (
+        <>
+          <header class="chat-message-head">
+            <span class="label chat-message-who">
+              {headLabel(m)}
+              <span class="meta tnum chat-message-time">{clock(m.created_at)}</span>
             </span>
-          ) : (
-            <Button size="s" variant="text" disabled={busy} onClick={() => setConfirm(true)}>
-              {t('chat.msg.delete_branch')}
-            </Button>
+            {headActions}
+          </header>
+          {confirmRow}
+          {m.reasoning && (
+            <ThinkingBlock
+              text={m.reasoning}
+              live={!!thinkingLive?.active}
+              ms={thinkingMs}
+              tokens={meta.usage?.completion_tokens_details?.reasoning_tokens}
+            />
           )}
-        </div>
+          {body}
+          {attachments}
+          <footer class="chat-message-foot">
+            {m.role === 'assistant' && <MetaLine m={m} streaming={streaming} />}
+            <BranchNav {...branch} onMove={onBranch} />
+          </footer>
+        </>
       )}
     </article>
   );

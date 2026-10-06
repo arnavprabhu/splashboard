@@ -1,3 +1,4 @@
+import type { ComponentChildren } from "preact";
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { Link, useLocation } from "wouter-preact";
 import { ApiError, api, request } from "../api/client";
@@ -7,12 +8,12 @@ import { Banner } from "../components/Banner";
 import { Button } from "../components/Button";
 import { CodeBlock } from "../components/CodeBlock";
 import { ConfirmSheet } from "../components/ConfirmSheet";
-import { PageHeader } from "../components/Section";
 import { ProgressBar } from "../components/ProgressBar";
 import { Sheet } from "../components/Sheet";
 import { Empty, LoadError } from "../components/States";
 import { toast, toastError } from "../components/Toast";
 import { formatCount } from "../lib/format";
+import { stateDisplay } from "../lib/engine-state";
 import { useApi } from "../lib/use-api";
 import { useTitle } from "../lib/title";
 import { engine, settings } from "../store";
@@ -41,14 +42,16 @@ import {
   shortModel,
   toolChoiceBody,
   toolChoiceError,
-  type ChatError,
   type OutputForm,
   type SamplingForm,
   type ToolChoiceKind,
 } from "./chat/logic";
 import { isCancelled, withInstallConfirm } from "../lib/engine-install";
+import { ErrorBanner, type ChatErrorState } from "./chat/ErrorBanner";
+import { adminReturnPath } from "./chat/returnPath";
+import { AdminLinks, HomeLink, Sidebar } from "./chat/Sidebar";
 import { MessageView, type ToolContext, type ToolDraft } from "./chat/MessageView";
-import { ChatStats } from "./chat/ChatStats";
+import { ContextMeter, StatTiles } from "./chat/ChatStats";
 import { ModelSelector } from "./chat/ModelSelector";
 import { liveSample } from "../store/live";
 import { PANEL_TABS, SidePanel, type PanelTab } from "./chat/SidePanel";
@@ -56,6 +59,9 @@ import { branchInfo, defaultLeaf, newId, pathTo, rememberLeaf, removeBranch, rep
 import { metaOf, textOf, toolCallsOf, type Chat, type ChatMessage, type ChatSummary, type DraftAttachment, type ModelEntry, type ToolCall } from "./chat/types";
 
 const PANEL_KEY = "chat.panel.open";
+const LIST_KEY = "chat.list.open";
+/** Router base without the trailing slash ("/admin"); the shell keeps its own copy. */
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 const LAST_KEY = "chat.panel.last";
 const now = () => new Date().toISOString();
 
@@ -100,14 +106,16 @@ async function blobToDataUrl(blob: Blob): Promise<string> {
 
 type Width = "wide" | "mid" | "narrow";
 
+const widthOf = (x: number): Width => (x >= 1100 ? "wide" : x >= 900 ? "mid" : "narrow");
+
+/** Wide: three columns; mid: the panel becomes a sheet; narrow: the conversations too (07 §2). */
 function useWidth(ref: { current: HTMLElement | null }): Width {
-  const [w, setW] = useState<Width>("wide");
+  const [w, setW] = useState<Width>(() => widthOf(typeof innerWidth === "number" && innerWidth > 0 ? innerWidth : 1200));
   useEffect(() => {
     const el = ref.current;
     if (!el || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(([entry]) => {
-      const x = entry?.contentRect.width ?? 1200;
-      setW(x >= 1100 ? "wide" : x >= 900 ? "mid" : "narrow");
+      setW(widthOf(entry?.contentRect.width ?? 1200));
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -121,51 +129,48 @@ export function nearBottom(el: Pick<HTMLElement, "scrollHeight" | "scrollTop" | 
 }
 
 /**
- * Desktop (07 §2.1): the layout fills the viewport under the nav so the thread column is the only
- * scrolling region, with the composer at its bottom. Phones keep the page scroll.
+ * The workspace fills the viewport (chat.css), so the message list is the scrolling region at
+ * every width. It follows new output until the user scrolls up.
  */
-function useThreadScroll(layout: { current: HTMLElement | null }, messages: { current: HTMLElement | null }, width: Width, content: unknown) {
+function useThreadFollow(messages: { current: HTMLElement | null }, mounted: unknown, content: unknown) {
   const follow = useRef(true);
-  const scroller = (): HTMLElement | null => (width === "narrow" ? (document.scrollingElement as HTMLElement | null) : messages.current);
   useEffect(() => {
-    const el = layout.current;
+    const el = messages.current;
     if (!el) return;
-    const fit = () => {
-      if (width === "narrow") {
-        el.style.height = "";
-        return;
-      }
-      const top = el.getBoundingClientRect().top + window.scrollY;
-      el.style.height = `max(320px, calc(100dvh - ${Math.round(top)}px))`;
-    };
-    fit();
-    // Anything above the layout can change height later (an alert band, a banner, the header wrapping):
-    // re-measure whenever the page's box changes, not only on window resize. fit() converges in one pass.
-    let frame = 0;
-    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(fit);
-    });
-    ro?.observe(document.body);
-    if (el.parentElement) ro?.observe(el.parentElement);
-    const target: HTMLElement | Window | null = width === "narrow" ? window : messages.current;
+    // Only a scroll upwards stops following: the event of our own scroll to the end can arrive
+    // after the reply has grown again, when the list is no longer near its end.
+    let lastTop = el.scrollTop;
     const onScroll = () => {
-      const s = scroller();
-      if (s) follow.current = nearBottom(s);
+      if (nearBottom(el)) follow.current = true;
+      else if (el.scrollTop < lastTop) follow.current = false;
+      lastTop = el.scrollTop;
     };
-    window.addEventListener("resize", fit);
-    target?.addEventListener("scroll", onScroll, { passive: true });
-    return () => {
-      window.removeEventListener("resize", fit);
-      ro?.disconnect();
+    el.addEventListener("scroll", onScroll, { passive: true });
+    // The composer growing (or the window shrinking) makes the list shorter without a scroll
+    // event: keep the end in view while following.
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
+      if (follow.current) el.scrollTop = el.scrollHeight;
+    });
+    ro?.observe(el);
+    // Markdown and code highlighting can grow a reply after the render that scrolled.
+    let frame = 0;
+    const mo = typeof MutationObserver === "undefined" ? null : new MutationObserver(() => {
       cancelAnimationFrame(frame);
-      target?.removeEventListener("scroll", onScroll);
-      el.style.height = "";
+      frame = requestAnimationFrame(() => {
+        if (follow.current) el.scrollTop = el.scrollHeight;
+      });
+    });
+    mo?.observe(el, { childList: true, subtree: true, characterData: true });
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      ro?.disconnect();
+      mo?.disconnect();
+      cancelAnimationFrame(frame);
     };
-  }, [width]);
+  }, [mounted]);
   useEffect(() => {
-    const s = scroller();
-    if (s && follow.current) s.scrollTop = s.scrollHeight;
+    const el = messages.current;
+    if (el && follow.current) el.scrollTop = el.scrollHeight;
   }, [content]);
   return follow;
 }
@@ -216,8 +221,10 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
   const layout = useRef<HTMLDivElement>(null);
   const width = useWidth(layout);
   const messagesEl = useRef<HTMLDivElement>(null);
-  const following = useThreadScroll(layout, messagesEl, width, chat);
+  const following = useThreadFollow(messagesEl, `${notFound}:${!!loadError}`, chat);
   const [panelOpen, setPanelOpen] = useState(() => readLocal(PANEL_KEY, true));
+  const [listOpen, setListOpen] = useState(() => readLocal(LIST_KEY, true));
+  const [home] = useState(() => adminReturnPath(BASE));
   const [listSheet, setListSheet] = useState(false);
   const [panelSheet, setPanelSheet] = useState(false);
 
@@ -376,9 +383,12 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
   const [busy, setBusy] = useState(false);
   const [streamingId, setStreamingId] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ total: number; processed: number; cache: number } | null>(null);
+  /** Prompt tokens of the running request (kept after output starts, for the live numbers). */
+  const [promptTotal, setPromptTotal] = useState<number | null>(null);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
   const [waiting, setWaiting] = useState(false);
   const [thinking, setThinking] = useState<{ active: boolean; ms: number | null } | null>(null);
-  const [error, setError] = useState<(ChatError & { request?: unknown; retries: number; retryIn: number | null }) | null>(null);
+  const [error, setError] = useState<ChatErrorState | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const abort = useRef<AbortController | null>(null);
   useEffect(() => () => abort.current?.abort(), []);
@@ -467,6 +477,9 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
     setBusy(true);
     setError(null);
     setWaiting(true);
+    const started = Date.now();
+    setStartedAt(started);
+    setPromptTotal(null);
     const acc = new StreamAccumulator();
     const id = newId();
     const reply: ChatMessage = { id, parent: doc.active_leaf ?? null, role: "assistant", content: "", created_at: now(), meta: { model: doc.model, profile: doc.profile, response_format: outputBody(output) } };
@@ -496,6 +509,7 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
           finish_reason: acc.finishReason,
           ttft_ms: acc.ttftMs,
           thinking_ms: acc.thinkingMs(),
+          duration_ms: Date.now() - started,
           segments: acc.segments.map((s) => ({ ...s })),
         },
       };
@@ -515,6 +529,7 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
         acc.push(evt.data);
         setWaiting(false);
         setProgress(acc.outputStarted ? null : acc.progress);
+        setPromptTotal(acc.progress?.total ?? null);
         apply();
         if (Date.now() - lastSave > 2000) {
           lastSave = Date.now();
@@ -557,6 +572,8 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
       setBusy(false);
       setWaiting(false);
       setProgress(null);
+      setPromptTotal(null);
+      setStartedAt(null);
       setStreamingId(null);
       if (abort.current === ctrl) abort.current = null;
     }
@@ -856,13 +873,9 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
       const k = ev.key;
       if (k === "n") newChat();
       else if (k === "p") togglePanel();
-      else if (k === "l") setListSheet((v) => !v);
+      else if (k === "l") toggleList();
       else if (k === "m") document.querySelector<HTMLButtonElement>('[data-testid="chat-model"]')?.click();
-      else if (["1", "2", "3", "4"].includes(k)) {
-        setTab(PANEL_TABS[Number(k) - 1]!);
-        if (width === "wide") setPanelOpen(true);
-        else setPanelSheet(true);
-      } else if (k === "e") {
+      else if (["1", "2", "3", "4"].includes(k)) openTab(PANEL_TABS[Number(k) - 1]!); else if (k === "e") {
         const lastUser = [...visible].reverse().find((m) => m.role === "user");
         if (lastUser) startEdit(lastUser);
       } else if (k === "r") {
@@ -882,6 +895,21 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
   });
+
+  function toggleList() {
+    if (width === "narrow") setListSheet((v) => !v);
+    else {
+      const next = !listOpen;
+      setListOpen(next);
+      writeLocal(LIST_KEY, next);
+    }
+  }
+
+  function openTab(next: PanelTab) {
+    setTab(next);
+    if (width === "wide") setPanelOpen(true);
+    else setPanelSheet(true);
+  }
 
   function togglePanel() {
     if (width === "wide") {
@@ -948,8 +976,11 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
     running,
   };
 
-  const panel = chat && (
+  const panelFor = (headActions: ComponentChildren, footer: ComponentChildren) =>
+    chat && (
     <SidePanel
+      headActions={headActions}
+      footer={footer}
       tab={tab}
       onTab={setTab}
       sampling={sampling}
@@ -1033,145 +1064,117 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
   );
 
   const errorBanner = error && (
-    <Banner
-      tone={error.kind === "failed" ? "critical" : "warn"}
-      title={error.title}
-      actions={
-        <span class="cluster">
-          {error.retryIn !== null ? (
-            <Button size="s" onClick={() => retryRef.current()}>
-              {t("chat.action.retry_in", { s: error.retryIn })}
-            </Button>
-          ) : (
-            ["unreachable", "recovering", "busy", "queue_full", "resource_timeout", "request_timeout", "mask_timeout", "generic", "capacity"].includes(error.kind) && (
-              <Button size="s" onClick={() => retryRef.current()}>
-                {t("chat.action.retry")}
-              </Button>
-            )
-          )}
-          {error.kind === "busy" && (
-            <Button
-              size="s"
-              variant="text"
-              onClick={() => {
-                setError(null);
-                if (pendingSend.current) void send(0, true);
-                else if (chatRef.current) void generate(chatRef.current, 0, true);
-              }}
-            >
-              {t("chat.action.switch_idle")}
-            </Button>
-          )}
-          {error.kind === "failed" && (
-            <Button size="s" variant="solid" onClick={() => void withInstallConfirm((force) => api.post(force ? "/engine/restart?force=true" : "/engine/restart")).catch((err) => isCancelled(err) || toastError(t("chat.restart_failed"), err))}>
-              {t("chat.action.restart")}
-            </Button>
-          )}
-          {(error.kind === "failed" || error.kind === "generic") && (
-            <Link href="/logs" class="btn" data-variant="text" data-size="s">
-              {t("chat.action.logs")}
-            </Link>
-          )}
-          {(error.kind === "capacity" || error.kind === "resource_timeout") && (
-            <Link href="/settings/memory" class="btn" data-variant="text" data-size="s">
-              {t("chat.action.memory")}
-            </Link>
-          )}
-          {error.kind === "queue_full" && (
-            <Link href="/settings/requests" class="btn" data-variant="text" data-size="s">
-              {t("chat.action.requests")}
-            </Link>
-          )}
-          {error.kind === "mask_timeout" && (
-            <Button size="s" variant="text" onClick={() => (setTab("output"), width === "wide" ? setPanelOpen(true) : setPanelSheet(true))}>
-              {t("chat.action.output")}
-            </Button>
-          )}
-          {error.kind === "later_system" && (
-            <Button size="s" variant="text" onClick={() => (setTab("system"), width === "wide" ? setPanelOpen(true) : setPanelSheet(true))}>
-              {t("chat.action.system")}
-            </Button>
-          )}
-          {error.kind === "ignore_eos" && (
-            <Button size="s" variant="text" onClick={() => setSampling({ ...sampling, ignore_eos: false })}>
-              {t("chat.action.turn_off_eos")}
-            </Button>
-          )}
-          {error.kind === "attachment" && (
-            <Button size="s" variant="text" onClick={() => setAttachments([])}>
-              {t("chat.action.remove_attachments")}
-            </Button>
-          )}
-          {error.kind === "rejected" && error.request != null && (
-            <Button size="s" variant="text" onClick={() => setShowRequest(true)}>
-              {t("chat.action.show_request")}
-            </Button>
-          )}
-          <Button size="s" variant="text" onClick={() => setError(null)}>
-            {error.retryIn !== null ? t("chat.action.cancel") : t("chat.action.dismiss")}
-          </Button>
-        </span>
-      }
-    >
-      {error.body && <span>{error.body} </span>}
-      {error.detail && <code class="mono">{error.detail}</code>}
-    </Banner>
+    <ErrorBanner
+      error={error}
+      onRetry={() => retryRef.current()}
+      onSwitchWhenIdle={() => {
+        setError(null);
+        if (pendingSend.current) void send(0, true);
+        else if (chatRef.current) void generate(chatRef.current, 0, true);
+      }}
+      onOpenTab={openTab}
+      onTurnOffEos={() => setSampling({ ...sampling, ignore_eos: false })}
+      onRemoveAttachments={() => setAttachments([])}
+      onShowRequest={() => setShowRequest(true)}
+      onDismiss={() => setError(null)}
+    />
   );
 
-  const modelLine = (
-      <ModelSelector
-        rows={rows}
-        profilesFor={(id) => (id === model ? profileNames : rows.find((r) => r.id === id)?.profiles.length ? ["default", ...rows.find((r) => r.id === id)!.profiles] : ["default"])}
-        model={model}
-        profile={profile}
-        onPick={pick}
-        active={active}
-        engineState={e?.state ?? null}
-        autoLoad={autoLoad}
-        onLoadNow={() => void loadNow()}
-        loading={loadingModel}
-        stats={
-          <ChatStats
-            thread={thread}
-            busy={busy}
-            progressTotal={progress?.total ?? null}
-            context={row?.context ?? null}
-            contextEstimated={!!row?.estimated}
-            live={liveSample.value}
-          />
-        }
-      />
+  const sideOpen = width !== "narrow" && listOpen;
+  const panelShown = width === "wide" && panelOpen;
+  const panelExpanded = width === "wide" ? panelOpen : panelSheet;
+  const listExpanded = width === "narrow" ? listSheet : listOpen;
+  const isActiveModel = !!model && model === active;
+  const live = isActiveModel && (e?.state === "ready" || e?.state === "busy");
+  const version = e?.engine_version ? t("nav.engine", { version: e.engine_version }) : null;
+
+  /** A column toggle unmounts the button that was clicked: hand focus to its counterpart. */
+  const toggleFocus = (toggle: () => void, target: string) => () => {
+    toggle();
+    requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-chat-toggle="${target}"]`)?.focus());
+  };
+
+  const topBar = (
+    <div class="chat-top" data-testid="chat-top">
+      <div class="chat-top-start cluster">
+        {!sideOpen && (
+          <>
+            <HomeLink href={home} />
+            <Button size="s" variant="text" aria-expanded={listExpanded} aria-label={t("chat.side.show_label")} data-chat-toggle="list-show" onClick={width === "narrow" ? toggleList : toggleFocus(toggleList, "list-hide")}>
+              {t("chat.list_toggle")} {listExpanded ? "▾" : "▸"}
+            </Button>
+          </>
+        )}
+      </div>
+      <div class="chat-top-center">
+        <ModelSelector
+          rows={rows}
+          profilesFor={(id) => (id === model ? profileNames : rows.find((r) => r.id === id)?.profiles.length ? ["default", ...rows.find((r) => r.id === id)!.profiles] : ["default"])}
+          model={model}
+          profile={profile}
+          onPick={pick}
+          active={active}
+          engineState={e?.state ?? null}
+          autoLoad={autoLoad}
+          onLoadNow={() => void loadNow()}
+          loading={loadingModel}
+        />
+      </div>
+      <div class="chat-top-end cluster">
+        {!panelShown && (
+          <Button size="s" variant="text" aria-expanded={panelExpanded} data-chat-toggle="panel-show" onClick={width === "wide" ? toggleFocus(togglePanel, "panel-hide") : togglePanel}>
+            {t("chat.panel_toggle")} {panelExpanded ? "▾" : "▸"}
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+
+  const statusLine = (
+    <div class="chat-statusline">
+      <span class="meta chat-statusline-model">
+        <span class="chat-dot" data-live={live ? "true" : "false"} aria-hidden="true">
+          ●
+        </span>
+        <span class="visually-hidden">{t("chat.status.model", { state: isActiveModel ? stateDisplay(e?.state ?? null).label : t("chat.model.not_loaded") })} · </span>
+        <span class="mono">{model ? shortModel(model) : t("chat.status.unselected")}</span>
+      </span>
+      <ContextMeter thread={thread} busy={busy} promptTotal={promptTotal ?? progress?.total ?? null} context={row?.context ?? null} contextEstimated={!!row?.estimated} />
+    </div>
   );
 
   const threadEl = (
-    <section class="chat-thread" aria-label={t("chat.thread_label")}>
-      {width !== "wide" && (
-        <div class="cluster chat-thread-head">
-          {width === "narrow" && (
-            <Button size="s" variant="text" onClick={() => setListSheet(true)}>
-              {t("chat.list_toggle")} ▸
-            </Button>
-          )}
-          <span class="label chat-thread-title">{chat?.title}</span>
+    <section class="chat-main" aria-label={t("chat.thread_label")}>
+      <h1 class="visually-hidden">{chat?.title || t("chat.page_title")}</h1>
+      {topBar}
+      {!!models.error && (
+        <div class="chat-band">
+          <LoadError thing={t("chat.model.load_models_failed")} error={models.error} onRetry={models.reload} />
         </div>
       )}
       {notFound ? (
-        <Empty title={t("chat.not_found")} action={<Button onClick={newChat}>{t("chat.list.new")}</Button>} />
+        <div class="chat-messages">
+          <Empty title={t("chat.not_found")} action={<Button onClick={newChat}>{t("chat.list.new")}</Button>} />
+        </div>
       ) : loadError ? (
-        <LoadError thing={t("chat.load_chat")} error={loadError} />
+        <div class="chat-messages">
+          <LoadError thing={t("chat.load_chat")} error={loadError} />
+        </div>
       ) : (
         <>
           {noModels && (
-            <Banner
-              tone="info"
-              actions={
-                <Link href="/models/downloader" class="btn" data-size="s">
-                  {t("chat.empty.open_downloader")}
-                </Link>
-              }
-            >
-              {t("chat.empty.no_models")}
-            </Banner>
+            <div class="chat-band">
+              <Banner
+                tone="info"
+                actions={
+                  <Link href="/models/downloader" class="btn" data-size="s">
+                    {t("chat.empty.open_downloader")}
+                  </Link>
+                }
+              >
+                {t("chat.empty.no_models")}
+              </Banner>
+            </div>
           )}
           <div class="chat-messages" ref={messagesEl} data-testid="chat-messages">
             {visible.length === 0 ? (
@@ -1255,39 +1258,43 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
                 onNotice={setNotice}
               />
             )}
-            <div class="chat-modelline">{modelLine}</div>
+            {statusLine}
           </div>
         </>
       )}
     </section>
   );
 
+  const tiles = <StatTiles thread={thread} busy={busy} live={liveSample.value} promptTotal={promptTotal ?? progress?.total ?? null} startedAt={startedAt} />;
+
   return (
     <>
-      <PageHeader
-        title={t("chat.title")}
-        size="m"
-        actions={
-          <Button variant="text" aria-expanded={width === "wide" ? panelOpen : panelSheet} onClick={togglePanel}>
-            {t("chat.panel_toggle")} {(width === "wide" ? panelOpen : panelSheet) ? "▾" : "▸"}
-          </Button>
-        }
-      />
-      {!!models.error && (
-        <section class="band tight">
-          <LoadError thing={t("chat.model.load_models_failed")} error={models.error} onRetry={models.reload} />
-        </section>
-      )}
-      <div class="chat-layout" ref={layout} data-width={width}>
-        {width !== "narrow" && <aside class="chat-sidebar" aria-label={t("chat.list.label")}>{listEl}</aside>}
+      <div class="chat-app" ref={layout} data-width={width} data-side={sideOpen ? "open" : "closed"} data-panel={panelShown ? "open" : "closed"}>
+        {sideOpen && (
+          <Sidebar home={home} version={version} onHide={toggleFocus(toggleList, "list-show")}>
+            {listEl}
+          </Sidebar>
+        )}
         {threadEl}
-        {width === "wide" && panelOpen && <aside class="chat-options" aria-label={t("chat.panel.label")}>{panel}</aside>}
+        {panelShown && chat && (
+          <aside class="chat-options" aria-label={t("chat.panel.label")}>
+            {panelFor(
+              <Button size="s" variant="text" class="chat-panel-hide" aria-label={t("chat.panel.hide_label")} aria-expanded="true" data-chat-toggle="panel-hide" onClick={toggleFocus(togglePanel, "panel-show")}>
+                {t("chat.panel.hide")}
+              </Button>,
+              tiles,
+            )}
+          </aside>
+        )}
       </div>
       <Sheet open={width === "narrow" && listSheet} title={t("chat.list_sheet_title")} onClose={() => setListSheet(false)}>
-        {listEl}
+        <div class="chat-sheet-list">
+          {listEl}
+          <AdminLinks />
+        </div>
       </Sheet>
-      <Sheet open={width !== "wide" && panelSheet} title={t("chat.panel_sheet_title")} onClose={() => setPanelSheet(false)}>
-        {panel}
+      <Sheet open={width !== "wide" && panelSheet && !!chat} title={t("chat.panel_sheet_title")} onClose={() => setPanelSheet(false)}>
+        <div class="chat-sheet-panel">{panelFor(null, tiles)}</div>
       </Sheet>
       <Sheet open={showRequest} title={t("chat.request_sheet")} onClose={() => setShowRequest(false)}>
         <CodeBlock code={JSON.stringify(error?.request ?? {}, null, 2)} label="JSON" />

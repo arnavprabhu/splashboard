@@ -2,6 +2,7 @@
  * The side panel (docs/ui/07 §9): SAMPLING · SYSTEM · TOOLS · OUTPUT. Every field shows where
  * its effective value comes from (Profile / Model default / Splash default / Set here).
  */
+import type { ComponentChildren } from 'preact';
 import { Link } from 'wouter-preact';
 import { Banner } from '../../components/Banner';
 import { Button } from '../../components/Button';
@@ -119,6 +120,10 @@ export interface SidePanelProps {
   output: OutputForm;
   onOutput: (f: OutputForm) => void;
   outputError: string | null;
+  /** Right of the tabs (the collapse control). */
+  headActions?: ComponentChildren;
+  /** Pinned under the scrolling tab content (the stat tiles). */
+  footer?: ComponentChildren;
 }
 
 function numStr(v: unknown): string | null {
@@ -530,46 +535,50 @@ export function SidePanel(p: SidePanelProps) {
   };
   return (
     <section class="chat-panel" aria-label={t('chat.panel.label')}>
-      <div class="chat-panel-tabs" role="tablist" aria-label={t('chat.panel.tabs')}>
-        {PANEL_TABS.map((tab) => {
-          const name = t(`chat.panel.tab.${tab}`);
-          return (
-            <button
-              key={tab}
-              type="button"
-              role="tab"
-              id={`chat-tab-${tab}`}
-              aria-selected={p.tab === tab}
-              aria-controls="chat-tabpanel"
-              tabIndex={p.tab === tab ? 0 : -1}
-              class="navlink nav"
-              aria-label={attention[tab] ? t('chat.panel.tab_attention', { tab: name }) : undefined}
-              onClick={() => p.onTab(tab)}
-              onKeyDown={(e) => {
-                if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
-                e.preventDefault();
-                const i = PANEL_TABS.indexOf(p.tab);
-                const next = PANEL_TABS[(i + (e.key === 'ArrowRight' ? 1 : PANEL_TABS.length - 1)) % PANEL_TABS.length]!;
-                p.onTab(next);
-                requestAnimationFrame(() => document.getElementById(`chat-tab-${next}`)?.focus());
-              }}
-            >
-              {name}
-              {attention[tab] && (
-                <span class="acc" aria-hidden="true">
-                  {' '}●
-                </span>
-              )}
-            </button>
-          );
-        })}
+      <div class="chat-panel-head">
+        <div class="chat-panel-tabs" role="tablist" aria-label={t('chat.panel.tabs')}>
+          {PANEL_TABS.map((tab) => {
+            const name = t(`chat.panel.tab.${tab}`);
+            return (
+              <button
+                key={tab}
+                type="button"
+                role="tab"
+                id={`chat-tab-${tab}`}
+                aria-selected={p.tab === tab}
+                aria-controls="chat-tabpanel"
+                tabIndex={p.tab === tab ? 0 : -1}
+                class="navlink nav"
+                aria-label={attention[tab] ? t('chat.panel.tab_attention', { tab: name }) : undefined}
+                onClick={() => p.onTab(tab)}
+                onKeyDown={(e) => {
+                  if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+                  e.preventDefault();
+                  const i = PANEL_TABS.indexOf(p.tab);
+                  const next = PANEL_TABS[(i + (e.key === 'ArrowRight' ? 1 : PANEL_TABS.length - 1)) % PANEL_TABS.length]!;
+                  p.onTab(next);
+                  requestAnimationFrame(() => document.getElementById(`chat-tab-${next}`)?.focus());
+                }}
+              >
+                {name}
+                {attention[tab] && (
+                  <span class="acc" aria-hidden="true">
+                    {' '}●
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+        {p.headActions}
       </div>
-      <div id="chat-tabpanel" role="tabpanel" aria-labelledby={`chat-tab-${p.tab}`}>
+      <div id="chat-tabpanel" class="chat-panel-body" role="tabpanel" aria-labelledby={`chat-tab-${p.tab}`}>
         {p.tab === 'sampling' && <SamplingTab {...p} />}
         {p.tab === 'system' && <SystemTab {...p} />}
         {p.tab === 'tools' && <ToolsTab {...p} />}
         {p.tab === 'output' && <OutputTab {...p} />}
       </div>
+      {p.footer}
     </section>
   );
 }
