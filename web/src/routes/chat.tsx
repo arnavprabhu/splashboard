@@ -1116,6 +1116,21 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
     </Banner>
   );
 
+  const modelLine = (
+      <ModelSelector
+        rows={rows}
+        profilesFor={(id) => (id === model ? profileNames : rows.find((r) => r.id === id)?.profiles.length ? ["default", ...rows.find((r) => r.id === id)!.profiles] : ["default"])}
+        model={model}
+        profile={profile}
+        onPick={pick}
+        active={active}
+        engineState={e?.state ?? null}
+        autoLoad={autoLoad}
+        onLoadNow={() => void loadNow()}
+        loading={loadingModel}
+      />
+  );
+
   const threadEl = (
     <section class="chat-thread" aria-label={t("chat.thread_label")}>
       {width !== "wide" && (
@@ -1228,6 +1243,7 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
                 onNotice={setNotice}
               />
             )}
+            <div class="chat-modelline">{modelLine}</div>
           </div>
         </>
       )}
@@ -1239,20 +1255,6 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
       <PageHeader
         title={t("chat.title")}
         size="m"
-        meta={
-          <ModelSelector
-            rows={rows}
-            profilesFor={(id) => (id === model ? profileNames : rows.find((r) => r.id === id)?.profiles.length ? ["default", ...rows.find((r) => r.id === id)!.profiles] : ["default"])}
-            model={model}
-            profile={profile}
-            onPick={pick}
-            active={active}
-            engineState={e?.state ?? null}
-            autoLoad={autoLoad}
-            onLoadNow={() => void loadNow()}
-            loading={loadingModel}
-          />
-        }
         actions={
           <Button variant="text" aria-expanded={width === "wide" ? panelOpen : panelSheet} onClick={togglePanel}>
             {t("chat.panel_toggle")} {(width === "wide" ? panelOpen : panelSheet) ? "▾" : "▸"}

@@ -40,16 +40,15 @@
 .chat-model .menu { max-width: 100%; min-width: 0; }
 .chat-model .menu > .btn { max-width: 100%; white-space: normal; text-align: left; justify-content: flex-start; }
 .chat-model-meta { gap: 6px 0; align-items: center; }
-/* The chat is a workspace: a tighter head, and the model row sits under a 1px rule with its facts
-   divided by 1px rules instead of floating. */
-/* The chat is a workspace, so its title is a heading, not a poster. */
-.page-head:has(.chat-model) { padding-top: clamp(20px, 3vw, 32px); padding-bottom: 0; gap: 16px; }
-.page-head:has(.chat-model) .page-title.display-m { font-size: clamp(44px, 4.5vw, 56px); line-height: 1; }
-.page-head:has(.chat-model) > .cluster { border-top: var(--rule-minor) solid var(--rule); padding: 10px 0 12px; align-items: center; }
-.chat-model .label { color: var(--mute); }
-.chat-model-meta > * { padding: 0 12px; border-left: var(--rule-minor) solid var(--rule); line-height: 1; }
-.chat-model-meta > :first-child { margin-left: 4px; }
-@media (max-width: 700px) { .chat-model-meta > * { border-left: 0; padding: 0 12px 0 0; } .chat-model-meta > :first-child { margin-left: 0; } }
+/* The chat is a workspace: a small title, and the model facts on one tiny line under the composer. */
+body:has(.chat-layout) .page-head .page-title.display-m { font-size: clamp(28px, 3vw, 36px); line-height: 1; }
+.chat-modelline, .chat-modelline .btn, .chat-modelline .label, .chat-modelline .meta, .chat-modelline .mono { font-size: 11px; }
+.chat-modelline { margin-top: -4px; }
+.chat-modelline .chat-model { gap: 4px 8px; }
+.chat-modelline .label { color: var(--mute); }
+.chat-model-meta > * { padding: 0 8px; border-left: var(--rule-minor) solid var(--rule); line-height: 1; }
+.chat-model-meta > :first-child { padding-left: 0; border-left: 0; }
+@media (max-width: 700px) { .chat-model-meta > * { border-left: 0; padding: 0 12px 0 0; } }
 .chat-model-profile { padding-left: 16px; }
 
 /* messages */
@@ -100,3 +99,6 @@
 .chat-servers { list-style: none; margin: 0; padding: 0; }
 .chat-server { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; padding: 6px 0; border-bottom: var(--rule-minor) solid var(--rule); }
 .chat-tool-tags { gap: 6px; }
+body:has(.chat-layout) .page-head { padding-top: clamp(16px, 2vw, 24px); padding-bottom: 12px; }
+body:has(.chat-layout) .page-head { flex-direction: row; justify-content: space-between; align-items: center; gap: 16px; }
+body:has(.chat-layout) .page-head > .cluster { flex: 0 0 auto; }
