@@ -1,4 +1,13 @@
 .mband-head, .dl-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; align-items: center; margin-bottom: 20px; }
+/* Model rows: 1px rules flush with the band content, the name left and "NN — FORMAT · SIZE" right.
+   The hover fill reaches 12px into the gutter (an outline clipped to the row's height) so it frames
+   the text instead of touching it, while the rules stay on the grid. */
+.mlist > .mrow { padding: 16px 0; }
+.mlist > .mrow[data-interactive='true']:is(:hover, :focus-within) { outline: 12px solid var(--acc); outline-offset: 0; clip-path: inset(0 -12px); }
+/* On the accent fill everything reads in --on-acc: the meta line, button outlines and the ↗. */
+.mrow[data-interactive='true']:is(:hover, :focus-within) :is(.mrow-meta, .acc) { color: inherit; }
+.mrow[data-interactive='true']:is(:hover, :focus-within) .btn:not([data-variant='text']) { border-color: currentColor; }
+.mrow-right { margin-left: auto; justify-content: flex-end; }
 .mrow-body { width: 100%; }
 .mrow-lead { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 16px; }
 .mrow-right, .mrow-meta, .dl-row-main { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
@@ -8,11 +17,14 @@
 .disk-paths { overflow-wrap: anywhere; }
 /* Legend items and paths: one item per cell, spaced, wrapping without running together. */
 .disk-line, .disk-paths { display: flex; flex-wrap: wrap; gap: 4px 24px; margin: 0; }
+.disk-paths > .mono { min-width: 0; overflow-wrap: anywhere; }
 .disk-link { color: inherit; text-decoration: underline; }
 .drawer-id, .dl-model { overflow-wrap: anywhere; }
 .drawer-section { border-top: 1px solid var(--rule); padding-top: 20px; }
 .drawer-file, .dl-file, .delete-item { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; border-bottom: 1px solid var(--rule); padding: 10px 0; overflow-wrap: anywhere; }
 .dl-list { list-style: none; margin: 0; padding: 0; }
+.delete-list { list-style: none; margin: 0; padding: 0; border-top: var(--rule-minor) solid var(--rule); }
+.delete-item > .mono { flex: 1 1 24ch; min-width: 0; overflow-wrap: anywhere; }
 .dl-row { padding: 24px 0; border-bottom: 1px solid var(--rule); }
 .dl-meta, .dl-actions { margin-top: 12px; }
 .dl-files { margin-top: 16px; }
@@ -25,7 +37,7 @@
 .md-link { overflow-wrap: anywhere; }
 /* downloader (docs/ui/03 §3) */
 .dlr-meta { gap: 4px 16px; }
-.dlr-entries { list-style: none; margin: 0; padding: 0; }
+.dlr-entries { list-style: none; margin: 0; padding: 0; border-top: var(--rule-minor) solid var(--rule); }
 .dlr-entry { border-bottom: var(--rule-minor) solid var(--rule); padding: 16px 0; display: grid; gap: 6px; }
 .dlr-entry-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 16px; }
 .dlr-entry-name { margin: 0; overflow-wrap: anywhere; }
@@ -36,6 +48,7 @@
 .dlr-plan-files { list-style: none; margin: 0; padding: 0; } .dlr-plan-files > li { gap: 6px 12px; border-bottom: var(--rule-minor) solid var(--rule); padding: 4px 0; overflow-wrap: anywhere; }
 /* local GGUF drop-in (SPEC §9.6) */
 .local-head { justify-content: space-between; align-items: baseline; gap: 8px 24px; }
-.local-head > .body { margin: 0; overflow-wrap: anywhere; }
+.local-head > .body { margin: 0; overflow-wrap: anywhere; flex: 1 1 32ch; min-width: 0; }
+.local-head .mono { overflow-wrap: anywhere; }
 .local-errors { list-style: none; margin: 0; padding: 0; border-top: var(--rule-minor) solid var(--rule); }
 .local-error { display: flex; flex-wrap: wrap; gap: 4px 16px; border-bottom: var(--rule-minor) solid var(--rule); padding: 10px 0; overflow-wrap: anywhere; }

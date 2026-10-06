@@ -233,7 +233,7 @@ export default function Benchmark() {
               },
               { key: "ts", label: t("tools.bm.col.when"), render: (r) => <span class="tnum nowrap">{when(r.ts)}</span> },
               { key: "model", label: t("tools.model"), render: (r) => <span class="mono">{shortName(r.model)}</span> },
-              { key: "engine", label: t("tools.bm.col.engine"), render: (r) => (r.engine_version ? `Splash ${r.engine_version}` : DASH) },
+              { key: "engine", label: t("tools.bm.col.engine"), render: (r) => <span class="nowrap">{r.engine_version ? `Splash ${r.engine_version}` : DASH}</span> },
               { key: "state", label: t("tools.bm.col.state"), render: (r) => t(`tools.bm.state.${r.state}`) },
               { key: "decode", label: t("tools.bm.h.decode"), align: "right", render: (r) => tps(r.headline?.decode_tps) },
               {

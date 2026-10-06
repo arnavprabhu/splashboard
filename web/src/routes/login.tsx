@@ -80,7 +80,7 @@ export default function LoginPage() {
           </Banner>
         </section>
       )}
-      <Section label={t("login.key")}>
+      <Section>
         <form onSubmit={submit} class="stack" style={{ maxWidth: "560px" }}>
           <p class="lead">{t("login.lead")}</p>
           <div

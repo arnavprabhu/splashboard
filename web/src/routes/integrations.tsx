@@ -59,6 +59,14 @@ import {
 } from "./integrations/logic";
 import { saveSettings } from "./welcome/api";
 
+/** Sets IDs, profiles and paths inside a sentence in mono so a `.meta` line never uppercases them. */
+function withMono(text: string, tokens: ReadonlyArray<string | null | undefined>) {
+  const found = tokens.filter((x): x is string => !!x && text.includes(x));
+  if (found.length === 0) return text;
+  const re = new RegExp(`(${found.map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`);
+  return text.split(re).map((part, i) => (i % 2 === 1 ? <span key={i} class="mono">{part}</span> : part));
+}
+
 const BIONIC_GUIDE = "https://lmstudio.ai/docs/app/api";
 
 type Global = Record<string, unknown> & {
@@ -143,7 +151,7 @@ export default function IntegrationsPage() {
           </label>
         }
       />
-      <p class="band tight body integrations-lead">{t("integrations.lead")}</p>
+      <p class="band tight body integrations-lead">{withMono(t("integrations.lead"), ["splash launch"])}</p>
       {!!data.error && (
         <Section>
           <LoadError thing={t("integrations.thing")} error={data.error} onRetry={data.reload} />
@@ -352,11 +360,11 @@ function CliRow({
       </div>
       {profileNote && (
         <p class="meta" data-testid={`profiles-${cli.name}`}>
-          <span class="label">{t("integrations.cli.profiles")}</span> {t(`integrations.cli.profiles.${profileNote}`)}
+          <span class="label">{t("integrations.cli.profiles")}</span> {withMono(t(`integrations.cli.profiles.${profileNote}`), [":no-think"])}
         </p>
       )}
       {!engine.value?.model && pick && (
-        <p class="meta">{t("integrations.cli.will_load", { model: pick })}</p>
+        <p class="meta">{withMono(t("integrations.cli.will_load", { model: pick }), [pick])}</p>
       )}
       {termError && (
         <Banner tone="warn" title={t("integrations.cli.terminal_failed")}>
@@ -669,7 +677,7 @@ function DesktopRow({
           />
           <span class="label">{t("integrations.codex_default")}</span>
           <p class="meta" id="codex-default-help">
-            {t("integrations.codex_default_help")}
+            {withMono(t("integrations.codex_default_help"), ["~/.codex/config.toml"])}
           </p>
           {codexChanged && (
             <span class="cluster">
@@ -727,7 +735,7 @@ function DesktopRow({
             ? t("integrations.desktop.connect_unsaved", { label: app.label })
             : t("integrations.desktop.connect_closed", { label: app.label })}
         </p>
-        {app.name === "claude-desktop" && <p class="mono">{t("integrations.desktop.connect_gateway", { port })}</p>}
+        {app.name === "claude-desktop" && <p class="mono">{t("integrations.desktop.connect_gateway", { port: String(port) })}</p>}
         {seq === "connect" && <StepList name={app.name} kind="connect" step={app.step} />}
         <Disclosure summary={t("integrations.desktop.changes")}>
           <ul class="integration-files">

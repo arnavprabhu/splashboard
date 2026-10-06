@@ -188,7 +188,9 @@ export function About() {
             <Button size="s" loading={doctorBusy} onClick={() => void runDoctor()}>
               {t('settings.about.run_doctor')}
             </Button>
-            <Link href="/logs/diagnostics">{t('settings.about.diagnostics')}</Link>
+            <Link href="/logs/diagnostics" class="btn" data-variant="text" data-size="s">
+              {t('settings.about.diagnostics')}
+            </Link>
           </div>
           {!!doctorError && <LoadError thing={t('settings.about.doctor_thing')} error={doctorError} onRetry={() => void runDoctor()} />}
           {doctor && (

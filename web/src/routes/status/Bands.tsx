@@ -46,7 +46,7 @@ export interface BandsProps {
 
 function Stopped({ label }: { label: string }) {
   return (
-    <Section label={label}>
+    <Section label={label} tight>
       <p class="meta">{t('bands.bands.stopped')}</p>
     </Section>
   );

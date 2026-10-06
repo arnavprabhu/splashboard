@@ -60,8 +60,10 @@ export interface PageHeaderProps {
 
 /** Page title in display type, ending in a period for the poster feel. */
 export function PageHeader({ title, meta, actions, size = 'l' }: PageHeaderProps) {
+  // The longest word sets a size cap, so "INTEGRATIONS." shrinks at phone width instead of breaking mid-word.
+  const longest = Math.max(1, ...title.split(/\s+/).map((w) => w.length));
   return (
-    <header class="page-head stack">
+    <header class="page-head stack" style={{ '--title-ch': longest }}>
       <h1 class={`page-title display-${size}`}>{title}</h1>
       {(meta || actions) && (
         <div class="cluster" style={{ justifyContent: 'space-between' }}>

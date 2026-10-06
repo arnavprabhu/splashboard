@@ -131,6 +131,17 @@ test.describe('integrations', () => {
     const doc = puts[0] as { global: { server: { allowed_origins: string[] } } };
     expect(doc.global.server.allowed_origins).toEqual(['tauri://localhost']);
   });
+
+  test('a closed tooltip near the right edge does not widen the desktop page', async ({ page }, info) => {
+    test.skip(info.project.name === 'phone', 'desktop layout');
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await mockManager(page, { engine: READY, extra: (_m, path) => (path === '/integrations' ? { json: INTEGRATIONS } : undefined) });
+    await page.route('**/v1/models', (r) => r.fulfill({ json: V1_MODELS }));
+    await page.goto('/admin/integrations');
+    // Codex app is an untested version: its Tag carries a Tooltip at the right edge of the row.
+    await expect(page.getByRole('tooltip', { includeHidden: true }).first()).toBeAttached();
+    expect(await noOverflow(page)).toBeLessThanOrEqual(0);
+  });
 });
 
 test.describe('integrations deep link', () => {

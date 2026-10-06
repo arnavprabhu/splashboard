@@ -139,23 +139,36 @@
   overflow-wrap: anywhere;
 }
 
+/* Cap the display size so the longest word fits the page width (0.54em ≈ one Archivo 900/72% capital).
+   Above the cap DESIGN.md's clamp applies unchanged; `anywhere` stays as the last resort. */
+.page-title.display-l {
+  font-size: min(clamp(64px, 12.5vw, 160px), calc((100vw - 2 * var(--gutter)) / (var(--title-ch, 1) * 0.54)));
+}
+
+.page-title.display-m {
+  font-size: min(clamp(56px, 10.5vw, 132px), calc((100vw - 2 * var(--gutter)) / (var(--title-ch, 1) * 0.54)));
+}
+
 /* ---------- numbers band ---------- */
 
 .numbers-clip {
   overflow: hidden;
 }
 
+/* The clipped first column loses its rule and its inset too, so the first stat sits on the gutter
+   like every band label. */
 .numbers-grid {
+  --stat-pad: clamp(12px, 1.6vw, 20px);
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
-  margin: -1px 0 0 -1px;
+  margin: -1px 0 0 calc(-1px - var(--stat-pad));
 }
 
 .stat {
   container-type: inline-size;
   border-left: var(--rule-minor) solid var(--rule);
   border-top: var(--rule-minor) solid var(--rule);
-  padding: 16px clamp(12px, 1.6vw, 20px) 20px;
+  padding: 16px var(--stat-pad, clamp(12px, 1.6vw, 20px)) 20px;
   min-width: 0;
 }
 
@@ -358,8 +371,10 @@
   transition: opacity 0.2s ease;
 }
 
-/* A model ID or path inside a button wraps instead of widening a 360 px page. */
+/* A model ID or path inside a button wraps instead of widening a 360 px page. `fit-content` keeps
+   a button its own width in a column (`.stack`, field bodies) instead of stretching edge to edge. */
 .btn {
+  width: fit-content;
   max-width: 100%;
 }
 
@@ -401,6 +416,11 @@
   font-size: 13px;
 }
 
+/* Text buttons sit on the text edge at every size. */
+.btn[data-variant='text'][data-size='s'] {
+  padding-inline: 0;
+}
+
 /* ---------- form controls ---------- */
 
 .input,
@@ -439,11 +459,16 @@
   margin: 0;
 }
 
+/* Prose textareas (system prompt, tokenizer text, chat) stay in Archivo; code ones add `.mono`. */
 textarea.input {
   min-height: 120px;
   resize: vertical;
-  font-family: var(--mono);
-  font-size: 14px;
+}
+
+@media (hover: hover) {
+  .input.mono {
+    font-size: 14px;
+  }
 }
 
 .select {
@@ -472,6 +497,7 @@ textarea.input {
 
 .toggle {
   display: inline-flex;
+  width: fit-content;
   align-items: stretch;
   border: var(--rule-minor) solid var(--rule);
   font-size: 13px;
@@ -657,6 +683,12 @@ textarea.input {
   text-align: right;
 }
 
+/* The last column ends on the content edge, like every other rule-bounded block. */
+.table th:last-child,
+.table td:last-child {
+  padding-right: 0;
+}
+
 /* ---------- progress ---------- */
 
 .progress {
@@ -751,9 +783,22 @@ textarea.input {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 16px;
+  flex-wrap: wrap;
+  gap: 12px 16px;
   padding: 20px var(--gutter);
   border-bottom: var(--rule-major) solid var(--rule);
+}
+
+/* A long model ID in the title wraps; the head actions drop under it on a phone instead of
+   pushing past the sheet edge. */
+.sheet-title {
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sheet-head > .cluster {
+  margin-left: auto;
 }
 
 .sheet[data-width='l'] {
@@ -857,7 +902,8 @@ textarea.input {
 }
 
 .chart .u-hz .u-cursor-y,
-.chart .u-legend {
+.chart .u-legend,
+.chart .u-off {
   display: none;
 }
 
@@ -868,6 +914,11 @@ textarea.input {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+/* Beside a band label the band already gives the air; the statement starts on the label's line. */
+.label-row-content > .empty {
+  padding-block: 0;
 }
 
 .empty[data-size='l'] {
@@ -989,6 +1040,8 @@ textarea.input {
 
 .segmented {
   display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
   flex-wrap: wrap;
   border: var(--rule-minor) solid var(--rule);
 }
@@ -1183,11 +1236,12 @@ textarea.input {
   text-transform: none;
   letter-spacing: 0;
   pointer-events: none;
-  visibility: hidden;
 }
 
-.tooltip[data-open='true'] {
-  visibility: visible;
+/* Not `visibility: hidden`: a hidden tooltip still takes layout room and widens the page when its
+   trigger sits near the right edge. `aria-describedby` still reads a `display: none` target. */
+.tooltip:not([data-open='true']) {
+  display: none;
 }
 
 /* ---------- key-value and meter ---------- */
@@ -1492,15 +1546,16 @@ textarea.input {
 /* Connected application pages: rule-separated bands and narrow-screen reflow. */
 .settings-nav { list-style: none; margin: 0; padding: 0; gap: 8px; }
 .settings-short { max-width: 24ch; }
-.listrow, .integration-row { border-bottom: 1px solid var(--rule); padding: 16px 0; }
-.listrow { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; justify-content: space-between; }
+.integration-row { border-bottom: 1px solid var(--rule); padding: 16px 0; }
 .table-scroll { max-width: 100%; overflow-x: auto; }
 .table-scroll table { width: 100%; border-collapse: collapse; }
 .table-scroll th, .table-scroll td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--rule); }
-.text-button { font: inherit; color: inherit; text-align: left; background: transparent; border: 0; padding: 4px 0; text-decoration: underline; cursor: pointer; overflow-wrap: anywhere; }
+.table-scroll :is(th, td):first-child { padding-left: 0; }
+.table-scroll :is(th, td):last-child { padding-right: 0; }
+.text-button { color: inherit; text-align: left; background: transparent; border: 0; padding: 4px 0; text-decoration: underline; cursor: pointer; overflow-wrap: anywhere; }
 .stack label, .band label { max-width: 100%; }
-.band input:not([type='checkbox']):not([type='radio']), .band select, .band textarea,
-.chat-layout input:not([type='checkbox']), .chat-layout select, .chat-layout textarea {
+.band input:not([type='checkbox']):not([type='radio']):not([type='range']):not(.input), .band select, .band textarea:not(.input),
+.chat-layout input:not([type='checkbox']):not([type='range']):not(.input), .chat-layout select, .chat-layout textarea:not(.input) {
   font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--rule); padding: 9px 12px; max-width: 100%;
 }
 .band textarea, .chat-layout textarea { display: block; width: 100%; resize: vertical; }
@@ -1524,14 +1579,27 @@ textarea.input {
 .status-chart-head { justify-content: space-between; margin-bottom: 24px; }
 .status-chart-grid + details { max-width: 100%; overflow-x: auto; }
 .status-chart-table, .status-samples { max-width: 100%; overflow-x: auto; }
+/* Band head (label + controls) sits apart from the numbers and charts under it. */
+.status-band-head { justify-content: space-between; margin-bottom: clamp(20px, 3vw, 32px); }
+/* A display-l model name keeps its underscores and descenders clear of the ID line below. */
+.status-head > .page-title { padding-bottom: 0.1em; }
+.status-endpoint { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; align-items: baseline; gap: 4px 16px; min-width: 0; }
+.status-chart-note { display: flex; flex-direction: column; gap: 8px; }
+.status-chart-note > .body { font-size: 15px; color: var(--mute); }
+.status-chart-note a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 .page-title { overflow-wrap: anywhere; }
+/* The ↗ never wraps onto a line of its own. */
+a > .acc[aria-hidden='true'] { white-space: nowrap; }
 .chart, .chart-host { min-width: 0; max-width: 100%; overflow: hidden; }
 
 /* ---------- usage history (docs/ui/02 §12) ---------- */
 .history-filters { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 16px 24px; }
 .history-filter-row { gap: 16px 20px; align-items: flex-end; }
-.history-filter { display: flex; flex-direction: column; gap: 6px; min-width: 0; max-width: 100%; }
+.history-filters .history-filter { display: flex; flex-direction: column; gap: 6px; min-width: 0; max-width: min(100%, 320px); }
 .history-filter .select, .history-filter select { max-width: min(100%, 320px); }
+.history-filter .input, .history-filter select { min-height: 44px; }
+/* A chart has no text baseline at its top: its band label aligns to the top, not to the legend. */
+.label-row:has(.chart) { align-items: flex-start; }
 .history-filter-actions { gap: 12px; align-items: center; }
 .history-legend { display: flex; flex-wrap: wrap; gap: 4px 20px; margin-top: 12px; overflow-wrap: anywhere; }
 .history-swatch[data-tone='acc'] { color: var(--acc); }
@@ -1567,13 +1635,15 @@ textarea.input {
 .integration-title { margin: 0; overflow-wrap: anywhere; }
 .integration-state { margin: 0; display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
 .integration-command { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; border: var(--rule-minor) solid var(--rule); padding: 10px 12px; }
-.integration-cmd { overflow-wrap: anywhere; min-width: 0; }
+/* The command takes the line and wraps inside it; the actions keep the right edge until there is no room. */
+.integration-cmd { overflow-wrap: anywhere; min-width: 0; flex: 1 1 30ch; }
+.integration-command > .cluster { flex: 0 0 auto; }
 .integration-toggle { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; align-items: center; }
 .integration-toggle .meta, .integration-toggle .tag { grid-column: 1 / -1; justify-self: start; }
 .integration-files { margin: 0; padding-left: 18px; overflow-wrap: anywhere; }
 .sdk-tabs { display: flex; flex-wrap: wrap; gap: 4px 20px; margin-bottom: 16px; border-bottom: var(--rule-minor) solid var(--rule); }
-.sdk-tabs > button { background: transparent; border: 0; padding: 8px 0; cursor: pointer; color: var(--ink); font: inherit; }
-.sdk-tabs > button[aria-selected='true'] { border-bottom-color: var(--ink); }
+.sdk-tabs > button { background: transparent; border: 0; border-bottom: var(--rule-major) solid transparent; padding: 8px 0; cursor: pointer; color: var(--ink); }
+.sdk-tabs > button[aria-selected='true'] { border-bottom-color: var(--acc); }
 .sdk-wrap { container-type: inline-size; min-width: 0; }
 .sdk-select { display: none; margin-bottom: 16px; }
 @container (max-width: 520px) { .sdk-tabs { display: none; } .sdk-select { display: block; } }
@@ -1583,7 +1653,9 @@ textarea.input {
 .settings-nav-col { position: sticky; top: 0; align-self: flex-start; }
 .settings-nav { display: flex; flex-direction: column; }
 .settings-nav > li { border-bottom: var(--rule-minor) solid var(--rule); }
-.settings-nav .navlink { display: block; padding: 8px 0; }
+.settings-nav .navlink { display: block; padding: 8px 0; border-bottom: 0; }
+/* The current section's rule turns accent instead of stacking a 2px underline on the 1px rule. */
+.settings-nav > li:has(> [aria-current='page']) { border-bottom: var(--rule-major) solid var(--acc); }
 .settings-select { display: none; flex-direction: column; gap: 6px; }
 @container (max-width: 700px) {
   .settings-nav { display: none; }
@@ -1592,9 +1664,14 @@ textarea.input {
 }
 .settings-pager { justify-content: space-between; border-top: var(--rule-minor) solid var(--rule); padding-top: 16px; }
 .settings-result { border-bottom: var(--rule-minor) solid var(--rule); padding-bottom: 12px; }
+/* A field laid out as a column (MCP servers): the head is its own height, not a 200px basis. */
+.field.stack > .field-head { flex: 0 0 auto; }
 .secret-field .field-head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: baseline; }
 .secret-value { min-width: min(100%, 32ch); }
-.data-note { overflow-wrap: anywhere; }
+.data-note { overflow-wrap: break-word; hyphens: auto; }
+/* About reads like the settings fields: one 1px-ruled row per item. */
+.about.stack { gap: 0; }
+.about > .label-row { padding: 18px 0; border-top: var(--rule-minor) solid var(--rule); }
 .about-notes { white-space: pre-wrap; max-width: 100%; overflow-x: auto; }
 .about-licenses { margin: 0; padding-left: 18px; }
 
@@ -1606,7 +1683,8 @@ textarea.input {
 .json-children { padding-left: 18px; border-left: var(--rule-minor) solid var(--rule); margin-left: 4px; }
 .json-leaf { white-space: nowrap; }
 .trace-name, .path-text { overflow-wrap: anywhere; }
-.path-row { gap: 8px 12px; }
+.path-row { gap: 4px 16px; justify-content: flex-end; align-items: baseline; }
+.path-row .path-text { font-size: 15px; text-align: right; }
 .ms-meta { gap: 6px 12px; align-items: center; }
 .ms-path { overflow-wrap: anywhere; }
 .overlay-editor .field-head { gap: 6px 10px; align-items: center; }

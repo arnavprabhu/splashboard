@@ -141,7 +141,7 @@ export function StepStorage() {
           if (mine !== seq.current) return;
           const issue = portIssue(v.errors);
           if (!issue) setCheck({ kind: 'ok' });
-          else setCheck({ kind: 'error', message: issue.code === 'port_in_use' ? t('welcome.storage.port_in_use', { port }) : issue.message });
+          else setCheck({ kind: 'error', message: issue.code === 'port_in_use' ? t('welcome.storage.port_in_use', { port: String(port) }) : issue.message });
         })
         .catch(() => mine === seq.current && setCheck({ kind: 'idle' }));
     }, 350);

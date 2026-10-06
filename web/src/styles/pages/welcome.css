@@ -15,7 +15,7 @@ button.wz-rail-row { cursor: pointer; }
 .wz-tight { gap: 8px; }
 .wz-grow { flex: 1 1 auto; min-width: 0; }
 .wz-full { flex-basis: 100%; margin: 0; }
-.wz-check-dd, .wz-field-dd { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; min-width: 0; }
+.wz-check-dd, .wz-field-dd { margin: 0; display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; min-width: 0; }
 .wz-check-value { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; min-width: 0; }
 .wz-check-text { min-width: 0; overflow-wrap: anywhere; }
 .wz-check-extra { flex-basis: 100%; }
@@ -28,15 +28,16 @@ button.wz-rail-row { cursor: pointer; }
 .wz-import-row { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; border-bottom: var(--rule-minor) solid var(--rule); padding: 8px 0; overflow-wrap: anywhere; }
 .wz-sub { border-top: var(--rule-minor) solid var(--rule); padding-top: 16px; }
 .wz-foot-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px 24px; }
-.wz-foot-actions { display: flex; flex-wrap: wrap-reverse; gap: 12px; justify-content: flex-end; }
-.wz-presets { display: grid; }
+/* Back left of Continue; when they wrap, Continue keeps the first line. */
+.wz-foot-actions { display: flex; flex-direction: row-reverse; flex-wrap: wrap; gap: 12px; justify-content: flex-start; margin-left: auto; }
+.wz-presets { display: grid; border-top: var(--rule-minor) solid var(--rule); }
 .wz-preset { display: grid; grid-template-columns: 2ch minmax(0, 1fr); gap: 4px 12px; padding: 14px 0 14px 12px; border-bottom: var(--rule-minor) solid var(--rule); border-left: var(--rule-major) solid transparent; cursor: pointer; }
 .wz-preset[data-selected='true'] { border-left-color: var(--ink); }
 .wz-preset:focus-within { outline: 2px solid var(--ink); outline-offset: 2px; }
 .wz-preset .body { grid-column: 2; }
 .wz-preset-mark { grid-row: span 2; }
 .wz-preset-name { margin: 0; }
-.wz-models { list-style: none; margin: 0; padding: 0; }
+.wz-models { list-style: none; margin: 0; padding: 0; border-top: var(--rule-minor) solid var(--rule); }
 .wz-model { border-bottom: var(--rule-minor) solid var(--rule); padding: 14px 0; display: grid; gap: 6px; }
 .wz-model-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 16px; }
 .wz-model-name { overflow-wrap: anywhere; }

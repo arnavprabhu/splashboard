@@ -18,7 +18,7 @@
 
 /* list */
 .chat-list .search { width: 100%; }
-.chat-new { justify-self: start; }
+.chat-new { justify-self: start; align-self: flex-start; }
 .chat-rows { list-style: none; margin: 0 0 16px; padding: 0; }
 .chat-row { position: relative; border-bottom: var(--rule-minor) solid var(--rule); }
 .chat-row[data-active='true'] { border-left: var(--rule-major) solid var(--acc); padding-left: 8px; }
@@ -44,6 +44,8 @@
 
 /* messages */
 .chat-message { border-bottom: var(--rule-minor) solid var(--rule); padding: 20px 0; overflow-wrap: anywhere; display: grid; gap: 10px; }
+/* The composer's 2px rule closes the thread; the last message draws no rule of its own above it. */
+.chat-messages > .chat-message:last-child { border-bottom: 0; }
 .chat-message:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 .chat-layout[data-width='wide'] .chat-message[data-role='user'] { padding-left: var(--gutter); }
 .chat-message-head, .chat-message-foot { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px 16px; }
@@ -77,7 +79,10 @@
 .chat-panel-tabs { display: flex; flex-wrap: wrap; gap: 4px 16px; border-bottom: var(--rule-minor) solid var(--rule); margin-bottom: 16px; }
 .chat-panel-tabs > button { background: transparent; border: 0; border-bottom: var(--rule-major) solid transparent; padding: 6px 0; font: inherit; color: var(--ink); cursor: pointer; }
 .chat-panel-tabs > button[aria-selected='true'] { border-bottom-color: var(--acc); }
-.chat-panel-fields .field { border-bottom: var(--rule-minor) solid var(--rule); padding-bottom: 12px; }
+/* One 1px rule between fields (each field draws its own top rule); none doubled under the tabs. */
+.chat-panel-fields { gap: 0; }
+.chat-panel-fields .field { padding-block: 14px; }
+.chat-panel-fields > .field:first-child { border-top: 0; padding-top: 0; }
 .chat-panel-fields .field-head { gap: 6px 10px; align-items: baseline; }
 .chat-num .input { width: 12ch; }
 .chat-radio { display: flex; gap: 8px; align-items: baseline; padding: 4px 0; }

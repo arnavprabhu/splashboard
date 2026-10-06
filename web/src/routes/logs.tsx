@@ -223,15 +223,20 @@ export default function LogsPage() {
       <section class="band tight logs-band" aria-label={t("logs.toolbar")}>
         <div class="logs-toolbar">
           <div class="logs-tools-primary">
-            <SegmentedControl
-              label={t("logs.source")}
-              value={source}
-              options={[
-                { value: "engine", label: t("logs.source.engine") },
-                { value: "manager", label: t("logs.source.manager") },
-              ]}
-              onChange={(v) => setParam("source", v === "engine" ? null : v)}
-            />
+            <div class="logs-field">
+              <span class="label" aria-hidden="true">
+                {t("logs.source")}
+              </span>
+              <SegmentedControl
+                label={t("logs.source")}
+                value={source}
+                options={[
+                  { value: "engine", label: t("logs.source.engine") },
+                  { value: "manager", label: t("logs.source.manager") },
+                ]}
+                onChange={(v) => setParam("source", v === "engine" ? null : v)}
+              />
+            </div>
             <div class="logs-field">
               <span class="label" aria-hidden="true">
                 {t("logs.level")}

@@ -121,7 +121,7 @@ export default function StatusPage() {
           <Empty
             title={t("status.charts.empty_none")}
             action={
-              <Link href="/models/downloader" class="btn" data-variant="accent">
+              <Link href="/models/downloader" class="btn">
                 {t("status.actions.open_downloader")}
               </Link>
             }
@@ -154,7 +154,7 @@ export default function StatusPage() {
         group !== "starting" &&
         !(models !== null && models.length === 0) && (
           <Section label={t("status.charts.label")}>
-            <Empty title={t("status.charts.empty_stopped")}>{t("status.charts.empty_stopped_body", { port })}</Empty>
+            <Empty title={t("status.charts.empty_stopped")}>{t("status.charts.empty_stopped_body", { port: String(port) })}</Empty>
           </Section>
         )
       )}

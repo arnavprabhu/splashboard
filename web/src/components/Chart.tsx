@@ -83,7 +83,8 @@ export function buildOptions(el: HTMLElement, props: ChartProps, width: number):
     height: props.height ?? 180,
     legend: { show: false },
     cursor: { y: false, points: { show: false } },
-    scales: { x: { time: props.time !== false }, ...(props.yRange ? { y: { range: props.yRange } } : {}) },
+    // uPlot widens a one-sample time axis by 86400/ms seconds (about 1,000 days); show a day either side.
+    scales: { x: { time: props.time !== false, range: (u, a, b) => (u.data[0].length == 1 ? [a - 86400, a + 86400] : [a, b]) },...(props.yRange ? { y: { range: props.yRange } } : {}) },
     axes: [axis(), axis(yFormat ? (_u, splits) => splits.map((v) => (v === null ? '' : yFormat(v))) : undefined, true)],
     series: [
       {},

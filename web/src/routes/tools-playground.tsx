@@ -254,7 +254,7 @@ export default function Playground() {
                         aria-label={t("tools.pg.template")}
                         value=""
                         options={[
-                          { value: "", label: `${t("tools.pg.template")} ▾` },
+                          { value: "", label: t("tools.pg.template") },
                           ...templatesFor(ep.id).map((tpl) => ({ value: tpl.id, label: t(tpl.label as "tools.template.chat") })),
                         ]}
                         onChange={(v) => {
