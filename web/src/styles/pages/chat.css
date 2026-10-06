@@ -39,7 +39,15 @@
    pushing the page wider than a 360px phone (acceptance 2026-10-04). */
 .chat-model .menu { max-width: 100%; min-width: 0; }
 .chat-model .menu > .btn { max-width: 100%; white-space: normal; text-align: left; justify-content: flex-start; }
-.chat-model-meta { gap: 6px 12px; align-items: center; }
+.chat-model-meta { gap: 6px 0; align-items: center; }
+/* The chat is a workspace: a tighter head, and the model row sits under a 1px rule with its facts
+   divided by 1px rules instead of floating. */
+.page-head:has(.chat-model) { padding-bottom: 0; gap: 20px; }
+.page-head:has(.chat-model) > .cluster { border-top: var(--rule-minor) solid var(--rule); padding: 10px 0 12px; align-items: center; }
+.chat-model .label { color: var(--mute); }
+.chat-model-meta > * { padding: 0 12px; border-left: var(--rule-minor) solid var(--rule); line-height: 1; }
+.chat-model-meta > :first-child { margin-left: 4px; }
+@media (max-width: 700px) { .chat-model-meta > * { border-left: 0; padding: 0 12px 0 0; } .chat-model-meta > :first-child { margin-left: 0; } }
 .chat-model-profile { padding-left: 16px; }
 
 /* messages */
