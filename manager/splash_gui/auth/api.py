@@ -34,9 +34,10 @@ def auth_state(request: Request, state: State) -> AuthState:
 
 
 @router.post("/auth/login", response_model=AuthState, responses=error_responses(401, 429))
-def login(body: LoginRequest, response: Response, state: State) -> AuthState:
+def login(body: LoginRequest, request: Request, response: Response, state: State) -> AuthState:
     auth = state.auth
-    if not auth.login_allowed():
+    client = request.client.host if request.client else ""
+    if not auth.login_allowed(client):
         raise ApiError(
             429,
             "Too many failed logins; wait a minute and try again",
@@ -44,7 +45,7 @@ def login(body: LoginRequest, response: Response, state: State) -> AuthState:
             headers={"Retry-After": "60"},
         )
     if not auth.check_api_key(body.key):
-        auth.record_login_failure()
+        auth.record_login_failure(client)
         raise ApiError(401, "That API key is not correct", "invalid_key")
     response.set_cookie(
         SESSION_COOKIE,

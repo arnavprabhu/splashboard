@@ -35,6 +35,7 @@ from .downloads.api import router as downloads_router
 from .engine.api import router as engine_router
 from .errors import install_error_handlers
 from .events.api import router as events_router
+from .hardening import Hardening, spa_csp
 from .integrations.api import router as integrations_router
 from .integrations.router import router as codex_router
 from .logs.api import router as logs_router
@@ -242,7 +243,10 @@ def spa_response(dist: Path | None, path: str) -> Response:
                 },
                 status_code=404,
             )
-    return FileResponse(root / "index.html", headers={"Cache-Control": "no-cache"})
+    index = root / "index.html"
+    return FileResponse(
+        index, headers={"Cache-Control": "no-cache", "Content-Security-Policy": spa_csp(index)}
+    )
 
 
 def create_app(config: AppConfig | None = None) -> FastAPI:
@@ -251,7 +255,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         title="Splash GUI manager",
         version=__version__,
         openapi_url=f"{ADMIN_PREFIX}/openapi.json",
-        docs_url=f"{ADMIN_PREFIX}/docs",
+        # Swagger UI loads its scripts from a CDN onto the admin origin; the schema stays.
+        docs_url=None,
         redoc_url=None,
         separate_input_output_schemas=False,
         lifespan=lifespan,
@@ -280,6 +285,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.include_router(proxy_router)
     app.include_router(codex_router)
     app.add_middleware(AdminGuard, settings=state.settings, auth=state.auth)
+    app.add_middleware(Hardening)
     app.openapi = lambda: custom_openapi(app)  # type: ignore[method-assign]
     return app
 

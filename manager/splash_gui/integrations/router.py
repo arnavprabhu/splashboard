@@ -15,7 +15,16 @@ from ..settings.parsers import parse_authority
 from ..state import get_state
 
 router = APIRouter(include_in_schema=False)
-HOP = {"host", "connection", "keep-alive", "transfer-encoding", "upgrade", "content-length"}
+# Hop-by-hop headers, plus `cookie`: the manager's own cookies never go to OpenAI.
+HOP = {
+    "host",
+    "connection",
+    "keep-alive",
+    "transfer-encoding",
+    "upgrade",
+    "content-length",
+    "cookie",
+}
 
 
 def local_only(request: Request) -> bool:

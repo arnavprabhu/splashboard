@@ -48,7 +48,8 @@ class AuthManager:
     _cli_token: str | None = None
     _session_secret: bytes | None = None
     _revoked: dict[str, float] = field(default_factory=dict)
-    _failures: deque[float] = field(default_factory=deque)
+    # Failed logins per client address, so one LAN host cannot lock out the others.
+    _failures: dict[str, deque[float]] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     # CLI token ---------------------------------------------------------------
@@ -155,13 +156,19 @@ class AuthManager:
 
     # Login throttling ----------------------------------------------------------
 
-    def login_allowed(self, now: float | None = None) -> bool:
+    def login_allowed(self, client: str = "", now: float | None = None) -> bool:
         now = time.monotonic() if now is None else now
         with self._lock:
-            while self._failures and now - self._failures[0] > LOGIN_WINDOW_S:
-                self._failures.popleft()
-            return len(self._failures) < LOGIN_MAX_FAILURES
+            for key in list(self._failures):
+                times = self._failures[key]
+                while times and now - times[0] > LOGIN_WINDOW_S:
+                    times.popleft()
+                if not times:
+                    del self._failures[key]
+            return len(self._failures.get(client, ())) < LOGIN_MAX_FAILURES
 
-    def record_login_failure(self, now: float | None = None) -> None:
+    def record_login_failure(self, client: str = "", now: float | None = None) -> None:
         with self._lock:
-            self._failures.append(time.monotonic() if now is None else now)
+            self._failures.setdefault(client, deque()).append(
+                time.monotonic() if now is None else now
+            )

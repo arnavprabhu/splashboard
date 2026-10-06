@@ -93,10 +93,11 @@ def test_revoked_session_refused(auth: AuthManager) -> None:
 
 def test_login_throttle(auth: AuthManager) -> None:
     for i in range(10):
-        assert auth.login_allowed(now=float(i))
-        auth.record_login_failure(now=float(i))
-    assert not auth.login_allowed(now=10.0)
-    assert auth.login_allowed(now=200.0)
+        assert auth.login_allowed("10.0.0.2", now=float(i))
+        auth.record_login_failure("10.0.0.2", now=float(i))
+    assert not auth.login_allowed("10.0.0.2", now=10.0)
+    assert auth.login_allowed("10.0.0.3", now=10.0), "other clients are not locked out"
+    assert auth.login_allowed("10.0.0.2", now=200.0)
 
 
 # Host allowlist --------------------------------------------------------------
