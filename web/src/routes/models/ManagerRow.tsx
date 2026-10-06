@@ -189,7 +189,7 @@ export function ManagerRow(props: ManagerRowProps) {
   return (
     <Row
       name={short}
-      nameClass="display-m"
+      nameClass="heading"
       onOpen={onOpen}
       openLabel={t('models.row.open_label', { id })}
       modelId={id}

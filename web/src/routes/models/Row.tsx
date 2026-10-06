@@ -2,7 +2,7 @@ import type { ComponentChildren } from 'preact';
 
 export interface RowProps {
   name: string;
-  /** `display-m` (Manager, 03 §1.2) or `heading` (Search/Supported, decision M2). */
+  /** `display-m` or `heading` (Manager, Search, Supported). */
   nameClass?: string;
   /** Opens the detail drawer; Enter on the name does the same. */
   onOpen?: () => void;
