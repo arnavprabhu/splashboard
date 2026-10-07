@@ -14,6 +14,7 @@ from __future__ import annotations
 import contextlib
 import glob
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -96,3 +97,74 @@ def open_paths(paths: list[Path], timeout: float = 5.0) -> set[str] | None:
             elif name in resolved:
                 found.add(resolved[name])
     return found
+
+
+# What a compatibility check fetches into the Hub cache: Splash's `Repository.file`
+# (`hf_hub_download`) for these metadata files (install/upstream.py, and the legacy
+# manifest in helpers/inspect_model.py). Weights and GGUF headers are read in place
+# over HTTP range requests (`Repository.open`), so a check downloads nothing else.
+CHECK_FILES = frozenset(
+    {"config.json", "preprocessor_config.json", "model.safetensors.index.json", "manifest.json"}
+)
+
+
+def check_only(folder: Path) -> bool:
+    """Whether a repository folder holds only what a compatibility check fetches:
+    snapshot links to `CHECK_FILES`, the blobs they point at, `refs/` and
+    `.no_exist/` markers. Any other file, a partial or an unlinked blob (a download
+    in progress) means it is someone's data."""
+    if not folder.is_dir() or folder.is_symlink():
+        return False
+    blobs: set[str] = set()
+    linked: set[str] = set()
+    for path in folder.rglob("*"):
+        parts = path.relative_to(folder).parts
+        top = parts[0]
+        if top in ("refs", ".no_exist"):
+            continue
+        if len(parts) == 1 and top in ("blobs", "snapshots") and path.is_dir():
+            continue
+        if top == "snapshots" and len(parts) == 2 and path.is_dir() and not path.is_symlink():
+            continue
+        if top == "snapshots" and len(parts) == 3 and parts[2] in CHECK_FILES:
+            if not path.is_symlink():
+                return False
+            target = Path(path.readlink())
+            if target.parent.name != "blobs":
+                return False
+            linked.add(target.name)
+            continue
+        if top == "blobs" and len(parts) == 2 and BLOB.match(path.name) and path.is_file():
+            blobs.add(path.name)
+            continue
+        return False
+    return blobs <= linked
+
+
+def check_footprint(models_dir: Path, repo_id: str) -> tuple[bool, bool]:
+    """Whether the repository folder and its `.locks/` entry exist, read before a
+    compatibility check so that afterwards only what it created is removed."""
+    folder = repo_folder(models_dir, repo_id)
+    return folder.exists(), (models_dir / ".locks" / folder.name).exists()
+
+
+def remove_check_leftover(models_dir: Path, repo_id: str, before: tuple[bool, bool]) -> bool:
+    """Delete what a compatibility check created in the Hub cache (acceptance 1.3 F5):
+    the repository folder, only if it did not exist before (`before`, from
+    `check_footprint`) and holds nothing but the check's own metadata
+    (`check_only`), and then its `.locks/` entry if that is new too and holds only
+    lock files."""
+    folder_existed, locks_existed = before
+    folder = repo_folder(models_dir, repo_id)
+    if folder_existed or not check_only(folder):
+        return False
+    shutil.rmtree(folder)
+    locks = models_dir / ".locks" / folder.name
+    with contextlib.suppress(OSError):
+        if (
+            not locks_existed
+            and locks.is_dir()
+            and all(p.suffix == ".lock" for p in locks.iterdir())
+        ):
+            shutil.rmtree(locks)
+    return True

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..engine.flags import engine_env
 from ..errors import ApiError
-from ..hubcache import blobs_dir
+from ..hubcache import blobs_dir, check_footprint, remove_check_leftover
 from ..jobs import Job, JobFailed
 from ..paths import splash_models_dir
 from ..schemas import (
@@ -122,6 +122,9 @@ class Models:
         self.language_file_sets: dict[str, list[str]] = {}
         self.catalog_cache: dict[str, tuple[float, Any]] = {}
         self.local = LocalModels(state, self)
+        # Checks in flight per repository, and what its Hub cache folder looked like
+        # before the first of them (acceptance 1.3 F5: clean up what they created).
+        self.checking: dict[str, tuple[int, tuple[bool, bool], Path]] = {}
 
     async def start(self) -> None:
         await self.local.start()
@@ -440,6 +443,8 @@ class Models:
         argv = [str(engine.python), str(Path(__file__).parents[1] / "helpers" / "inspect_model.py")]
         timeout = inspect_timeout(repo.files, variant, len(missing) if missing else None)
 
+        self._check_started(repo_id)
+
         async def go() -> None:
             try:
                 await ins.run_helper(run, argv, env, spec, timeout)
@@ -447,12 +452,43 @@ class Models:
                     self._compose(run)  # records the selected file sets
             finally:
                 self.runs.pop(key, None)
+                self._check_finished(repo_id)
                 run.done.set()
                 run.notify()
 
         self.runs[key] = run
         run.task = asyncio.create_task(go())
         return run, repo
+
+    def _check_started(self, repo_id: str) -> None:
+        count, before, models_dir = self.checking.get(repo_id, (0, (True, True), Path()))
+        if count == 0:
+            models_dir = self.state.settings.models_dir()
+            before = check_footprint(models_dir, repo_id)
+        self.checking[repo_id] = (count + 1, before, models_dir)
+
+    def _check_finished(self, repo_id: str) -> None:
+        """After the last check of a repository: Splash's check fetches `config.json`
+        and similar metadata into the models folder (`hf_hub_download`), which left a
+        `models--<owner>--<repo>` folder per repository checked. Remove it when the
+        checks created it and it holds only that metadata; never while the
+        repository downloads (a download owns the folder then)."""
+        count, before, models_dir = self.checking.pop(repo_id)
+        if count > 1:
+            self.checking[repo_id] = (count - 1, before, models_dir)
+            return
+        downloads = self.state.downloads
+        if downloads is not None and any(
+            split_model_id(item.model)[0] == repo_id
+            and item.state in ("queued", "running", "verifying", "paused")
+            for item in downloads.items.values()
+        ):
+            return
+        try:
+            if remove_check_leftover(models_dir, repo_id, before):
+                log.info("removed the compatibility check's metadata for %s", repo_id)
+        except OSError as error:
+            log.warning("could not remove the check's folder for %s: %s", repo_id, error)
 
     def _compose(self, run: ins.Run, cached: bool = False) -> InspectResult:
         """An InspectResult from what Splash has said so far: final once nothing is
