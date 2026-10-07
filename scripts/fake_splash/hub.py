@@ -12,6 +12,15 @@ Every fixture repository's file set comes from the fake installer's own
 exactly what `install/models.py prepare` downloads and what `install/upstream.py`
 screens. Nothing here reaches the network.
 
+Large-file downloads (D61) take the real Hub's shape: `HEAD …/resolve/REV/FILE` for
+an LFS file answers `302` with `X-Repo-Commit`, `X-Linked-Etag` (the sha256),
+`X-Linked-Size`, `X-Xet-Hash` and a `Location` on a second server, the fake CDN
+(`cdn_url`, another port, so a different host for the token rule). The CDN serves
+`/xet-bridge/REPO/XETHASH?Expires=…&Signature=…` with `Range: bytes=N-` → `206` and
+`Content-Range`, ignores `If-Range` (as the real xet-bridge does), answers `403`
+without a signature, and streams at `cdn_bps` (env `FAKE_HUB_CDN_BPS`, default
+unthrottled). Every request to either server is recorded in `requests`.
+
 Usage from a test:
 
     with FakeHub() as hub:
@@ -24,14 +33,19 @@ Usage from a test:
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
+import os
+import re
 import sys
 import threading
+import time
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from typing import Any
+from urllib.parse import parse_qs, unquote, urlsplit
 
 sys.path.insert(0, str(Path(__file__).parent / "pkg"))
 
@@ -150,8 +164,56 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, payload: object, status: int = 200) -> None:
         self._send(status, json.dumps(payload).encode(), "application/json")
 
+    def do_HEAD(self) -> None:
+        path = unquote(urlsplit(self.path).path)
+        hub: FakeHub = self.server.hub  # type: ignore[attr-defined]
+        hub.record("hub", self)
+        try:
+            with _ROUTE_LOCK:
+                if "/resolve/" not in path:
+                    raise KeyError(path)
+                name, revision, filename = self._resolve(path)
+                self._head(hub, name, revision, filename)
+        except (ValueError, KeyError):
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+    def _head(self, hub: FakeHub, name: str, revision: str, filename: str) -> None:
+        """huggingface_hub's `get_hf_file_metadata` reads these headers. An LFS file
+        redirects to the CDN, as an Xet-backed file on the real Hub does."""
+        repo, files, _ = repository(name, revision)
+        remote = files.get(filename)
+        if remote is None or not remote.lfs:
+            body, _ = self._body(name, revision, filename)
+            oid = hashlib.sha1(f"blob {len(body)}\0".encode() + body, usedforsecurity=False)
+            self.send_response(200)
+            self.send_header("ETag", f'"{oid.hexdigest()}"')
+            self.send_header("X-Repo-Commit", repo.commit)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            return
+        sha = remote.blob
+        xet = hashlib.sha256(b"xet:" + sha.encode()).hexdigest()
+        hub.cdn_files[xet] = remote
+        expires = int(time.time()) + 3600
+        signature = hashlib.sha256(f"{xet}{expires}".encode()).hexdigest()[:32]
+        self.send_response(302)
+        self.send_header(
+            "Location",
+            f"{hub.cdn_url}/xet-bridge/{name}/{xet}?Expires={expires}&Signature={signature}",
+        )
+        self.send_header("X-Repo-Commit", repo.commit)
+        self.send_header("X-Linked-Etag", f'"{sha}"')
+        self.send_header("X-Linked-Size", str(remote.size))
+        self.send_header("X-Xet-Hash", xet)
+        self.send_header("ETag", f'W/"{hashlib.sha1(sha.encode(), usedforsecurity=False).hexdigest()}"')
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self) -> None:
         path = unquote(urlsplit(self.path).path)
+        self.server.hub.record("hub", self)  # type: ignore[attr-defined]
         try:
             # The fake installer's selection code swaps sys.stdout and shares
             # module state, so concurrent requests (the catalog fetches every
@@ -225,21 +287,89 @@ class Handler(BaseHTTPRequestHandler):
         return name, revision, filename
 
     def _file(self, name: str, revision: str, filename: str) -> None:
+        self._send(200, *self._body(name, revision, filename))
+
+    @staticmethod
+    def _body(name: str, revision: str, filename: str) -> tuple[bytes, str]:
         if name == LEGACY:
             if filename != "manifest.json":
                 raise KeyError(filename)
-            self._json(legacy_manifest())
-            return
+            return json.dumps(legacy_manifest()).encode(), "application/json"
         _, files, config = repository(name, revision)
         if filename == "config.json":
-            self._json(config)
-        elif filename == "README.md":
-            self._send(200, CARD.encode(), "text/markdown; charset=utf-8")
-        elif filename in files:
+            return json.dumps(config).encode(), "application/json"
+        if filename == "README.md":
+            return CARD.encode(), "text/markdown; charset=utf-8"
+        if filename in files:
             remote = files[filename]
-            self._send(200, remote.read(0, remote.size), "application/octet-stream")
-        else:
-            raise KeyError(filename)
+            return remote.read(0, remote.size), "application/octet-stream"
+        raise KeyError(filename)
+
+
+_RANGE = re.compile(r"^bytes=(\d+)-(\d*)$")
+
+
+class CdnHandler(BaseHTTPRequestHandler):
+    """The fake CDN behind an LFS redirect (the real one is `us.aws.cdn.hf.co`'s
+    xet-bridge): byte ranges, no auth, a signed query string."""
+
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *args: object) -> None:
+        pass
+
+    def _empty(self, status: int) -> None:
+        self.send_response(status)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_GET(self) -> None:
+        hub: FakeHub = self.server.hub  # type: ignore[attr-defined]
+        entry = hub.record("cdn", self)
+        parts = urlsplit(self.path)
+        if "Signature" not in parse_qs(parts.query):
+            entry["status"] = 403
+            self._empty(403)
+            return
+        remote = hub.cdn_files.get(parts.path.rsplit("/", 1)[-1])
+        if remote is None:
+            entry["status"] = 404
+            self._empty(404)
+            return
+        start, end, status = 0, remote.size - 1, 200
+        wanted = self.headers.get("Range")
+        if wanted:
+            match = _RANGE.match(wanted)
+            if match is None or int(match.group(1)) >= remote.size:
+                entry["status"] = 416
+                self._empty(416)
+                return
+            start = int(match.group(1))
+            end = min(end, int(match.group(2))) if match.group(2) else end
+            status = 206
+        entry["status"] = status
+        self.send_response(status)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(end - start + 1))
+        self.send_header("Accept-Ranges", "bytes")
+        # The xet-bridge's ETag is the Xet hash, not the sha256; If-Range is ignored.
+        self.send_header("ETag", f'"{parts.path.rsplit("/", 1)[-1]}"')
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{remote.size}")
+        self.end_headers()
+        offset, began = start, time.monotonic()
+        try:
+            while offset <= end:
+                chunk = remote.read(offset, min(64 << 10, end + 1 - offset))
+                self.wfile.write(chunk)
+                offset += len(chunk)
+                rate = hub.cdn_bps
+                if rate:
+                    ahead = (offset - start) / rate - (time.monotonic() - began)
+                    if ahead > 0:
+                        time.sleep(ahead)
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
 
 def _catalog() -> list[str]:
@@ -257,24 +387,61 @@ def _catalog() -> list[str]:
 
 
 class FakeHub:
-    """A running fake Hub. Use as a context manager; `.url` is the endpoint."""
+    """A running fake Hub and its CDN. Use as a context manager; `.url` is the
+    endpoint, `.requests` every request either server received."""
 
     def __init__(self) -> None:
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self.cdn_files: dict[str, models.RemoteFile] = {}
+        self.cdn_bps = int(os.environ.get("FAKE_HUB_CDN_BPS") or 0)
+        self.requests: list[dict[str, Any]] = []
+        self._lock = threading.Lock()
+        self._servers = [
+            ThreadingHTTPServer(("127.0.0.1", 0), Handler),
+            ThreadingHTTPServer(("127.0.0.1", 0), CdnHandler),
+        ]
+        self._threads = []
+        for server in self._servers:
+            server.hub = self  # type: ignore[attr-defined]
+            server.daemon_threads = True
+            self._threads.append(threading.Thread(target=server.serve_forever, daemon=True))
 
     @property
     def url(self) -> str:
-        return f"http://127.0.0.1:{self._server.server_address[1]}"
+        return f"http://127.0.0.1:{self._servers[0].server_address[1]}"
+
+    @property
+    def cdn_url(self) -> str:
+        return f"http://127.0.0.1:{self._servers[1].server_address[1]}"
+
+    def record(self, host: str, handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+        """Note a request; the CDN fills in `status` once it has answered."""
+        parts = urlsplit(handler.path)
+        entry: dict[str, Any] = {
+            "host": host,
+            "method": handler.command,
+            "path": unquote(parts.path),
+            "query": parts.query,
+            "headers": {k.lower(): v for k, v in handler.headers.items()},
+            "status": None,
+        }
+        with self._lock:
+            self.requests.append(entry)
+        return entry
+
+    def requests_to(self, host: str) -> list[dict[str, Any]]:
+        with self._lock:
+            return [r for r in self.requests if r["host"] == host]
 
     def start(self) -> FakeHub:
-        self._thread.start()
+        for thread in self._threads:
+            thread.start()
         return self
 
     def stop(self) -> None:
-        self._server.shutdown()
-        self._server.server_close()
-        self._thread.join(timeout=5)
+        for server, thread in zip(self._servers, self._threads, strict=True):
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
 
     def __enter__(self) -> FakeHub:
         return self.start()

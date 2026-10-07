@@ -153,6 +153,12 @@ Installer (`install/models.py`, and the install step of `serve`):
 | `FAKE_SPLASH_DL_FAIL_AFTER` | half of the first weight file | Bytes written before `network_mid` or `disk_full` |
 | `FAKE_SPLASH_INSPECT_SECONDS` | 0 | Time the compatibility helper spends on one GGUF variant's header (`install/upstream.py` `_gguf_target`): `0.3`, or `0.3,UD-Q4_K_M=1` to slow one variant down (D59) |
 
+Fake Hub (`hub.py`, started by `launch.sh fake` and the `fake_hub` test fixtures):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `FAKE_HUB_CDN_BPS` | unthrottled | Rate of its fake CDN, bytes/s (also `FakeHub.cdn_bps`). `HEAD …/resolve/…` of an LFS file answers `302` to the CDN with `X-Linked-Etag`, `X-Linked-Size`, `X-Repo-Commit` and `X-Xet-Hash`, as the real Hub does; the CDN serves `Range: bytes=N-` as `206`, ignores `If-Range` (like the real xet-bridge) and answers `403` without a signature. Every request is in `FakeHub.requests`. The manager's Range downloads (D61) use this; the fake installer reads no network at all |
+
 To watch a load that (re)installs in the UI (`EngineView.install`, docs/api.md §3.1),
 make the files big and slow, then install a model and change its commit so the next
 load fetches again, e.g. `FAKE_SPLASH_DL_SHARD_BYTES=2G FAKE_SPLASH_DL_BPS=50M make dev
