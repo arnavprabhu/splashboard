@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import httpx
@@ -260,3 +260,74 @@ def test_open_signs_the_browser_in_with_a_one_time_link(
     )
     assert exchanged.status_code == 200, exchanged.text
     assert exchanged.json()["method"] == "session"
+
+
+@pytest.fixture
+def foreign_server(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[int, list[tuple[str, str]]]]:
+    """A real HTTP server on a loopback port that answers like oMLX: `/health` is
+    200 `{"status": "ok"}` and every other path is 200 JSON. It records each request's
+    path and Authorization header."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    seen: list[tuple[str, str]] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def _answer(self) -> None:
+            seen.append((self.path, self.headers.get("Authorization", "")))
+            body = b'{"status":"ok"}' if self.path == "/health" else b'{"state":"ready"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        do_GET = do_POST = do_PUT = do_DELETE = _answer
+
+        def log_message(self, *args: Any) -> None:
+            return None
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    monkeypatch.setenv("SPLASH_PORT", str(port))
+    try:
+        yield port, seen
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [["status"], ["--json", "status"], ["ls"], ["load", MODEL], ["open", "settings"]],
+)
+def test_a_real_foreign_server_on_the_port_is_never_trusted(
+    argv: list[str],
+    foreign_server: tuple[int, list[tuple[str, str]]],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """acceptance-real.md "Port caution": without --port the CLI uses the settings port,
+    and oMLX answers /health there with a 200. Over a real socket, the CLI must see that
+    it isn't Splash GUI: no admin call, no CLI token, no browser, a clear error."""
+    port, seen = foreign_server
+    opened: list[str] = []
+    monkeypatch.setattr("webbrowser.open", opened.append)
+    code, out, err = run(capsys, *argv)
+    assert code == 1
+    # --json prints the error object on stdout; the human layout uses stderr.
+    message = json.loads(out)["error"]["message"] if "--json" in argv else err
+    assert "not Splash GUI" in message and f"port {port}" in message, message
+    assert seen == [("/health", "")], "only an anonymous /health may reach another server"
+    assert opened == []
+
+
+def test_doctor_reports_a_real_foreign_server_as_a_port_conflict(
+    foreign_server: tuple[int, list[tuple[str, str]]], capsys: pytest.CaptureFixture[str]
+) -> None:
+    port, seen = foreign_server
+    _, out, _ = run(capsys, "doctor")
+    assert f"Another server (not Splash GUI) answers on port {port}" in out
+    assert seen == [("/health", "")]
