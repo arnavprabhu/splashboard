@@ -22,7 +22,9 @@ pkg/                     laid out like $(brew --prefix)/opt/splash (bin/) and it
 │   ├── launcher.py      `splash --version | serve | claude|opencode|codex|hermes|pi`
 │   ├── models.py        fake installer, same CLI as the real install/models.py
 │   ├── paths.py         DATA from SPLASH_GUI_FAKE_DATA (never ~/Library/Application Support/Splash)
-│   └── families.py      verbatim copy
+│   ├── families.py      verbatim copy (1.3.0: names and draft repos only)
+│   ├── signatures.py    each family's config fields; stands in for the engine's model-check
+│   └── upstream.py      inspect_target/check_model stand-in for the compatibility helper
 └── server/
     ├── fake_server.py   HTTP routes, SSE, auth/Host checks, control endpoints, SIGINT
     ├── fake_engine.py   memory plan, startup lines, generation timing, counters, /status
@@ -158,7 +160,7 @@ reused.` and writes a growing `<hash>.<uuid8>.incomplete`.
 
 Support comes from the repository name: `*35B-A3B*` is Qwen3.6-35B-A3B,
 `*27B*` is Qwen3.8-27B, and anything else is refused as incompatible with
-`families.family_for`'s wording. `prepare` starts each unfinished file again
+the engine model-check's wording. `prepare` starts each unfinished file again
 in a new partial blob, as huggingface_hub 1.28 does (`FAKE_SPLASH_DL_HUB=legacy`
 resumes `<hash>.incomplete` instead).
 SIGINT exits 130. SIGTERM keeps its default action, as in the real installer,

@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,12 @@ def variant_label(repo_id: str, name: str, names: list[str], upstream: Any) -> s
 def main() -> None:
     from install import families, hub, models, upstream  # type: ignore[import-not-found]
 
+    # Splash 1.3.0 writes a GGUF's derived config and metadata into a scratch
+    # directory, and the target carries the family the engine's model-check
+    # found (splash/install/upstream.py:165-204).
+    def inspect_target(choice: str | None, language_only: bool, scratch: str) -> Any:
+        return upstream.inspect_target(repo, choice, language_only, Path(scratch))
+
     spec = json.load(sys.stdin)
     repo = hub.Repository(spec["repo"], spec["sha"], set(spec["files"]))
     names = [
@@ -74,54 +81,56 @@ def main() -> None:
 
     def screen(choice: str | None, reported: str | None) -> dict[str, Any]:
         out: dict[str, Any] = {"name": reported, "compatible": False}
-        try:
-            if "manifest.json" in repo.files and spec["repo"].startswith("incoai/"):
-                manifest = models.read_json(repo.file("manifest.json"))
-                if manifest.get("schema_version", manifest.get("version")) not in (3, 4):
-                    raise ValueError("Unsupported legacy manifest schema")
-                family = families.named(spec["repo"].split("/")[-1].removesuffix("-Splash"))
-                out.update(
-                    compatible=True,
-                    family=family.name,
-                    format="legacy",
-                    vision=True,
-                    draft=None,
-                    files=list(repo.files),
-                )
-                return out
-            # The full check (target plus vision) first: when it passes, the
-            # language-only selection is the same files minus the projector, so
-            # the target header is read once instead of twice.
-            reason = None
+        with tempfile.TemporaryDirectory(prefix="splash-gui-inspect-") as scratch:
             try:
-                target = upstream.inspect_target(repo, choice, False)
-                vision = True
-                language_files = sorted(
-                    path for key, path in target.files.items() if key.startswith("target/")
-                ) or sorted(set(target.files.values()))
-                if target.format != "gguf":
-                    language_files = sorted(
-                        set(upstream.inspect_target(repo, choice, True).files.values())
-                    )
+                screen_into(out, choice, scratch)
             except Exception as error:
-                reason = str(error)
-                target = upstream.inspect_target(repo, choice, True)
-                vision = False
-                language_files = sorted(set(target.files.values()))
-            family = families.family_for(target.config)
+                out["reason"] = str(error)
+        return out
+
+    def screen_into(out: dict[str, Any], choice: str | None, scratch: str) -> None:
+        if "manifest.json" in repo.files and spec["repo"].startswith("incoai/"):
+            manifest = models.read_json(repo.file("manifest.json"))
+            if manifest.get("schema_version", manifest.get("version")) not in (3, 4):
+                raise ValueError("Unsupported legacy manifest schema")
+            family = families.named(spec["repo"].split("/")[-1].removesuffix("-Splash"))
             out.update(
                 compatible=True,
                 family=family.name,
-                format="gguf" if target.format == "gguf" else "mlx",
-                vision=vision,
-                vision_reason=reason,
-                draft=family.draft.repo,
-                files=sorted(set(target.files.values())),
-                language_files=language_files,
+                format="legacy",
+                vision=True,
+                draft=None,
+                files=list(repo.files),
             )
+            return
+        # The full check (target plus vision) first: when it passes, the
+        # language-only selection is the same files minus the projector, so
+        # the target header is read once instead of twice.
+        reason = None
+        try:
+            target = inspect_target(choice, False, scratch)
+            vision = True
+            language_files = sorted(
+                path for key, path in target.files.items() if key.startswith("target/")
+            ) or sorted(set(target.files.values()))
+            if target.format != "gguf":
+                language_files = sorted(set(inspect_target(choice, True, scratch).files.values()))
         except Exception as error:
-            out["reason"] = str(error)
-        return out
+            reason = str(error)
+            target = inspect_target(choice, True, scratch)
+            vision = False
+            language_files = sorted(set(target.files.values()))
+        family = target.family
+        out.update(
+            compatible=True,
+            family=family.name,
+            format="gguf" if target.format == "gguf" else "mlx",
+            vision=vision,
+            vision_reason=reason,
+            draft=family.draft_repo,
+            files=sorted(set(target.files.values())),
+            language_files=language_files,
+        )
 
     # Variants are screened in parallel: each reads a GGUF header (several MB of
     # metadata) over HTTP range requests, and a repository may have twenty.

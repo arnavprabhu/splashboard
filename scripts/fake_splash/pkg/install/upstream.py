@@ -1,19 +1,21 @@
-"""Small compatibility stand-in. The real helper still imports the engine API.
+"""Small compatibility stand-in for splash/install/upstream.py (1.3.0).
 
-Mirrors splash/install/upstream.py's `Target` and the screening order of
-`inspect_target`: a GGUF's variant must be selected and loadable, an MLX
-checkpoint must be affine 4-bit group 64, and vision needs a usable projector.
-`families.family_for` does the architecture check, so an unsupported config
-fails here rather than in the manager.
+Mirrors its `Target`, `check_model` and the screening order of
+`inspect_target(repo, variant, language_only, scratch)`: a GGUF's variant must be
+selected and loadable, an MLX checkpoint must be affine 4-bit group 64, and vision
+needs a usable projector. The real `check_model` runs the engine's `model-check`;
+the fake has no engine, so `signatures.check` stands in for it, and an unsupported
+config fails here rather than in the manager.
 """
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import families, models
+from . import families, models, signatures
 
 
 @dataclass(frozen=True)
@@ -22,14 +24,21 @@ class Target:
 
     format: str
     vision_format: str
-    config: dict
+    config: Path
+    gguf_metadata: Path | None
+    family: families.ModelFamily
     files: dict[str, str]
 
 
-def inspect_target(repo, variant, language_only):
+def check_model(target_format, vision_format, config, *, gguf_metadata=None, draft=None):
+    """The family the "engine" finds config (a path) to describe."""
+    return signatures.check(json.loads(Path(config).read_text()))
+
+
+def inspect_target(repo, variant, language_only, scratch):
     if variant is not None or not any(n.endswith(".safetensors") for n in repo.files):
-        return _gguf_target(repo, variant, language_only)
-    return _mlx_target(repo, language_only)
+        return _gguf_target(repo, variant, language_only, Path(scratch))
+    return _mlx_target(repo, language_only, Path(scratch))
 
 
 def select_vision(repo):
@@ -96,13 +105,19 @@ def select_gguf(files, variant):
     raise models.ModelError(f"{choice} (files in the repository root: {listed})")
 
 
-def _gguf_target(repo, variant, language_only):
+def _gguf_target(repo, variant, language_only, scratch):
     name, by_ending = select_gguf(repo.files, variant)
     if by_ending:
         print(
             f"No GGUF is named for :{variant} alone; using {name}, the only one whose name ends in -{variant}.",
             flush=True,
         )
+    # The fake's GGUFs carry no real header: the repository's config.json stands
+    # in for the config upstream.py derives from it (gguf.model_config).
+    config, metadata = scratch / "config.json", scratch / "gguf-metadata.json"
+    config.write_bytes(models.json_bytes(repo.json("config.json")))
+    metadata.write_bytes(models.json_bytes({"unsigned": {}, "float": {}, "string": {}}))
+    family = check_model("gguf", "none", config, gguf_metadata=metadata)
     if any(part in name for part in ("BF16", "UD-Q8_K_XL")):
         raise models.ModelError("this GGUF stores tensors Splash cannot load")
     files = {"target/" + name: name}
@@ -111,15 +126,14 @@ def _gguf_target(repo, variant, language_only):
         projector = select_vision(repo)
         files["vision/mmproj.gguf"] = projector
         vision_format = "gguf"
-    config = repo.json("config.json")
-    families.family_for(config)
-    return Target("gguf", vision_format, config, files)
+    return Target("gguf", vision_format, config, metadata, family, files)
 
 
-def _mlx_target(repo, language_only):
-    config = repo.json("config.json")
-    families.family_for(config)
-    quant = config.get("quantization") or {}
+def _mlx_target(repo, language_only, scratch):
+    config = scratch / "config.json"
+    config.write_bytes(models.json_bytes(repo.json("config.json")))
+    family = check_model("mlx-affine", "none", config)
+    quant = repo.json("config.json").get("quantization") or {}
     if quant.get("mode", "affine") != "affine" or quant.get("bits") != 4:
         raise models.ModelError(
             f"Splash needs an MLX affine 4-bit checkpoint, not {quant.get('mode', 'affine')} {quant.get('bits', 4)}-bit"
@@ -129,7 +143,7 @@ def _mlx_target(repo, language_only):
     files = {name: name for name in sorted(repo.files)}
     files.setdefault("config.json", "config.json")
     if language_only:
-        # upstream.py `_mlx_target` (1.2.0, :202-210): the processor config is read
+        # upstream.py `_mlx_target` (1.3.0, :208-243): the processor config is read
         # and linked only when vision is on.
         files.pop("preprocessor_config.json", None)
-    return Target("mlx-affine", "none" if language_only else "safetensors", config, files)
+    return Target("mlx-affine", "none" if language_only else "safetensors", config, None, family, files)

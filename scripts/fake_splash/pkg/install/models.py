@@ -296,7 +296,7 @@ def family_of(repo_id: str):
 
 
 def incompatible_message() -> str:
-    # families.family_for's wording, with a llama-like config.
+    # The engine model-check's wording (ModelDescriptor.mm unsupportedModel), with a llama-like config.
     names = ", ".join(family.name for family in _families())
     return (
         "no supported model has this architecture (head_dim=128, hidden_size=4096, "
@@ -373,7 +373,9 @@ def _commit(repo_id: str, revision: str | None) -> str:
 
 
 def _text_config(family) -> dict:
-    return dict(family.signature)
+    from . import signatures
+
+    return signatures.text_config(family)
 
 
 def target_repo(selection: Selection, family) -> tuple[RemoteRepo, dict[str, str], str, str]:
@@ -413,7 +415,7 @@ def target_repo(selection: Selection, family) -> tuple[RemoteRepo, dict[str, str
     names = [f"model-{i:05d}-of-{shards:05d}.safetensors" for i in range(1, shards + 1)]
     config = {
         "architectures": ["Qwen3_5ForConditionalGeneration"],
-        "model_type": "qwen3_5_moe" if "moe" in family.signature[0][1] else "qwen3_5",
+        "model_type": "qwen3_5_moe" if family.name == "Qwen3.6-35B-A3B" else "qwen3_5",
         "text_config": _text_config(family),
         "quantization": {"group_size": 64, "bits": 4, "mode": "affine"},
     }
@@ -446,10 +448,12 @@ def target_repo(selection: Selection, family) -> tuple[RemoteRepo, dict[str, str
 
 
 def draft_repo(selection: Selection, family) -> RemoteRepo:
-    name = selection.draft_model or family.draft.repo
+    from . import signatures
+
+    name = selection.draft_model or family.draft_repo
     repo = RemoteRepo(name, _commit(name, None))
     repo.files += [
-        _json_file("config.json", dict(family.draft.signature)),
+        _json_file("config.json", signatures.draft_config(family)),
         RemoteFile(
             "model.safetensors",
             parse_size(os.environ.get("FAKE_SPLASH_DL_DRAFT_BYTES"), 1 << 20),

@@ -35,7 +35,7 @@ from urllib.parse import unquote, urlsplit
 
 sys.path.insert(0, str(Path(__file__).parent / "pkg"))
 
-from install import models
+from install import models, signatures
 
 # Fixture repositories. The name decides the fake architecture
 # (`models.family_of`), so each one exercises a different compatibility outcome.
@@ -61,7 +61,7 @@ def repository(repo_id: str, revision: str | None = None) -> tuple[models.Remote
     """(repo, files by name, config.json) for a fixture repository.
 
     The synthetic config carries the family's real architecture rather than the
-    fake tensor bytes, because that is what `install/families.py` screens and
+    fake tensor bytes, because that is what the engine's model-check screens and
     what `install/upstream.py` reads before any weights exist.
     """
     family = models.family_of(repo_id)
@@ -81,7 +81,7 @@ def repository(repo_id: str, revision: str | None = None) -> tuple[models.Remote
             repo, _, _, _ = models.target_repo(selection, family)
     files = {f.name: f for f in repo.files}
     config = {
-        "text_config": dict(family.signature),
+        "text_config": signatures.text_config(family),
         "quantization": {"bits": 4, "group_size": 64, "mode": "affine"},
     }
     if "8bit" in repo_id:
