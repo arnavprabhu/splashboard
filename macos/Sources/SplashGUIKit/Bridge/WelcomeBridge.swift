@@ -151,9 +151,13 @@ public enum WelcomeBridge {
     public static func welcomeURL(manager: URL, theme: String?) -> URL {
         var s = manager.absoluteString
         if s.hasSuffix("/") { s.removeLast() }
-        s += "/admin/welcome?host=app"
-        if let theme { s += "&theme=\(theme)" }
-        return URL(string: s)!
+        return URL(string: s + welcomePath(theme: theme))!
+    }
+
+    /// `/admin/welcome?host=app[&theme=…]`, the page the window opens (signed in through a
+    /// one-time link when the manager can mint one, D58).
+    public static func welcomePath(theme: String?) -> String {
+        "/admin/welcome?host=app" + (theme.map { "&theme=\($0)" } ?? "")
     }
 
     /// `theme` query value: only when the preference is "system" (01-shell §7).

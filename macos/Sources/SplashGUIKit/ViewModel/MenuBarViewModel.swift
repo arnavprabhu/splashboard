@@ -413,7 +413,7 @@ public final class MenuBarViewModel {
         case .none:
             break
         case .openPage(let path):
-            openAdmin(path)
+            await openAdminSignedIn(path)
         case .call(let action):
             do {
                 try await api.perform(action)
@@ -462,8 +462,25 @@ public final class MenuBarViewModel {
         return URL(string: base + (path.hasPrefix("/") ? path : "/" + path)) ?? managerBaseURL
     }
 
+    /// Opens an admin page in the browser, signed in (D58): mints a one-time link with the CLI
+    /// token and opens `/admin/login?code=…&next=<path>`. If minting fails (an older manager,
+    /// no token yet), the plain page opens and the browser asks for the key if it needs to.
     public func openAdmin(_ path: String) {
-        host?.open(url(forAdminPath: path))
+        Task { await openAdminSignedIn(path) }
+    }
+
+    public func openAdminSignedIn(_ path: String) async {
+        let url = await signedInURL(forAdminPath: path)
+        host?.open(url)
+    }
+
+    /// The one-time link URL for `path`, or the plain admin URL when no link can be minted.
+    public func signedInURL(forAdminPath path: String) async -> URL {
+        let plain = url(forAdminPath: path)
+        guard let link = try? await api.mintLoginLink(),
+              let url = link.url(base: managerBaseURL, next: path)
+        else { return plain }
+        return url
     }
 
     public func perform(_ command: MenuCommand) async {
@@ -490,9 +507,9 @@ public final class MenuBarViewModel {
             }
             await interruptingInstall(model: nil) { api, force in try await api.restartEngine(force: force || inFlight > 0) }
         case .openAdmin(let path):
-            openAdmin(path)
+            await openAdminSignedIn(path)
         case .connectIntegration(let name):
-            openAdmin("/admin/integrations?connect=\(name)")
+            await openAdminSignedIn("/admin/integrations?connect=\(name)")
         case .disconnectIntegration(let name):
             let label = integrations?.desktop.first { $0.name == name }?.label ?? name
             let app = label.split(separator: " ").first.map(String.init) ?? label
@@ -507,7 +524,7 @@ public final class MenuBarViewModel {
             await call { try await $0.openTerminal(client: client) }
         case .checkForUpdates:
             // Sparkle is deferred (D30): show the About section of Settings instead.
-            if manager == .running { openAdmin("/admin/settings/about") } else { host?.showAbout() }
+            if manager == .running { await openAdminSignedIn("/admin/settings/about") } else { host?.showAbout() }
         case .about:
             host?.showAbout()
         case .continueSetup:

@@ -81,7 +81,7 @@ final class WelcomeWindowController: NSObject, NSWindowDelegate, WKNavigationDel
             for _ in 0..<40 {
                 if Task.isCancelled { return }
                 if await self.model.api.health() {
-                    self.load()
+                    await self.load()
                     return
                 }
                 try? await Task.sleep(for: .milliseconds(500))
@@ -90,10 +90,11 @@ final class WelcomeWindowController: NSObject, NSWindowDelegate, WKNavigationDel
         }
     }
 
-    private func load() {
+    private func load() async {
         let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let theme = WelcomeBridge.themeParameter(preference: model.settings.theme, systemIsDark: dark)
-        let url = WelcomeBridge.welcomeURL(manager: model.managerBaseURL, theme: theme)
+        // Admin sign-in is on by default (D58): land in the wizard through a one-time link.
+        let url = await model.signedInURL(forAdminPath: WelcomeBridge.welcomePath(theme: theme))
         webView?.load(URLRequest(url: url))
         webView?.isHidden = false
     }

@@ -149,6 +149,12 @@ public extension AdminAPI {
         return try await post("/api/admin/integrations/\(client)/open-terminal", body: body)
     }
 
+    /// `POST /api/admin/auth/link` (D58): a one-time browser sign-in link. CLI token only.
+    func mintLoginLink() async throws -> LoginLink {
+        guard let link = LoginLink(json: try await post("/api/admin/auth/link")) else { throw APIError.invalidResponse }
+        return link
+    }
+
     /// Sends a `NotificationAction` (notification buttons, alert actions).
     @discardableResult
     func perform(_ action: NotificationAction) async throws -> JSONValue {
