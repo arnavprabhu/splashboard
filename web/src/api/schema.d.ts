@@ -2710,6 +2710,11 @@ export interface components {
              * @enum {string}
              */
             state: "pending" | "downloading" | "done";
+            /**
+             * Resumable
+             * @default false
+             */
+            resumable: boolean;
         };
         /** DownloadItem */
         DownloadItem: {

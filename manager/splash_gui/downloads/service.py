@@ -1,31 +1,42 @@
-"""Persisted installer queue with pause/resume and byte progress (SPEC §9.4)."""
+"""Persisted installer queue with pause/resume and byte progress (SPEC §9.4).
+
+A job first fetches its large LFS/Xet files itself with byte-resumable Range requests
+(D61, `ranged.py`, which documents the per-file data shape), then runs Splash's
+`install/models.py prepare`, which finds those blobs and fetches the rest."""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import shutil
 import signal
 import time
 import uuid
+from collections.abc import Awaitable
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, TypeVar
 
 from ..errors import ApiError
 from ..events.alerts import action
-from ..hubcache import blob_partials, blobs_dir
+from ..hubcache import blob_partials, blobs_dir, range_partial, remove_partial
 from ..models.hf import HubError
 from ..models.service import valid_id
 from ..paths import write_atomic
 from ..schemas import DownloadError, DownloadFile, DownloadItem, DownloadRequest, ModelsChangedEvent
+from ..settings.parsers import split_model_id
 from ..units import format_bytes
 from ..usage.db import iso
+from .ranged import Fallback, RangeDownloader, Remote, is_candidate
 
 if TYPE_CHECKING:
     from ..state import ManagerState
+
+log = logging.getLogger(__name__)
+T = TypeVar("T")
 
 
 class Downloads:
@@ -152,7 +163,14 @@ class Downloads:
                     key = repo_id + "/" + name
                     if name in repo.blobs:
                         blob_map[key] = repo.blobs[name]
-                    item.files.append(DownloadFile(name=name, repo_id=repo_id, size_bytes=size))
+                    item.files.append(
+                        DownloadFile(
+                            name=name,
+                            repo_id=repo_id,
+                            size_bytes=size,
+                            resumable=is_candidate(repo.blobs.get(name), size),
+                        )
+                    )
         except HubError as error:
             raise ApiError(error.status, error.message, "hub_unreachable") from None
         item.bytes_total = sum(f.size_bytes or 0 for f in item.files) or None
@@ -253,11 +271,115 @@ class Downloads:
             digest = self.blobs.get(item.id, {}).get(file.repo_id + "/" + file.name)
             if not digest or digest in shared:
                 continue
-            legacy = self.blob_path(file.repo_id, digest).name + ".incomplete"
+            blob = self.blob_path(file.repo_id, digest)
+            # Kept on resume: what an older hub (`<etag>.incomplete`) or the Range
+            # download (`<etag>.splashgui.incomplete`, D61) continues.
+            resumable = {blob.name + ".incomplete", range_partial(blob).name}
             for path in self.partials(file.repo_id, digest):
-                if str(path) in keep or (stale_only and path.name == legacy):
+                if str(path) in keep or (stale_only and path.name in resumable):
                     continue
-                path.unlink(missing_ok=True)
+                remove_partial(path)
+
+    def remove_finished_range_partials(self, item: DownloadItem) -> None:
+        """A Range partial whose blob exists (the file fell back to Splash's installer,
+        which finished it) can never be continued."""
+        for file in item.files:
+            digest = self.blobs.get(item.id, {}).get(file.repo_id + "/" + file.name)
+            if digest and self.blob_path(file.repo_id, digest).is_file():
+                remove_partial(range_partial(self.blob_path(file.repo_id, digest)))
+
+    def note(self, item: DownloadItem, line: str) -> None:
+        token = self.state.models.hf.token()
+        if token:
+            line = line.replace(token, "[redacted]")
+        item.log_tail = [*item.log_tail, line][-200:]
+
+    async def watch(self, item: DownloadItem, work: Awaitable[T]) -> T:
+        """Run `work`, sampling byte progress, speed and ETA every 500 ms meanwhile.
+        Cancelling the caller cancels `work`."""
+        task = asyncio.ensure_future(work)
+        previous, tick = item.bytes_done, time.monotonic()
+        try:
+            while True:
+                done, _ = await asyncio.wait({task}, timeout=0.5)
+                self.progress(item)
+                now = time.monotonic()
+                speed = max(0, item.bytes_done - previous) / max(0.001, now - tick)
+                item.speed_bps = (
+                    speed if item.speed_bps is None else item.speed_bps * 0.9 + speed * 0.1
+                )
+                item.eta_s = (
+                    max(0, (item.bytes_total - item.bytes_done) / item.speed_bps)
+                    if item.bytes_total and item.speed_bps
+                    else None
+                )
+                previous, tick = item.bytes_done, now
+                self.publish(item)
+                if done:
+                    return task.result()
+        finally:
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+    async def fetch_large(self, item: DownloadItem) -> None:
+        """D61: fetch the job's large LFS/Xet files with byte-resumable Range requests
+        before `prepare`. A file that hits any problem is left to `prepare`."""
+        if self.state.settings.current.global_.hf.offline:
+            return
+        mapping = self.blobs.setdefault(item.id, {})
+        target = split_model_id(item.model)[0]
+        todo = [
+            f
+            for f in item.files
+            if is_candidate(mapping.get(f.repo_id + "/" + f.name), f.size_bytes)
+            and not self.blob_path(f.repo_id, mapping[f.repo_id + "/" + f.name]).is_file()
+        ]
+        if not todo:
+            return
+        hf = self.state.models.hf
+        downloader = RangeDownloader(
+            self.state.settings.models_dir(),
+            hf.endpoint,
+            hf.token(),
+            note=lambda line: self.note(item, line),
+        )
+        async with downloader.client() as client:
+            for file in todo:
+                key = file.repo_id + "/" + file.name
+                file.resumable = True
+                revision = item.revision if file.repo_id == target else None
+                try:
+                    remote = await downloader.resolve(client, file.repo_id, revision, file.name)
+                    if remote.etag != mapping[key]:
+                        self.retarget(item, file, key, remote)
+                    self.publish(item)
+                    await self.watch(item, downloader.download(client, remote))
+                except Fallback as error:
+                    file.resumable = False
+                    log.warning("range fallback for %s: %s", key, error)
+                    self.note(
+                        item, f"{file.name}: {error}. Splash's installer downloads it instead."
+                    )
+                    self.publish(item)
+
+    def retarget(self, item: DownloadItem, file: DownloadFile, key: str, remote: Remote) -> None:
+        """The file changed on the Hub since the job was queued (a new etag): its bytes
+        so far belong to the old version, so they go and the new one starts at 0."""
+        mapping = self.blobs[item.id]
+        old = mapping[key]
+        if old not in self.shared_digests(item.id):
+            keep = set(self.preexisting.get(item.id, []))
+            stale = range_partial(self.blob_path(file.repo_id, old))
+            if str(stale) not in keep:
+                remove_partial(stale)
+        mapping[key] = remote.etag
+        file.size_bytes = remote.size
+        file.done_bytes, file.state = 0, "pending"
+        item.bytes_total = sum(f.size_bytes or 0 for f in item.files) or None
+        log.info("range %s changed on the Hub: %s -> %s", key, old, remote.etag)
+        self.note(item, f"{file.name} changed on the Hub; downloading the new version from 0.")
 
     async def command(self, item: DownloadItem, action: str) -> None:
         argv, env = self.state.models.installer(
@@ -287,23 +409,8 @@ class Downloads:
                 item.log_tail = ([*item.log_tail, text])[-200:]
 
         reader = asyncio.create_task(read())
-        previous, tick = item.bytes_done, time.monotonic()
         try:
-            while proc.returncode is None:
-                await asyncio.sleep(0.5)
-                self.progress(item)
-                now = time.monotonic()
-                speed = max(0, item.bytes_done - previous) / max(0.001, now - tick)
-                item.speed_bps = (
-                    speed if item.speed_bps is None else item.speed_bps * 0.9 + speed * 0.1
-                )
-                item.eta_s = (
-                    max(0, (item.bytes_total - item.bytes_done) / item.speed_bps)
-                    if item.bytes_total and item.speed_bps
-                    else None
-                )
-                previous, tick = item.bytes_done, now
-                self.publish(item)
+            await self.watch(item, proc.wait())
             await reader
             if proc.returncode or any(
                 "Warning: keeping the installed" in line for line in item.log_tail
@@ -326,14 +433,17 @@ class Downloads:
             self.processes.pop(item.id, None)
 
     async def run(self, item: DownloadItem) -> None:
-        # A resumed download starts each unfinished file again in a new partial file;
-        # the ones a paused run left behind would only waste disk (SPEC §9.4).
+        # Splash's installer starts each unfinished file again in a new partial file;
+        # the ones a paused run left behind would only waste disk (SPEC §9.4). The
+        # Range partials (D61) are kept: this run continues them.
         self.remove_partials(item, stale_only=True)
         self.progress(item)
         item.state, item.started_at, item.error = "running", iso(), None
         self.publish(item)
         try:
+            await self.fetch_large(item)
             await self.command(item, "prepare")
+            self.remove_finished_range_partials(item)
             if item.verify:
                 item.state = "verifying"
                 self.publish(item)

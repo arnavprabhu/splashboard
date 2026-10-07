@@ -1064,6 +1064,11 @@ class DownloadFile(ApiModel):
     size_bytes: int | None = None
     done_bytes: int = 0
     state: Literal["pending", "downloading", "done"] = "pending"
+    # D61: the manager fetches this file itself with HTTP Range requests (an LFS/Xet
+    # file of 1 GB or more), so Pause and Resume continue it byte by byte. False: Splash's
+    # installer fetches it, and a paused file starts again from 0. Turns false for the
+    # current run when the file falls back to the installer.
+    resumable: bool = False
 
 
 class DownloadError(ApiModel):
