@@ -279,11 +279,10 @@ class IntegrationsService:
                         "command": f"splash launch {name}",
                         "changes": self.changes(name),
                         "entries": self.entries(name),
-                        # D44: Splash's Hermes configurator writes the server's key
-                        # into the profile in plain text (install/clients.py:410,
-                        # `api_key=server.api_key`); Pi stores "$SPLASH_API_KEY".
-                        "plaintext_key_warning": name == "hermes"
-                        and self.state.settings.current.global_.security.api_key_required,
+                        # D44's warning is obsolete from Splash 1.3.0: the Hermes
+                        # profile stores "${SPLASH_API_KEY}", never the key
+                        # (install/clients.py:415-417), as Pi's stores "$SPLASH_API_KEY".
+                        "plaintext_key_warning": False,
                         "last_launched_at": launched.get(name),
                     }
                 )
@@ -297,7 +296,7 @@ class IntegrationsService:
 
     def changes(self, name: str) -> IntegrationChanges:
         """What `splash launch <name>` changes, as Splash's `install/clients.py`
-        (1.2.0) configures each client (SPEC §3.5, §10.7 "What this changes").
+        (1.3.0) configures each client (SPEC §3.5, §10.7 "What this changes").
         `splash launch <name> --print` shows the exact values for a session."""
         g = self.state.settings.current.global_
         port = self.public_port()
@@ -374,13 +373,16 @@ class IntegrationsService:
             )
         if name == "hermes":
             home = self.hermes_profiles() / entry
+            # install/clients.py:415-417 (1.3.0): a reference, never the key.
+            profile_key = "${SPLASH_API_KEY}" if key != "local" else "local"
             return IntegrationChanges(
                 env={"HERMES_HOME": str(home), "OPENAI_BASE_URL": f"{url}/v1"},
                 args=["--provider", "custom", "--model", model],
                 files=[str(home / "config.yaml")],
                 notes=[
                     f"Writes only its own Hermes profile `{entry}`; "
-                    "your default profile is unchanged."
+                    "your default profile is unchanged.",
+                    f"The profile's api_key is `{profile_key}`; the key itself is never saved.",
                 ],
             )
         models = self.pi_models()

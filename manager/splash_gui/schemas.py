@@ -1421,8 +1421,8 @@ class CliIntegration(ApiModel):
     changes: IntegrationChanges
     entries: list[str] = Field(default_factory=list)
     last_launched_at: str | None = None
-    # D44: true for Hermes when the API key is required — Splash writes the key
-    # into its profile config.yaml in plain text.
+    # D44, deprecated: always false. Splash 1.2.x wrote the key into the Hermes
+    # profile in plain text; 1.3.0 writes "${SPLASH_API_KEY}" (install/clients.py:415-417).
     plaintext_key_warning: bool = False
 
 

@@ -1261,9 +1261,9 @@ def launch(ctx: Ctx, client: Client, passthrough_args: list[str]) -> int:
     # environment stays the user's (D18).
     environment["SPLASH_GUI_ENGINE_PKG"] = str(engine_info.pkg)
     environment["SPLASH_PORT"] = str(client.port)
-    # SPEC §11.2 step 3: the key only when the public port requires it. Splash's
-    # Hermes configurator writes whatever key it gets into the profile's
-    # config.yaml (install/clients.py _write_hermes_profile).
+    # SPEC §11.2 step 3: the key only when the public port requires it. Hermes and
+    # Pi profiles reference it as ${SPLASH_API_KEY} / $SPLASH_API_KEY and read it
+    # from this environment (install/clients.py:415-417, :463 at 1.3.0).
     if client.settings.current.global_.security.api_key_required:
         key = SecretStore(backend_from_env(client.paths)).get(SecretName.API_KEY)
         if key:
