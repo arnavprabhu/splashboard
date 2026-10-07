@@ -332,6 +332,13 @@ def test_schema(client: TestClient) -> None:
     assert mc["flag"] == "--max-context" and mc["applies"] == "restart"
     assert mc["scope"] == "GM" and mc["section"] == "memory_context" and mc["default"] == "auto"
     assert fields["serve.revision"]["disabled_for_legacy"] is True
+    # D55: each idle timer's help says what it does and names the other one.
+    release = fields["serve.idle_release"]["help"]
+    assert "keeps its process running" in release and "10 minutes by default" in release
+    assert "Lifecycle → Idle unload" in release and "stops the process" in release
+    unload = fields["lifecycle.idle_unload"]["help"]
+    assert "stops the engine process" in unload
+    assert "Release weights when idle" in unload and "keeps the process" in unload
     assert fields["security.api_key"]["storage"] == "keychain"
     assert [s["label"] for s in body["sections"]][:3] == [
         "Server & network",

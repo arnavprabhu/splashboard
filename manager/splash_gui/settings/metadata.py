@@ -327,8 +327,11 @@ FIELDS: tuple[FieldMeta, ...] = (
     _serve(
         "serve.idle_release",
         "Release weights when idle",
-        "Time without a request before Splash unwires its memory and frees the weights; "
-        "the next request restores them. Seconds or 90s, 30m, 2h; off keeps them.",
+        # D55: the two idle timers, told apart wherever metadata is shown.
+        "After this long without a request, Splash frees the model's weights but keeps "
+        "its process running; the next request restores them. 10 minutes by default. "
+        "Seconds or 90s, 30m, 2h; off keeps them. Lifecycle → Idle unload is the other "
+        "timer: it stops the process.",
         "memory_context",
         "text",
         "--idle-release",
@@ -542,14 +545,17 @@ FIELDS: tuple[FieldMeta, ...] = (
     FieldMeta(
         "lifecycle.idle_unload",
         "Idle unload",
-        "Stop the engine process after a period with no API requests.",
+        "Splash GUI stops the engine process after Idle minutes with no API requests, "
+        "freeing all its memory; a later request loads the model again when auto-load "
+        "is on. Memory & context → Release weights when idle is the other timer: Splash "
+        "frees only the weights and keeps the process.",
         "lifecycle",
         "toggle",
     ),
     FieldMeta(
         "lifecycle.idle_unload_minutes",
         "Idle minutes",
-        "Minutes without requests before unloading.",
+        "Minutes without requests before Splash GUI stops the engine process.",
         "lifecycle",
         "number",
         min=5,
