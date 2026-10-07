@@ -45,11 +45,15 @@ export interface SettingsEnvelope {
   load_warnings: string[];
 }
 
+/** settings.json's current version (manager `SETTINGS_VERSION`; 2 since D58). The manager
+ * refuses a PUT whose `version` differs, so the fallback document must carry this one. */
+export const SETTINGS_VERSION = 2;
+
 export function readEnvelope(body: unknown): SettingsEnvelope {
   const b = (body ?? {}) as Partial<SettingsEnvelope> & { settings?: SettingsDoc };
-  const settings = b.settings ?? ({ version: 1, global: {}, models: {} } as SettingsDoc);
+  const settings = b.settings ?? ({ version: SETTINGS_VERSION, global: {}, models: {} } as SettingsDoc);
   return {
-    settings: { version: settings.version ?? 1, global: settings.global ?? {}, models: settings.models ?? {} },
+    settings: { version: settings.version ?? SETTINGS_VERSION, global: settings.global ?? {}, models: settings.models ?? {} },
     secrets: b.secrets ?? { api_key_set: false, hf_token_override_set: false, hf_login_token_present: false },
     resolved: (b.resolved as Record<string, string> | undefined) ?? {},
     read_only: Boolean(b.read_only),
