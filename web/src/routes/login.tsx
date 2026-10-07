@@ -179,10 +179,11 @@ export default function LoginPage() {
           </div>
           <p class="body mute" id="login-help">
             {helpBefore}
-            <code class="mono">splash config get security.api_key</code>
+            <code class="mono">splash open</code>
             {helpAfter}
           </p>
           <p class="body mute">{t("login.menubar")}</p>
+          <p class="body mute">{t("login.key_where")}</p>
         </form>
       </Section>
     </>

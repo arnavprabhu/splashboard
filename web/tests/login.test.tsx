@@ -57,6 +57,19 @@ describe('stripCode', () => {
   });
 });
 
+describe('login help (D58 follow-up b)', () => {
+  it('points to splash open, which signs the browser in, and says where the key is', async () => {
+    stubFetch(() => undefined);
+    go('/admin/login');
+    render(<App base="/admin" />);
+    const help = await screen.findByText((_, el) => el?.id === 'login-help');
+    expect(help.querySelector('code')?.textContent).toBe('splash open');
+    expect(help.textContent).toContain('opens this page signed in');
+    expect(screen.getByText('Once you are signed in, the API key is in Settings → Security.')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('splash config get');
+  });
+});
+
 describe('one-time sign-in link', () => {
   it('exchanges the code, strips it from the address bar and lands on next', async () => {
     let state: unknown = { admin_requires_key: true, authenticated: false, method: null };
