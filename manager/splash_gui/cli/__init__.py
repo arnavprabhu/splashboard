@@ -11,6 +11,7 @@ import re
 import subprocess
 import sys
 import time
+import urllib.parse
 import webbrowser
 from collections.abc import Sequence
 from pathlib import Path
@@ -385,7 +386,7 @@ Use
   run <ID[:profile]> [prompt]   Chat in the terminal, or print one answer
   launch <client>    Start an agent on Splash for this session only
                      ({", ".join(CLIENTS)})
-  open [page]        Open the admin page (status, models, chat, tools, integrations, logs, settings)
+  open [page]        Open the admin page signed in (status, models, chat, settings, ...)
 
 Maintenance
   logs [-f]          Tail the engine or manager log
@@ -1016,7 +1017,7 @@ def cmd_config(ctx: Ctx, client: Client) -> int:
 
 
 def cmd_doctor(ctx: Ctx, client: Client) -> int:
-    """Local checks always; the manager's `GET /doctor` items when it answers."""
+    """Local checks always; the manager's `POST /doctor` items when it answers."""
     paths = client.paths
     local: list[doctor_checks.Check] = []
     manager: list[doctor_checks.Check] = []
@@ -1026,7 +1027,7 @@ def cmd_doctor(ctx: Ctx, client: Client) -> int:
         pid, _ = manager_pid(paths)
         title = "Running · " + client.url + (f" · pid {pid}" if pid else "")
         local.append(doctor_checks.Check("manager", "ok", title))
-        report = client.request("GET", "/doctor")
+        report = client.request("POST", "/doctor")
         manager = doctor_checks.from_manager(report.get("checks", []))
         try:
             models_bytes = (client.request("GET", "/models").get("disk") or {}).get("models_bytes")
@@ -1534,6 +1535,18 @@ def passthrough(arguments: list[str]) -> int:
     raise SystemExit(0)  # only when execv is stubbed (tests)
 
 
+def admin_url(client: Client, page: str) -> str:
+    """D58: a one-time login link that lands on `page`, so the browser is signed in
+    without typing the key. Falls back to the plain page (the login form) when the
+    manager cannot issue one."""
+    target = "/admin/" + page.strip("/")
+    try:
+        link = client.request("POST", "/auth/link")
+    except (CliError, httpx.HTTPError):
+        return client.url + target
+    return f"{client.url}{link['url']}&next={urllib.parse.quote(target, safe='/')}"
+
+
 def dispatch(ctx: Ctx, client: Client, rest: list[str]) -> int:
     name = ctx.args.command
     if name == "launch":
@@ -1561,7 +1574,7 @@ def dispatch(ctx: Ctx, client: Client, rest: list[str]) -> int:
         return 0
     if name == "open":
         client.start(note=not ctx.quiet)
-        webbrowser.open(client.url + "/admin/" + ctx.args.page)
+        webbrowser.open(admin_url(client, ctx.args.page))
         return 0
     if name == "unload":
         require(client)

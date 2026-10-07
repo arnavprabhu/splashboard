@@ -124,7 +124,7 @@ def test_launch_hands_the_profile_to_splash_s_configurator_and_records_it(
         assert "claude" in db.last_launches()
     finally:
         db.close()
-    listing = h.client.get("/api/admin/integrations").json()["cli"]
+    listing = h.client.post("/api/admin/integrations").json()["cli"]
     assert next(r for r in listing if r["name"] == "claude")["last_launched_at"]
     run(capsys, "launch", "codex", "--print")
     assert json.loads(calls[-1][2]["SPLASH_GUI_CLIENT_SPEC"])["print"] is True
@@ -238,3 +238,25 @@ def test_serve_port(
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     assert cli_module.serve_port(argv) == port
+
+
+def test_open_signs_the_browser_in_with_a_one_time_link(
+    h: EngineHarness, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D58: `splash open` opens /admin/login?code=… so the browser needs no key."""
+    opened: list[str] = []
+    monkeypatch.setattr(cli_module.webbrowser, "open", opened.append)
+    code, _, _ = run(capsys, "open", "settings")
+    assert code == 0 and len(opened) == 1
+    url = opened[0]
+    prefix = "http://127.0.0.1:8000/admin/login?code="
+    assert url.startswith(prefix) and url.endswith("&next=/admin/settings"), url
+    login_code = url[len(prefix) :].split("&", 1)[0]
+    page = {"Origin": "http://127.0.0.1:8000", "Sec-Fetch-Site": "same-origin"}
+    exchanged = h.client.post(
+        "/api/admin/auth/exchange",
+        json={"code": login_code},
+        headers={**page, "Authorization": ""},
+    )
+    assert exchanged.status_code == 200, exchanged.text
+    assert exchanged.json()["method"] == "session"
