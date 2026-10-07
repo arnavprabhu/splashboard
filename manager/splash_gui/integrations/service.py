@@ -93,6 +93,27 @@ def through_link(path: Path) -> Path:
     return path.resolve()
 
 
+FALLBACK_CODEX_INSTRUCTIONS = (
+    "You are Codex, a coding agent running in the user's workspace. Use the tools you "
+    "are given to read, edit and run code, and keep the user informed of what you do."
+)
+
+
+def codex_base_instructions(native: list[Any]) -> str:
+    """Codex 0.160 refuses a catalog entry without `base_instructions` or
+    `model_messages`, so a Splash model borrows the agent prompt of the app's
+    own first listed model; the fallback covers an app we couldn't query."""
+    listed = sorted(
+        (m for m in native if isinstance(m, dict) and m.get("visibility") == "list"),
+        key=lambda m: m.get("priority", 0) if isinstance(m.get("priority"), int) else 0,
+    )
+    for model in listed:
+        text = model.get("base_instructions")
+        if isinstance(text, str) and text:
+            return text
+    return FALLBACK_CODEX_INSTRUCTIONS
+
+
 def bundled_codex(app: Path) -> Path | None:
     """The Codex CLI inside the Codex/ChatGPT app: `Contents/Resources/codex`
     (SPEC §11.3.2), or, in ChatGPT builds that ship `codex-cli/` (checked on
@@ -506,6 +527,8 @@ class IntegrationsService:
         else:
             codex = self.home / ".codex"
             models = self.state.proxy.models_list()["data"]
+            native = self.native_codex_models(codex)
+            instructions = codex_base_instructions(native)
             catalog = []
             for model in models:
                 catalog.append(
@@ -523,9 +546,14 @@ class IntegrationsService:
                         "shell_type": "unified_exec",
                         "truncation_policy": {"mode": "tokens", "limit": 10000},
                         "effective_context_window_percent": 95,
+                        "visibility": "list",
+                        "priority": 0,
+                        "support_verbosity": False,
+                        "experimental_supported_tools": [],
+                        "base_instructions": instructions,
                     }
                 )
-            for entry in self.native_codex_models(codex):
+            for entry in native:
                 if isinstance(entry, dict) and entry.get("slug") not in {
                     m["slug"] for m in catalog
                 }:

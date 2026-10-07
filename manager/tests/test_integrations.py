@@ -592,6 +592,48 @@ async def test_codex_catalog_lists_splash_first_then_native(service, monkeypatch
     assert {"none", "max"} <= set(config["desktop"]["enabled-reasoning-efforts"])
 
 
+async def test_codex_catalog_entry_has_the_fields_codex_requires(service, monkeypatch):
+    native = [
+        {"slug": "gpt-hidden", "visibility": "hide", "priority": 0, "base_instructions": "H"},
+        {"slug": "gpt-b", "visibility": "list", "priority": 5, "base_instructions": "B"},
+        {"slug": "gpt-a", "visibility": "list", "priority": 2, "base_instructions": "A"},
+    ]
+    monkeypatch.setattr(service, "native_codex_models", lambda codex_home: native)
+    await service.connect("codex-app", confirm=False)
+    entry = json.loads((service.state.paths.codex_app_dir / "models.json").read_text())["models"][0]
+    assert {k: entry[k] for k in ("visibility", "priority", "support_verbosity")} == {
+        "visibility": "list",
+        "priority": 0,
+        "support_verbosity": False,
+    }
+    assert entry["experimental_supported_tools"] == []
+    assert entry["base_instructions"] == "A"
+
+
+CHATGPT_CODEX = Path("/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex")
+
+
+@pytest.mark.skipif(not CHATGPT_CODEX.exists(), reason="no ChatGPT app with Codex")
+async def test_codex_app_parses_the_generated_catalog(service, tmp_path):
+    """The installed app's own Codex accepts the catalog (Q17 found 0.160 refusing it)."""
+    await service.connect("codex-app", confirm=False)
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    catalog = service.state.paths.codex_app_dir / "models.json"
+    (home / "config.toml").write_text(f'model_catalog_json = "{catalog}"\n')
+    result = subprocess.run(
+        [str(CHATGPT_CODEX), "debug", "models"],
+        env={"CODEX_HOME": str(home), "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    slugs = [m["slug"] for m in json.loads(result.stdout)["models"]]
+    assert slugs[0] == "mlx-community/Qwen3.6-35B-A3B-4bit"
+
+
 async def test_codex_open_goes_to_a_new_thread(service, monkeypatch):
     calls: list[tuple[str, ...]] = []
 
