@@ -402,7 +402,9 @@ def test_copied_engine_modules_are_verbatim():
         "diagnostics",
     ):
         assert (pkg / "server" / f"{name}.py").read_text() == (REAL_SPLASH / "server" / f"{name}.py").read_text(), name
-    assert (pkg / "install/families.py").read_text() == (REAL_SPLASH / "install/families.py").read_text()
+    for name in ("families", "clients"):
+        fake = (pkg / "install" / f"{name}.py").read_text()
+        assert fake == (REAL_SPLASH / "install" / f"{name}.py").read_text(), name
 
 
 def test_fake_data_never_defaults_to_library(tmp_path):

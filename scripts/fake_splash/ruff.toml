@@ -15,6 +15,7 @@ extend-exclude = [
     "pkg/server/lru.py",
     "pkg/server/diagnostics.py",
     "pkg/install/families.py",
+    "pkg/install/clients.py",
 ]
 
 [lint]

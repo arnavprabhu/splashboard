@@ -23,6 +23,7 @@ pkg/                     laid out like $(brew --prefix)/opt/splash (bin/) and it
 │   ├── models.py        fake installer, same CLI as the real install/models.py
 │   ├── paths.py         DATA from SPLASH_GUI_FAKE_DATA (never ~/Library/Application Support/Splash)
 │   ├── families.py      verbatim copy (1.3.0: names and draft repos only)
+│   ├── clients.py       verbatim copy: the coding-client configurator `splash launch` uses (Hermes needs PyYAML in the interpreter to write its profile; `--print` does not)
 │   ├── signatures.py    each family's config fields; stands in for the engine's model-check
 │   └── upstream.py      inspect_target/check_model stand-in for the compatibility helper
 └── server/

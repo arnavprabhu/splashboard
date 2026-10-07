@@ -232,3 +232,35 @@ def test_the_session_environment_keeps_the_user_s_pythonpath(tmp_path: Path) -> 
     assert seen["PYTHONPATH"] == "/the/user/own"
     assert "SPLASH_GUI_ENGINE_PKG" not in seen
     assert seen["ANTHROPIC_MODEL"] == MODEL
+
+
+FAKE_PKG = REPO / "scripts" / "fake_splash" / "pkg"
+
+
+@pytest.mark.parametrize("client", ["claude", "codex", "opencode", "hermes", "pi"])
+def test_print_works_on_the_fake_engine(tmp_path: Path, client: str) -> None:
+    """The fake engine ships `install/clients.py` (a verbatim 1.3.0 copy), so
+    `splash launch <client> --print` works there as on the real engine."""
+    home = tmp_path / "home"
+    home.mkdir()
+    spec = {
+        "client": client,
+        "model": MODEL,
+        "url": "http://127.0.0.1:8000",
+        "context": 131072,
+        "modalities": ["text"],
+        "args": [],
+        "print": True,
+    }
+    env = {
+        "HOME": str(home),
+        "PATH": "/usr/bin:/bin",
+        "SPLASH_GUI_ENGINE_PKG": str(FAKE_PKG),
+        "SPLASH_GUI_CLIENT_SPEC": json.dumps(spec),
+    }
+    result = subprocess.run(
+        [sys.executable, str(HELPER)], env=env, capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    assert MODEL in result.stdout
+    assert files_under(home) == [], "--print writes nothing"
