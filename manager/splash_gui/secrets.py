@@ -264,6 +264,8 @@ _TOKEN_PATTERNS = (
     re.compile(r"sk-[A-Za-z0-9_\-]{16,}"),
     re.compile(r"splash-internal-[A-Za-z0-9_\-]+"),
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._\-]+"),
+    # The Codex router token in its URL path (D58).
+    re.compile(r"(/api/codex/t/)[^/\s\"']+"),
 )
 
 

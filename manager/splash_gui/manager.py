@@ -17,7 +17,7 @@ import signal
 import socket
 import sys
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from types import FrameType
 from typing import Any
@@ -28,7 +28,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import __version__
 from .app import AppConfig, create_app
-from .logging_setup import setup_logging
+from .hardening import MAX_BODY
+from .logging_setup import RedactingFilter, setup_logging
 from .paths import FILE_MODE, Paths, write_atomic
 from .secrets import SecretName, SecretStore, backend_from_env
 from .settings import parsers as p
@@ -138,6 +139,13 @@ def listening_on(server: uvicorn.Server, host: str, port: int) -> bool:
     return bool(wanted) and wanted <= hosts
 
 
+def _redact_uvicorn(known: Callable[[], Iterable[str]]) -> None:
+    """Redact secrets from uvicorn's own log records (one filter, however often called)."""
+    logger = logging.getLogger("uvicorn.error")
+    if not any(isinstance(f, RedactingFilter) for f in logger.filters):
+        logger.addFilter(RedactingFilter(known))
+
+
 class _WithLifespanState:
     """Give every request the lifespan state, as uvicorn does when it runs the lifespan."""
 
@@ -237,7 +245,12 @@ class ManagerRunner:
                 access_log=False,
                 lifespan="off",
                 timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_S,
+                # The Codex router's Responses WebSocket carries whole requests (D63).
+                ws_max_size=MAX_BODY,
             )
+            # uvicorn logs each WebSocket handshake with its path, which holds the
+            # Codex router token (D58); its logger is outside the `splash_gui` tree.
+            _redact_uvicorn(self.state.secrets.known_values)
             server = _Server(config)
             with self._lock:
                 if self._stopped:
