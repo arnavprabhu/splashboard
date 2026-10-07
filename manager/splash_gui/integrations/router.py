@@ -24,6 +24,7 @@ from ..auth.guard import is_loopback_client
 from ..secrets import SecretName, SecretsError
 from ..settings.parsers import parse_authority
 from ..state import get_state
+from . import tool_names
 
 log = logging.getLogger(__name__)
 router = APIRouter(include_in_schema=False)
@@ -142,14 +143,18 @@ async def _route(request: Request, path: str, *, authorized: bool) -> Response:
             return _unauthorized("invalid or missing API key", "authentication_error")
         if path not in ("responses", "chat/completions", "completions"):
             return Response(status_code=404)
+        names = None
         if path == "responses":
-            body = _local_tools(body)
-        return cast(
+            body, names = tool_names.alias_request(_local_tools(body))
+        answer = cast(
             Response,
             await state.proxy.handle(
                 request, "/v1/" + path, body_override=body, checked=True, client_label="codex-app"
             ),
         )
+        if names:
+            tool_names.restore_response(answer, names)
+        return answer
     upstream = (
         "https://chatgpt.com/backend-api/codex/"
         if request.headers.get("chatgpt-account-id")

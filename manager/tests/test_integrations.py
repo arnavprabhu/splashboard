@@ -1215,3 +1215,223 @@ def test_quitting_the_manager_restores_byte_for_byte(
     assert claude.read_bytes() == claude_original
     assert not (fake_home / ".codex" / "auth.json").exists()
     assert json.loads(paths.integrations_state.read_text()) == {}
+
+
+# The ChatGPT app's own names that Splash 1.3.0 refuses (api_shapes.py `_namespace_alias`:
+# each part of a namespace tool must match [A-Za-z0-9_-]{1,64}): a connector tool name of
+# 70 characters (the owner's Tableau connector, ~/.codex/cache/codex_apps_tools), and
+# names with characters outside the set.
+TABLEAU = "mcp__codex_apps__tableau__mcp_only__eol_soon"
+LONG = "tableau_mcp_only_eol_soon_list_pulse_metrics_from_metric_definition_id"
+LONG_ALIAS = "tableau_mcp_only_eol_soon_list_pulse_metrics_from_met_b74a0d97d5"
+PLUGIN = "browser@openai-bundled"
+PLUGIN_ALIAS = "browser_openai-bundled_44e00c81aa"
+DOTTED = "sites.add_custom_domain"
+DOTTED_ALIAS = "sites_add_custom_domain_5a78e051fc"
+OBJECT = {"type": "object", "properties": {}}
+APP_TOOLS: list[dict[str, Any]] = [
+    {"type": "function", "name": "exec_command", "parameters": OBJECT},
+    {"type": "function", "name": DOTTED, "parameters": OBJECT},
+    {
+        "type": "namespace",
+        "name": "mcp__node_repl",
+        "description": "",
+        "tools": [{"type": "function", "name": "js", "parameters": OBJECT}],
+    },
+    {
+        "type": "namespace",
+        "name": TABLEAU,
+        "description": "",
+        "tools": [{"type": "function", "name": LONG, "parameters": OBJECT}],
+    },
+    {
+        "type": "namespace",
+        "name": PLUGIN,
+        "description": "",
+        "tools": [{"type": "function", "name": "open", "parameters": OBJECT}],
+    },
+    {"type": "web_search", "external_web_access": False},
+]
+ALIASED_TOOLS = [
+    APP_TOOLS[0],
+    {**APP_TOOLS[1], "name": DOTTED_ALIAS},
+    APP_TOOLS[2],
+    {**APP_TOOLS[3], "tools": [{**APP_TOOLS[3]["tools"][0], "name": LONG_ALIAS}]},
+    {**APP_TOOLS[4], "name": PLUGIN_ALIAS},
+]
+CALL_LONG = {"type": "function", "namespace": TABLEAU, "name": LONG}
+
+
+def _http(url: str) -> str:
+    return url.replace(WS, "")
+
+
+def _sse_frames(text: str) -> list[dict[str, Any]]:
+    return [
+        json.loads(line[6:])
+        for line in text.splitlines()
+        if line.startswith("data: ") and line[6:].strip() not in ("", "[DONE]")
+    ]
+
+
+def _calls(frames: list[dict[str, Any]]) -> list[tuple[str, str | None, str]]:
+    """Every function_call item the frames carry, as (kind, namespace, name)."""
+    found = []
+    for frame in frames:
+        items = [frame.get("item"), *((frame.get("response") or {}).get("output") or [])]
+        for item in items:
+            if isinstance(item, dict) and item.get("type") == "function_call":
+                found.append((frame["type"], item.get("namespace"), item["name"]))
+    return found
+
+
+def test_the_fake_engine_refuses_the_app_names_as_splash_does(harness_factory):
+    """Without the router's aliases the engine answers what the owner saw."""
+    h, _ = _ws_ready(harness_factory)
+    key = {"Authorization": f"Bearer {h.state.secrets.get(SecretName.API_KEY)}"}
+    body = {"model": MODEL, "input": "hi", "tools": APP_TOOLS[2:5]}
+    refused = h.client.post("/v1/responses", json=body, headers=key)
+    assert refused.status_code == 400
+    assert refused.json()["error"]["message"] == "invalid namespace tool name"
+
+
+def test_codex_http_aliases_tool_names_splash_refuses(harness_factory):
+    """D63: for a Splash model every refused name gets a valid alias on the way in and
+    its original back on the way out; valid names are left alone."""
+    h, url = _ws_ready(harness_factory)
+    body = _create("go", tools=APP_TOOLS, tool_choice=CALL_LONG)
+    del body["type"]
+    response = h.client.post(_http(url), json=body)
+    assert response.status_code == 200, response.text
+    (sent,) = _engine_responses(h)
+    assert sent["tools"] == ALIASED_TOOLS
+    assert sent["tool_choice"] == {"type": "function", "namespace": TABLEAU, "name": LONG_ALIAS}
+    frames = _sse_frames(response.text)
+    assert _calls(frames) == [
+        ("response.output_item.added", TABLEAU, LONG),
+        ("response.output_item.done", TABLEAU, LONG),
+        ("response.completed", TABLEAU, LONG),
+    ]
+    (done,) = [f for f in frames if f["type"] == "response.function_call_arguments.done"]
+    assert done["name"] == LONG
+    assert LONG_ALIAS not in response.text
+
+    # The next turn sends the call back with the names Codex knows.
+    call = next(
+        f["item"]
+        for f in frames
+        if f["type"] == "response.output_item.done" and f["item"]["type"] == "function_call"
+    )
+    output = {"type": "function_call_output", "call_id": call["call_id"], "output": "42"}
+    body["input"] = [*body["input"], call, output]
+    body["tool_choice"] = "auto"
+    again = h.client.post(_http(url), json=body)
+    assert again.status_code == 200, again.text
+    second = _engine_responses(h)[1]
+    assert second["input"][1] == {**call, "name": LONG_ALIAS}
+    assert second["input"][2] == output
+    assert _text(_sse_frames(again.text)) == "Hello from the fake engine."
+
+
+def test_codex_http_aliases_a_plain_function_and_restores_a_json_answer(harness_factory):
+    h, url = _ws_ready(harness_factory)
+    forced = {"type": "function", "name": DOTTED}
+    body = {
+        "model": MODEL,
+        "input": "go",
+        "tools": APP_TOOLS,
+        "tool_choice": forced,
+        "stream": False,
+    }
+    response = h.client.post(_http(url), json=body)
+    assert response.status_code == 200, response.text
+    assert _engine_responses(h)[0]["tool_choice"] == {"type": "function", "name": DOTTED_ALIAS}
+    (call,) = [i for i in response.json()["output"] if i["type"] == "function_call"]
+    assert call["name"] == DOTTED and "namespace" not in call
+    assert DOTTED_ALIAS not in response.text
+
+
+def test_codex_router_leaves_valid_names_alone(harness_factory):
+    h, url = _ws_ready(harness_factory)
+    valid = APP_TOOLS[:1] + APP_TOOLS[2:3]
+    forced = {"type": "function", "namespace": "mcp__node_repl", "name": "js"}
+    body = _create("go", tools=valid, tool_choice=forced)
+    del body["type"]
+    response = h.client.post(_http(url), json=body)
+    assert response.status_code == 200, response.text
+    (sent,) = _engine_responses(h)
+    assert sent["tools"] == valid and sent["tool_choice"] == forced
+    assert ("response.output_item.done", "mcp__node_repl", "js") in _calls(
+        _sse_frames(response.text)
+    )
+
+
+def test_codex_websocket_aliases_tool_names_across_turns(harness_factory):
+    """A call made under an alias continues on the same socket with only new items."""
+    h, url = _ws_ready(harness_factory)
+    with h.client.websocket_connect(url) as ws:
+        ws.send_text(json.dumps(_create("go", tools=APP_TOOLS, tool_choice=CALL_LONG)))
+        first = _turn(ws)
+        assert first[-1]["type"] == "response.completed", first[-1]
+        assert _calls(first) == [
+            ("response.output_item.added", TABLEAU, LONG),
+            ("response.output_item.done", TABLEAU, LONG),
+            ("response.completed", TABLEAU, LONG),
+        ]
+        assert LONG_ALIAS not in json.dumps(first)
+        call = next(
+            f["item"]
+            for f in first
+            if f["type"] == "response.output_item.done" and f["item"]["type"] == "function_call"
+        )
+        output = {"type": "function_call_output", "call_id": call["call_id"], "output": "42"}
+        ws.send_text(
+            json.dumps(
+                _create(
+                    "",
+                    tools=APP_TOOLS,
+                    previous_response_id=first[-1]["response"]["id"],
+                    input=[output],
+                )
+            )
+        )
+        second = _turn(ws)
+        assert second[-1]["type"] == "response.completed", second[-1]
+    engine = _engine_responses(h)
+    assert engine[0]["tools"] == ALIASED_TOOLS
+    assert engine[1]["tools"] == ALIASED_TOOLS
+    calls = [i for i in engine[1]["input"] if i["type"] == "function_call"]
+    assert calls == [{**call, "name": LONG_ALIAS}]
+    assert engine[1]["input"][-1] == output
+
+
+def test_codex_router_never_renames_tools_for_native_models(harness_factory, monkeypatch):
+    h, url = _ws_ready(harness_factory)
+    seen: list[httpx.Request] = []
+    call = {**CALL_LONG, "type": "function_call", "call_id": "c1", "arguments": "{}"}
+    events = [
+        {"type": "response.created", "response": {"id": "resp_up"}},
+        {"type": "response.output_item.done", "item": call},
+        {"type": "response.completed", "response": {"id": "resp_up", "output": [call]}},
+    ]
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        text = "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=httpx.ByteStream(text.encode()),
+        )
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(upstream), **kw)
+    )
+    body = {**_create("go", tools=APP_TOOLS, tool_choice=CALL_LONG), "model": "gpt-5-codex"}
+    with h.client.websocket_connect(url, headers={"ChatGPT-Account-ID": "acct-1"}) as ws:
+        ws.send_text(json.dumps(body))
+        frames = _turn(ws)
+    assert frames == events
+    sent = json.loads(seen[0].content)
+    assert sent["tools"] == APP_TOOLS and sent["tool_choice"] == CALL_LONG
