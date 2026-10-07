@@ -92,7 +92,6 @@ export const settingsStrings = {
   "settings.desc.security": "Who may call the API and open this admin.",
   "settings.security.signin_label": "Signing in",
   "settings.security.signin_body": "Sign-in is on by default. A browser signs in once with the API key and keeps a session for 12 hours; Open Admin Panel in the menu bar signs you in without typing it. The menu bar and the splash command use a token file on this Mac instead.",
-  "settings.security.signin_off_body": "With Protect the admin off, pages on this Mac can read without signing in, but every change and every secret still needs a session or the token.",
   "settings.security.lan_label": "Network without TLS",
   "settings.security.lan_warn_title": "Listening on the network over plain HTTP",
   "settings.security.lan_body": "Splash GUI serves plain HTTP. On a local network bind, the API key and the session cookie cross the network unencrypted, so anyone who can watch that network can read them and use them.",

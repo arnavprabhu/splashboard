@@ -229,9 +229,17 @@ export async function startManager(options: ManagerOptions = {}): Promise<RealMa
   return manager;
 }
 
+/** Signs a browser context in, or null to leave it signed out. */
+export type SignInBrowser = ((context: BrowserContext) => Promise<void>) | null;
+
 interface Fixtures {
   managerOptions: ManagerOptions;
   manager: RealManager;
+  /**
+   * How `context` gets its session (D58). Harnesses that bring their own manager (the
+   * verify skill's specs/support.ts) override this so the per-test manager is never started.
+   */
+  signInBrowser: SignInBrowser;
 }
 
 export const test = base.extend<Fixtures>({
@@ -248,8 +256,11 @@ export const test = base.extend<Fixtures>({
   baseURL: async ({ manager }, use) => {
     await use(manager.url);
   },
-  context: async ({ context, manager, managerOptions }, use) => {
-    if (managerOptions.signedIn !== false) await manager.signIn(context);
+  signInBrowser: async ({ manager, managerOptions }, use) => {
+    await use(managerOptions.signedIn === false ? null : (context) => manager.signIn(context));
+  },
+  context: async ({ context, signInBrowser }, use) => {
+    if (signInBrowser) await signInBrowser(context);
     await use(context);
   },
 });

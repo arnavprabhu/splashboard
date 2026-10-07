@@ -229,25 +229,28 @@ function SecurityNotes({ form }: { form: SettingsForm }) {
   const host = form.value({ key: "server.host", model: null });
   const lan = typeof host === "string" && !isLoopback(host);
   return (
-    <div class="stack" data-testid="security-notes">
+    <div data-testid="security-notes">
       <div class="field">
-        <span class="label">{t("settings.security.signin_label")}</span>
-        <div class="field-body stack">
-          <p class="body">{t("settings.security.signin_body")}</p>
-          <p class="body">{t("settings.security.signin_off_body")}</p>
+        <div class="field-head">
+          <span class="label">{t("settings.security.signin_label")}</span>
+        </div>
+        <div class="field-body">
+          <p class="field-help">{t("settings.security.signin_body")}</p>
         </div>
       </div>
       <div class="field" data-testid="security-lan-tls">
-        <span class="label">{t("settings.security.lan_label")}</span>
+        <div class="field-head">
+          <span class="label">{t("settings.security.lan_label")}</span>
+        </div>
         <div class="field-body stack">
           {lan ? (
             <Banner tone="warn" title={t("settings.security.lan_warn_title")}>
               {t("settings.security.lan_body")}
             </Banner>
           ) : (
-            <p class="body">{t("settings.security.lan_body")}</p>
+            <p class="field-help">{t("settings.security.lan_body")}</p>
           )}
-          <p class="body mute">{t("settings.security.lan_advice")}</p>
+          <p class="field-help mute">{t("settings.security.lan_advice")}</p>
         </div>
       </div>
     </div>
