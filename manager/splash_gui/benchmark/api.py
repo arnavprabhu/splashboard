@@ -34,7 +34,7 @@ async def start(state: State, body: BenchmarkRequest) -> BenchmarkStarted:
     return BenchmarkStarted.model_validate(state.benchmark.launch(body))
 
 
-@router.get("/benchmark/preflight", response_model=BenchmarkPreflight, responses=_ERR)
+@router.post("/benchmark/preflight", response_model=BenchmarkPreflight, responses=_ERR)
 def preflight(state: State) -> BenchmarkPreflight:
     return BenchmarkPreflight.model_validate(state.benchmark.preflight())
 

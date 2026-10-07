@@ -60,7 +60,7 @@ def main() -> None:
         client_version=client_version,
     )
     if spec.get("format") == "json":
-        # `GET /integrations/{client}/print`: the same configuration as data.
+        # `POST /integrations/{client}/print`: the same configuration as data.
         print(
             json.dumps(
                 {

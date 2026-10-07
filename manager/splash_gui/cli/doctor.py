@@ -1,7 +1,7 @@
 """`splash doctor` (docs/ui/11 §12, SPEC §12.1–12.2).
 
 Local checks always run, so the command works when nothing else does; when the
-manager answers, its `GET /doctor` items are merged in. A local check replaces
+manager answers, its `POST /doctor` items are merged in. A local check replaces
 the manager's item with the same id: the CLI is the one that can see the
 user's shells, and it applies the §12 thresholds itself.
 """
@@ -35,7 +35,7 @@ GROUPS = (
     ("integrations", "Integrations"),
     ("other", "Other"),
 )
-# The manager's `GET /doctor` ids → §12 groups.
+# The manager's `POST /doctor` ids → §12 groups.
 GROUP_OF = {
     "hardware": "hardware",
     "engine": "engine",

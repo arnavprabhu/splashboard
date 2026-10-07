@@ -1,4 +1,4 @@
-"""Hardware, OS and power facts for `GET /system` (SPEC §10.2, §10.6)."""
+"""Hardware, OS and power facts for `POST /system` (SPEC §10.2, §10.6)."""
 
 from __future__ import annotations
 

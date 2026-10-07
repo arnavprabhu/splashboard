@@ -425,7 +425,7 @@ def test_a_model_without_a_usable_projector_needs_language_only(hub_harness):
 def test_a_text_only_model_is_reported_as_such_not_as_incompatible(hub_harness):
     """SPEC §9.2 badge: "Compatible — text only"."""
     harness = hub_harness()
-    response = harness.client.get(f"/api/admin/inspect?id={GGUF_NO_VISION}&refresh=1")
+    response = harness.client.post(f"/api/admin/inspect?id={GGUF_NO_VISION}&refresh=1")
     assert response.status_code == 200, response.text
     result = dict(response.json())
     assert result["compatible"] is True

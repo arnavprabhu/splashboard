@@ -80,7 +80,7 @@ async def search(
     )
 
 
-@router.get("/inspect", response_model=InspectResult, responses=_ERR)
+@router.post("/inspect", response_model=InspectResult, responses=_ERR)
 async def inspect(
     state: State, id: Annotated[str, Query()], refresh: bool = False
 ) -> InspectResult:

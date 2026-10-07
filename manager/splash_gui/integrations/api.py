@@ -28,7 +28,7 @@ CliName = Literal["claude", "codex", "opencode", "hermes", "pi"]
 _ERR = error_responses(404, 409)
 
 
-@router.get("/integrations", response_model=Integrations, responses=_ERR)
+@router.post("/integrations", response_model=Integrations, responses=_ERR)
 def list_integrations(state: State) -> Integrations:
     return cast(IntegrationsService, state.integrations).listing()
 
@@ -88,7 +88,7 @@ def reveal_backup(
     return cast(IntegrationsService, state.integrations).reveal_backup(name)
 
 
-@router.get("/integrations/{name}/print", response_model=LaunchPrint)
+@router.post("/integrations/{name}/print", response_model=LaunchPrint)
 def print_launch(
     state: State,
     name: CliName,

@@ -276,7 +276,7 @@ def delete_trace(state: State, name: str) -> Response:
     return Response(status_code=204)
 
 
-@router.get("/diagnostics", response_model=DiagnosticsBundle)
+@router.post("/diagnostics", response_model=DiagnosticsBundle)
 def diagnostics(state: State) -> DiagnosticsBundle:
     """Everything a Splash issue report asks for."""
     known = state.secrets.known_values()

@@ -60,7 +60,7 @@ def test_diagnostics_redacts_secrets(client: TestClient, app: FastAPI, paths: Pa
     assert client.put("/api/admin/settings", json=doc).status_code == 200
     paths.engine_log.write_text(f"2026-10-03 10:00:00,000 stdout key={key}\n")
     app.state.manager.raw_status = lambda: {"schema_version": 6, "ready": True}
-    body = client.get("/api/admin/diagnostics").json()
+    body = client.post("/api/admin/diagnostics").json()
     text = json.dumps(body)
     assert key not in text and "abc123" not in text
     assert body["engine_log_tail"] == ["2026-10-03 10:00:00,000 stdout key=••••••"]

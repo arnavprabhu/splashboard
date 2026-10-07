@@ -34,7 +34,7 @@ router = APIRouter()
 State = Annotated[ManagerState, Depends(get_state)]
 
 
-@router.get("/system", response_model=SystemInfo)
+@router.post("/system", response_model=SystemInfo)
 def get_system(state: State) -> SystemInfo:
     return system_info(state.settings.models_dir(), state.settings.cache_dir())
 
@@ -52,7 +52,7 @@ def get_versions(state: State) -> Versions:
     )
 
 
-@router.get("/system/brew", response_model=BrewInfo)
+@router.post("/system/brew", response_model=BrewInfo)
 def get_brew(state: State) -> BrewInfo:
     brew = shutil.which("brew") or next(
         (b for b in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew") if shutil.which(b)), None
@@ -87,7 +87,7 @@ BREW_INSTALL = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Hom
 )
 def install_brew(state: State) -> OpenTerminalResult:
     """Homebrew needs the user's password, so its official
-    installer runs in Terminal; the wizard then polls `GET /system/brew`."""
+    installer runs in Terminal; the wizard then polls `POST /system/brew`."""
     if get_brew(state).installed:
         raise ApiError(409, "Homebrew is already installed", "brew_installed")
     result = state.macos.open_in_terminal(BREW_INSTALL)
@@ -118,7 +118,7 @@ async def engine_check_update(state: State) -> UpdateInfo:
     return await state.updates.check()  # type: ignore[no-any-return]
 
 
-@router.get("/doctor", response_model=DoctorReport, responses=error_responses(400, 404, 503))
+@router.post("/doctor", response_model=DoctorReport, responses=error_responses(400, 404, 503))
 def doctor(state: State) -> DoctorReport:
     system = get_system(state)
     engine = state.engine()

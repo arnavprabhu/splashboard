@@ -52,7 +52,7 @@ def hub_harness(harness_factory, fake_hub, monkeypatch):
 
 
 def inspect(harness, model: str, refresh: bool = True) -> dict[str, Any]:
-    response = harness.client.get(f"/api/admin/inspect?id={model}&refresh={1 if refresh else 0}")
+    response = harness.client.post(f"/api/admin/inspect?id={model}&refresh={1 if refresh else 0}")
     assert response.status_code == 200, response.text
     return dict(response.json())
 
@@ -221,14 +221,14 @@ def test_a_missing_engine_refuses_rather_than_guessing(client, fake_hub):
     """SPEC §9.2: the API never imports Splash into the manager process, so with
     no engine python it must answer 503 instead of screening by itself."""
     point_at_hub(client, fake_hub)
-    response = client.get(f"/api/admin/inspect?id={MODEL}&refresh=1")
+    response = client.post(f"/api/admin/inspect?id={MODEL}&refresh=1")
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "engine_unavailable"
 
 
 def test_a_model_id_without_a_repository_is_rejected(client, fake_hub):
     point_at_hub(client, fake_hub)
-    response = client.get("/api/admin/inspect?id=qwen3.6-35b&refresh=1")
+    response = client.post("/api/admin/inspect?id=qwen3.6-35b&refresh=1")
     assert response.status_code == 400, response.text
 
 
@@ -238,7 +238,7 @@ def test_offline_mode_reports_the_hub_as_unreachable(client, fake_hub):
     current["global"]["hf"]["offline"] = True
     saved = client.put("/api/admin/settings", json=current)
     assert saved.status_code == 200, saved.text
-    response = client.get(f"/api/admin/inspect?id={MODEL}&refresh=1")
+    response = client.post(f"/api/admin/inspect?id={MODEL}&refresh=1")
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "hub_unreachable"
 

@@ -232,7 +232,7 @@ def test_catalog_download_bytes_match_the_inspect_download_plan(hub_harness) -> 
     before = entries(h.client.get("/api/admin/catalog").json())
 
     def plan(model: str) -> dict[str, Any]:
-        response = h.client.get(f"/api/admin/inspect?id={model}&refresh=1")
+        response = h.client.post(f"/api/admin/inspect?id={model}&refresh=1")
         assert response.status_code == 200, response.text
         return dict(response.json())
 
