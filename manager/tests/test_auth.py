@@ -509,6 +509,18 @@ def test_login_link_and_exchange(app: FastAPI, client: TestClient, browser: Test
     assert reused.json()["error"]["code"] == "invalid_code"
 
 
+def test_code_guessing_is_throttled(client: TestClient, browser: TestClient) -> None:
+    """D58 review: wrong codes count as failed sign-ins, so guessing is throttled (a
+    code is 256 random bits; this keeps a local process from hammering the route)."""
+    for _ in range(10):
+        wrong = browser.post("/api/admin/auth/exchange", json={"code": "guess"})
+        assert wrong.status_code == 401 and wrong.json()["error"]["code"] == "invalid_code"
+    code = client.post("/api/admin/auth/link").json()["url"].split("code=", 1)[1]
+    throttled = browser.post("/api/admin/auth/exchange", json={"code": code})
+    assert throttled.status_code == 429 and throttled.json()["error"]["code"] == "too_many_attempts"
+    assert browser.get("/api/admin/settings").status_code == 401, "no session from a throttled call"
+
+
 def test_only_the_cli_token_mints_links(client: TestClient, browser: TestClient) -> None:
     assert browser.post("/api/admin/auth/link").status_code == 401
     _login(browser, client)

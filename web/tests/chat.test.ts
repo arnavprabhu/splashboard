@@ -209,6 +209,8 @@ describe('errors (§10)', () => {
     expect(classifyError(api(404, 'model_not_found'), { model: 'a/b' }).title).toBe('a/b isn’t installed any more.');
     expect(classifyError(api(413, 'attachment_too_large')).kind).toBe('attachment');
     expect(classifyError(api(400, null, 'bad')).kind).toBe('rejected');
+    // /v1 with the key required and no session (D58): offer sign-in rather than a bare error.
+    expect(classifyError(api(401, 'authentication_error', 'invalid or missing API key'))).toMatchObject({ kind: 'sign_in', title: 'Sign in to chat.' });
     expect(classifyError(new TypeError('Failed to fetch')).kind).toBe('unreachable');
   });
 });

@@ -1,5 +1,5 @@
 /** The per-request error banner above the composer (docs/ui/07 §10). */
-import { Link } from 'wouter-preact';
+import { Link, useLocation, useSearch } from 'wouter-preact';
 import { api } from '../../api/client';
 import { Banner } from '../../components/Banner';
 import { Button } from '../../components/Button';
@@ -24,7 +24,14 @@ export interface ErrorBannerProps {
   onDismiss: () => void;
 }
 
+/** The login page, coming back to this chat afterwards (`next` is relative to the router base). */
+export function signInHref(path: string, search: string): string {
+  return `/login?next=${encodeURIComponent(path + (search ? `?${search}` : ''))}`;
+}
+
 export function ErrorBanner({ error, onRetry, onSwitchWhenIdle, onOpenTab, onTurnOffEos, onRemoveAttachments, onShowRequest, onDismiss }: ErrorBannerProps) {
+  const [path] = useLocation();
+  const search = useSearch();
   return (
     <Banner
       tone={error.kind === 'failed' ? 'critical' : 'warn'}
@@ -57,6 +64,11 @@ export function ErrorBanner({ error, onRetry, onSwitchWhenIdle, onOpenTab, onTur
             >
               {t('chat.action.restart')}
             </Button>
+          )}
+          {error.kind === 'sign_in' && (
+            <Link href={signInHref(path, search)} class="btn" data-variant="solid" data-size="s">
+              {t('chat.action.sign_in')}
+            </Link>
           )}
           {(error.kind === 'failed' || error.kind === 'generic') && (
             <Link href="/logs" class="btn" data-variant="text" data-size="s">

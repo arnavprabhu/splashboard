@@ -497,6 +497,7 @@ export type ErrorKind =
   | 'attachment'
   | 'ignore_eos'
   | 'rejected'
+  | 'sign_in'
   | 'generic';
 
 export interface ChatError {
@@ -536,6 +537,8 @@ export function classifyError(err: unknown, ctx: { model?: string | null; active
   if (status === 400 && /ignore_eos/i.test(err.message)) return { ...common, kind: 'ignore_eos', title: t('chat.error.ignore_eos'), body: null };
   if (status === 413 || (status === 400 && /image|pdf|attachment|file/i.test(err.message)))
     return { ...common, kind: 'attachment', title: t('chat.error.attachment'), body: null };
+  // /v1 with "Require API key" on and admin sign-in off: the page has no session yet (D58).
+  if (status === 401) return { ...common, kind: 'sign_in', title: t('chat.error.sign_in'), body: t('chat.error.sign_in_body') };
   if (status >= 400 && status < 500) return { ...common, kind: 'rejected', title: t('chat.error.rejected'), body: null };
   return { ...common, kind: 'generic', title: t('chat.error.generic'), body: null };
 }

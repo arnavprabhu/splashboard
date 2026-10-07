@@ -7,6 +7,10 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/preact';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../src/api/client';
 import { App, loginRedirect } from '../src/app';
+import { Router } from 'wouter-preact';
+import { ErrorBanner } from '../src/routes/chat/ErrorBanner';
+import { classifyError } from '../src/routes/chat/logic';
+import { ApiError } from '../src/api/client';
 import { stripCode } from '../src/routes/login';
 import { auth, authKnown, managerReachable, settings, settingsLoaded, startStore } from '../src/store';
 
@@ -93,7 +97,7 @@ describe('one-time sign-in link', () => {
   });
 
   it('a spent code is not exchanged twice', async () => {
-    const { calls } = stubFetch((_m, path) => (path === '/api/admin/auth/exchange' ? json(410, { error: { message: 'gone', type: 'x', code: 'invalid_code' } }) : undefined));
+    const { calls } = stubFetch((_m, path) => (path === '/api/admin/auth/exchange' ? json(401, { error: { message: 'gone', type: 'authentication_error', code: 'invalid_code' } }) : undefined));
     go('/admin/login?code=twice');
     const first = render(<App base="/admin" />);
     await screen.findByTestId('login-link-error');
@@ -107,7 +111,8 @@ describe('one-time sign-in link', () => {
 
 describe('401 auth_required', () => {
   it('a write refused while sign-in is off sends the user to sign in and back', async () => {
-    auth.value = { admin_requires_key: false, authenticated: true, method: 'open' };
+    // What the manager reports with sign-in off and no credential (docs/api.md §12.5).
+    auth.value = { admin_requires_key: false, authenticated: false, method: 'open' };
     let signedIn = false;
     stubFetch((method, path) => {
       if (path === '/api/admin/auth/login') {
@@ -170,5 +175,31 @@ describe('logout', () => {
     go('/admin/status');
     render(<App base="/admin" />);
     expect(await screen.findByText('Log out')).toBeTruthy();
+  });
+});
+
+describe('Chat /v1 401 with sign-in off (D58)', () => {
+  it('offers Sign in, returning to this chat', async () => {
+    go('/admin/chat/c-123?model=a%2Fb');
+    const error = classifyError(new ApiError(401, { message: 'invalid or missing API key', type: 'authentication_error', code: 'authentication_error' }));
+    const noop = () => undefined;
+    render(
+      <Router base="/admin">
+        <ErrorBanner
+          error={{ ...error, retries: 0, retryIn: null }}
+          onRetry={noop}
+          onSwitchWhenIdle={noop}
+          onOpenTab={noop}
+          onTurnOffEos={noop}
+          onRemoveAttachments={noop}
+          onShowRequest={noop}
+          onDismiss={noop}
+        />
+      </Router>,
+    );
+    const link = await screen.findByRole('link', { name: 'Sign in' });
+    expect(link.getAttribute('href')).toBe('/admin/login?next=%2Fchat%2Fc-123%3Fmodel%3Da%252Fb');
+    expect(screen.getByText('Sign in to chat.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
   });
 });
