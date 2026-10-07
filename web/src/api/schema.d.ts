@@ -794,6 +794,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/inspect/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Inspect Stream
+         * @description D59: `/inspect` as server-sent events. `inspect.progress` (a partial
+         *     InspectResult, `pending` lists the variants still being checked) first and on
+         *     every verdict, the likely recommended variant's first; then `inspect.result`
+         *     (the complete InspectResult) or `inspect.error`. Hub and engine errors answer
+         *     before the stream starts, with the same codes as `/inspect`.
+         */
+        get: operations["inspect_stream_api_admin_inspect_stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/card": {
         parameters: {
             query?: never;
@@ -3338,7 +3362,7 @@ export interface components {
              * Badge
              * @enum {string}
              */
-            badge: "compatible" | "text_only" | "incompatible" | "not_clef_accurate";
+            badge: "compatible" | "text_only" | "incompatible" | "not_clef_accurate" | "checking";
             /** Family */
             family?: ("Qwen3.8-27B" | "Qwen3.6-35B-A3B") | null;
             /** Format */
@@ -3347,6 +3371,10 @@ export interface components {
             variants?: components["schemas"]["VariantOut"][];
             /** Recommended Variant */
             recommended_variant?: string | null;
+            /** First Variant */
+            first_variant?: string | null;
+            /** Pending */
+            pending?: string[];
             vision: components["schemas"]["VisionInfo"];
             /** Draft */
             draft?: string | null;
@@ -7022,6 +7050,66 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InspectResult"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    inspect_stream_api_admin_inspect_stream_get: {
+        parameters: {
+            query: {
+                id: string;
+                refresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Server-sent events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                    "text/event-stream": unknown;
                 };
             };
             /** @description Bad Request */

@@ -16,19 +16,22 @@ export interface VariantTableProps {
   /** Per-row Download buttons (drawer). */
   onDownload?: (variant: VariantOut) => void;
   installed?: ReadonlySet<string>;
+  /** Variants whose verdict has not arrived yet (D59): a "Checking…" line, not selectable. */
+  pending?: readonly string[];
   caption: string;
 }
 
 /** GGUF variants (SPEC §9.1, D8): size, bits, tier, fit, Recommended, disabled rows with reasons. */
-export function VariantTable({ variants, selected, onSelect, onDownload, installed, caption }: VariantTableProps) {
+export function VariantTable({ variants, selected, onSelect, onDownload, installed, pending, caption }: VariantTableProps) {
   const group = useId();
+  const waiting = new Set(pending ?? []);
   const rows = [...variants].sort((a, b) => Number(isProjector(a.name)) - Number(isProjector(b.name)));
   const columns: Column<VariantOut>[] = [
     {
       key: 'name',
       label: t('models.variant.col.variant'),
       render: (v) => {
-        const disabled = v.loadable === false || isProjector(v.name);
+        const disabled = v.loadable === false || isProjector(v.name) || waiting.has(v.name);
         if (!onSelect || isProjector(v.name)) return <span class="mono">{v.name}</span>;
         return (
           <label class="variant-pick">
@@ -56,6 +59,7 @@ export function VariantTable({ variants, selected, onSelect, onDownload, install
       render: (v) => {
         if (isProjector(v.name)) return <span class="meta">{t('models.variant.projector')}</span>;
         if (v.loadable === false) return <span class="variant-reason">{t('models.variant.unsupported', { reason: v.reason ?? t('models.variant.unsupported_default') })}</span>;
+        if (waiting.has(v.name)) return <span class="meta" data-testid="variant-checking">{t('models.variant.checking')}</span>;
         const isInstalled = installed?.has(v.name) ?? false;
         return (
           <span class="cluster" style={{ gap: '8px' }}>

@@ -16,8 +16,6 @@ export const TYPED_DELETE_BYTES = 10 * GIB;
 export const DISK_MARGIN_BYTES = 2 * GIB;
 /** Search results: at most this many /inspect calls in flight (decision M9). */
 export const MAX_LAZY_CHECKS = 3;
-/** /inspect runs Splash's helper with a 20 s timeout; the UI waits as long (03 §3.3). */
-export const INSPECT_TIMEOUT_MS = 20_000;
 
 export const ACTIVE_DOWNLOAD_STATES: ReadonlySet<DownloadItem['state']> = new Set(['queued', 'running', 'paused', 'verifying']);
 
@@ -246,7 +244,18 @@ export function pickVariant(result: Pick<InspectResult, 'variants' | 'recommende
     if (hit) return hit.name;
   }
   const rec = variants.find((v) => v.name === result?.recommended_variant && loadable(v)) ?? variants.find((v) => v.recommended && loadable(v));
-  return (rec ?? variants.find(loadable))?.name ?? null;
+  if (rec) return rec.name;
+  // While the check runs (D59), an unchecked row is not a default: wait for a verdict.
+  const checking = (result as Partial<InspectResult> | null)?.pending?.length ?? 0;
+  return variants.find((v) => (checking ? v.loadable === true : loadable(v)))?.name ?? null;
+}
+
+/** D59: how far a streamed compatibility check is, or null once it is complete. */
+export function inspectProgress(result: Pick<InspectResult, 'variants' | 'pending'> | null): { checked: number; total: number } | null {
+  const pending = result?.pending ?? [];
+  if (!result || !pending.length) return null;
+  const total = result.variants?.filter((v) => !isProjector(v.name)).length ?? 0;
+  return { checked: Math.max(0, total - pending.length), total };
 }
 
 /** `mmproj-*` files are vision projectors, not variants (SPEC §9.1). */

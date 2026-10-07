@@ -19,9 +19,10 @@ import { useApi } from '../../lib/use-api';
 import { engine, engineState } from '../../store';
 import { t } from '../../strings/models';
 import * as flows from './actions';
-import { getCard, getModel, inspectModel } from './api';
+import { getCard, getModel } from './api';
+import { streamInspect } from './inspect';
 import { CompatTag } from './bits';
-import { formatLabel, hfUrl, installedVariants, isClefId, isProjector, pickVariant, repoOf, sha7, shortName } from './logic';
+import { formatLabel, hfUrl, inspectProgress, installedVariants, isClefId, isProjector, pickVariant, repoOf, sha7, shortName } from './logic';
 import { isLocalId } from './local';
 import { Markdown } from './markdown';
 import { VariantTable } from './VariantTable';
@@ -49,7 +50,8 @@ export function ModelDrawer({ id, installed, activeId, onClose, onDelete, onVeri
   const detail = useApi<ModelDetail | null>((signal) => (exact ? getModel(exact.id, signal) : Promise.resolve(null)), [exact?.id], open && Boolean(exact));
   // A dropped `.gguf` (`local/…`) has no Hub repo: no compatibility check, card or Hub link.
   const local = id ? isLocalId(id) : false;
-  const inspect = useApi<InspectResult>((signal) => inspectModel(repo, signal), [repo], open && !local);
+  // D59: partial results fill the table as Splash checks each variant, the likely pick first.
+  const inspect = useApi<InspectResult>((signal) => streamInspect(repo, { signal, onProgress: (r) => !signal.aborted && inspect.setData(r) }), [repo], open && !local);
   const card = useApi<ModelCard>((signal) => getCard(repo, signal), [repo], open && !local);
 
   if (!open || !id) return null;
@@ -78,7 +80,10 @@ export function ModelDrawer({ id, installed, activeId, onClose, onDelete, onVeri
   // As in the Downloader catalog (03 §3.2 "same as the drawer"): the Variant menu selects, only the button downloads.
   const [picked, setPicked] = useState<string | null>(null);
   const downloadable = (v: VariantOut) => v.loadable !== false && !installedSet.has(v.name);
-  const choice = variants.find((v) => v.name === picked) ?? variants.find((v) => v.name === rec && downloadable(v)) ?? variants.find(downloadable) ?? null;
+  const checking = ins?.pending ?? [];
+  const progress = inspectProgress(ins);
+  const ready = (v: VariantOut) => downloadable(v) && !checking.includes(v.name);
+  const choice = variants.find((v) => v.name === picked) ?? variants.find((v) => v.name === rec && ready(v)) ?? (checking.length ? null : variants.find(downloadable)) ?? null;
   const choiceSize = choice ? (choice.download_bytes ? formatBytes(choice.download_bytes, { base: 1000 }) : choice.size_bytes ? formatBytes(choice.size_bytes, { base: 1000 }) : null) : null;
   const compatible = ins ? ins.badge !== 'incompatible' : true;
 
@@ -158,7 +163,7 @@ export function ModelDrawer({ id, installed, activeId, onClose, onDelete, onVeri
         <div class="cluster drawer-actions">
           {compatible && canDownloadMore && isGguf && variants.length > 0 && (
             <span class="cluster">
-            <Button variant="accent" disabled={!choice || !downloadable(choice)} onClick={() => choice && download(choice.name)} data-testid="drawer-download">
+            <Button variant="accent" disabled={!choice || !ready(choice)} onClick={() => choice && download(choice.name)} data-testid="drawer-download">
               {choiceSize ? t('models.action.download_variant_size', { variant: choice?.name ?? '', size: choiceSize }) : t('models.action.download_variant', { variant: choice?.name ?? '' })}
             </Button>
             <Menu
@@ -173,10 +178,12 @@ export function ModelDrawer({ id, installed, activeId, onClose, onDelete, onVeri
                 detail:
                   v.loadable === false
                     ? t('models.variant.unsupported', { reason: v.reason ?? t('models.variant.unsupported_default') })
-                    : [formatBytes(v.size_bytes, { base: 1000 }), v.recommended ? t('models.variant.recommended') : null, installedSet.has(v.name) ? t('models.variant.installed') : null]
+                    : checking.includes(v.name)
+                      ? t('models.variant.checking')
+                      : [formatBytes(v.size_bytes, { base: 1000 }), v.recommended ? t('models.variant.recommended') : null, installedSet.has(v.name) ? t('models.variant.installed') : null]
                         .filter(Boolean)
                         .join(' · '),
-                disabled: v.loadable === false || installedSet.has(v.name),
+                disabled: !ready(v),
                 checked: v.name === choice?.name,
                 onSelect: () => setPicked(v.name),
               }))}
@@ -232,12 +239,20 @@ export function ModelDrawer({ id, installed, activeId, onClose, onDelete, onVeri
           ) : local ? (
             <p class="body tnum">{t('models.local.drawer_line', { size: formatBytes(det?.size_bytes ?? model?.size_bytes ?? null) })}</p>
           ) : isGguf ? (
-            <VariantTable
-              variants={ins?.variants ?? []}
-              installed={installedSet}
-              onDownload={compatible ? (v) => download(v.name) : undefined}
-              caption={t('models.drawer.variants')}
-            />
+            <>
+              {progress && (
+                <p class="meta tnum" data-testid="inspect-progress">
+                  {t('models.byid.progress', { checked: progress.checked, total: progress.total })}
+                </p>
+              )}
+              <VariantTable
+                variants={ins?.variants ?? []}
+                installed={installedSet}
+                pending={checking}
+                onDownload={compatible && ins?.badge !== 'checking' ? (v) => download(v.name) : undefined}
+                caption={t('models.drawer.variants')}
+              />
+            </>
           ) : (
             <p class="body tnum">
               {format === 'legacy'

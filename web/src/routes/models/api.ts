@@ -20,7 +20,6 @@ import type {
   SearchResults,
   StorageInfo,
 } from '../../api/models';
-import { INSPECT_TIMEOUT_MS } from './logic';
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -100,28 +99,6 @@ export function searchHub(q: string, sort: SearchSort, signal?: AbortSignal): Pr
 export function readInspect(v: unknown): InspectResult | null {
   if (!isRecord(v) || typeof v.id !== 'string' || typeof v.badge !== 'string') return null;
   return { id: v.id, badge: v.badge as InspectResult['badge'], variants: [], vision: { available: false }, compatible: v.badge !== 'incompatible', cached: false, checked_at: '', repo_id: v.id.split(':')[0]!, ...v } as InspectResult;
-}
-
-/** POST /inspect (D58, was GET) with the helper's 20 s timeout; `signal` aborts early. */
-export async function inspectModel(id: string, signal?: AbortSignal, refresh = false): Promise<InspectResult> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(new DOMException('timeout', 'TimeoutError')), INSPECT_TIMEOUT_MS);
-  const onAbort = () => ctrl.abort();
-  signal?.addEventListener('abort', onAbort);
-  try {
-    const body = await api.read<unknown>('/inspect', refresh ? { id, refresh: true } : { id }, ctrl.signal);
-    const result = readInspect(body);
-    if (!result) throw new ApiError(502, { message: 'Unexpected compatibility result', type: 'server_error', code: 'bad_response' });
-    return result;
-  } catch (err) {
-    if (ctrl.signal.reason instanceof DOMException && ctrl.signal.reason.name === 'TimeoutError' && !signal?.aborted) {
-      throw new ApiError(504, { message: 'The compatibility check took longer than 20 s', type: 'server_error', code: 'timeout' });
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener('abort', onAbort);
-  }
 }
 
 export function getCard(id: string, signal?: AbortSignal): Promise<ModelCard> {

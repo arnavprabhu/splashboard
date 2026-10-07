@@ -20,12 +20,13 @@ import { useApi } from "../lib/use-api";
 import { engine } from "../store";
 import { t } from "../strings/downloader";
 import "../styles/pages/models.css";
-import { getCatalog, getStorage, inspectModel, loadEngine, postDownload, searchHub, whoami, type SearchSort } from "./models/api";
+import { getCatalog, getStorage, loadEngine, postDownload, searchHub, whoami, type SearchSort } from "./models/api";
+import { streamInspect } from "./models/inspect";
 import { CompatTag, FitTag, type CompatState } from "./models/bits";
 import { DownloadsPanel } from "./models/DownloadsPanel";
 import { useDownloadsPoll, useDrawerParam, useInstalled, useModelsTitle } from "./models/hooks";
 import { ModelDrawer } from "./models/ModelDrawer";
-import { checkModelId, diskCheck, formatLabel, hfUrl, isClefId, isLegacyId, isProjector, MAX_LAZY_CHECKS, pickVariant, shortName } from "./models/logic";
+import { checkModelId, diskCheck, formatLabel, hfUrl, isClefId, isLegacyId, isProjector, inspectProgress, MAX_LAZY_CHECKS, pickVariant, shortName } from "./models/logic";
 import { VariantTable } from "./models/VariantTable";
 import { MODELS_TABS } from "./tabs";
 
@@ -295,11 +296,23 @@ function ById({ initial, free, memory, installedIds }: { initial: string; free: 
     setError(null);
     setResult(null);
     setChecked(trimmed);
+    setVariant(null);
+    const requested = trimmed.includes(":") ? trimmed.split(":")[1]! : null;
+    // D59: the likely pick's verdict arrives first; keep a variant the user picked meanwhile.
+    const keep = (r: InspectResult) => (current: string | null) =>
+      current && r.variants?.some((x) => x.name === current && x.loadable !== false) ? current : pickVariant(r, requested);
     try {
-      const r = await inspectModel(trimmed, c.signal);
+      const r = await streamInspect(trimmed, {
+        signal: c.signal,
+        onProgress: (partial) => {
+          if (c.signal.aborted) return;
+          setResult(partial);
+          setVariant(keep(partial));
+        },
+      });
       if (c.signal.aborted) return;
       setResult(r);
-      setVariant(pickVariant(r, trimmed.includes(":") ? trimmed.split(":")[1]! : null));
+      setVariant(keep(r));
       setLanguageOnly(r.badge === "text_only");
     } catch (err) {
       if (!c.signal.aborted) setError(err);
@@ -324,6 +337,7 @@ function ById({ initial, free, memory, installedIds }: { initial: string; free: 
     ? { ok: plan.fits_on_disk, neededBytes: plan.remaining_bytes + plan.margin_bytes, freeBytes: plan.free_bytes ?? free }
     : diskCheck(size, free);
   const target = variants.length ? variantId(repo, variant) : (result?.id ?? id.trim());
+  const progress = inspectProgress(result);
   const isInstalled = installedIds.has(target);
 
   return (
@@ -355,7 +369,7 @@ function ById({ initial, free, memory, installedIds }: { initial: string; free: 
             {v.error} {v.hint}
           </p>
         )}
-        {busy && <Loading label={t("downloader.checking", { id: id.trim() })} />}
+        {busy && !result && <Loading label={t("downloader.checking", { id: id.trim() })} />}
         {!!error && <LoadError thing={t("downloader.thing_inspect")} error={error} onRetry={() => void check()} />}
         {result && (
           <div class="stack dlr-result">
@@ -376,10 +390,18 @@ function ById({ initial, free, memory, installedIds }: { initial: string; free: 
                 {t("models.clef.body")}
               </Banner>
             )}
+            {progress && (
+              <p class="meta tnum" data-testid="inspect-progress">
+                {t("models.byid.progress", { checked: progress.checked, total: progress.total })}
+              </p>
+            )}
+            {result.badge === "checking" && variants.length > 0 && (
+              <VariantTable variants={variants} pending={result.pending} caption={t("downloader.variant")} installed={installedIds} />
+            )}
             {result.compatible && (
               <>
                 {variants.length > 0 && (
-                  <VariantTable variants={variants} selected={variant} onSelect={setVariant} caption={t("downloader.variant")} installed={installedIds} />
+                  <VariantTable variants={variants} selected={variant} onSelect={setVariant} pending={result.pending} caption={t("downloader.variant")} installed={installedIds} />
                 )}
                 <Disclosure summary={t("downloader.options")}>
                   {legacy ? (
@@ -436,7 +458,7 @@ function ById({ initial, free, memory, installedIds }: { initial: string; free: 
                 <div class="cluster">
                   <Button
                     variant="accent"
-                    disabled={!disk.ok || isInstalled || (variants.length > 0 && !variant)}
+                    disabled={!disk.ok || isInstalled || (variants.length > 0 && (!variant || chosen?.loadable !== true))}
                     onClick={() =>
                       void startDownload(target, {
                         language_only: languageOnly || result.badge === "text_only",
@@ -532,9 +554,19 @@ function Search({ onOpen }: { onOpen: (id: string) => void }) {
       const id = queue.current.shift()!;
       inFlight.current += 1;
       setStates((st) => ({ ...st, [id]: "checking" }));
-      void inspectModel(id)
-        .then((r) => setStates((st) => ({ ...st, [id]: r.badge as CompatState })))
-        .catch(() => setStates((st) => ({ ...st, [id]: "error" })))
+      // D59: the badge settles with the first verdict that decides it (the likely pick's),
+      // then this row stops listening; the manager finishes the check and keeps it.
+      const ctrl = new AbortController();
+      const settle = (r: InspectResult) => {
+        if (r.badge === "checking") return;
+        setStates((st) => ({ ...st, [id]: r.badge as CompatState }));
+        ctrl.abort();
+      };
+      void streamInspect(id, { signal: ctrl.signal, onProgress: settle })
+        .then(settle)
+        .catch(() => {
+          if (!ctrl.signal.aborted) setStates((st) => ({ ...st, [id]: "error" }));
+        })
         .finally(() => {
           inFlight.current -= 1;
           pump();

@@ -231,6 +231,12 @@ export async function mockManager(page: Page, opts: MockOptions = {}): Promise<s
     }
     const hit = opts.extra?.(req.method(), path, url, body);
     if (hit) return route.fulfill({ status: hit.status ?? 200, json: hit.json ?? {} });
+    // D59: a stub for GET /inspect also answers the stream, as one `inspect.result` event.
+    const inspect = path === '/inspect/stream' ? opts.extra?.(req.method(), '/inspect', url, body) : undefined;
+    if (inspect) {
+      if ((inspect.status ?? 200) >= 400) return route.fulfill({ status: inspect.status, json: inspect.json ?? {} });
+      return route.fulfill({ contentType: 'text/event-stream', body: `event: inspect.result\ndata: ${JSON.stringify(inspect.json)}\n\n` });
+    }
     if (path === '/auth/state') return route.fulfill({ json: auth });
     if (path === '/auth/login') {
       const ok = (req.postDataJSON() as { key?: string }).key === 'secret';
