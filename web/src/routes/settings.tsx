@@ -28,7 +28,7 @@ const SETTINGS_SECTIONS = SECTIONS_RAW.map((s) => ({ slug: s.slug, label: t(`set
 import { SettingField } from "./settings/SettingField";
 import { globalForm, schema, schemaError, loadSchema, type SettingsForm } from "./settings/state";
 import { settingsApi } from "./settings/api";
-import { SECTION_TO_SLUG, SLUG_TO_SECTION } from "./settings/form";
+import { isLoopback, SECTION_TO_SLUG, SLUG_TO_SECTION } from "./settings/form";
 import { SettingsSave } from "./settings/SaveFlow";
 import { ApiKeyField, HfTokenField } from "./settings/Secrets";
 import { DataPrivacy } from "./settings/DataPrivacy";
@@ -221,10 +221,48 @@ function SharedHfCacheNotice() {
   );
 }
 
+/**
+ * Settings → Security page text (D58, SPEC §17.1): how sign-in works, and what a LAN bind over
+ * plain HTTP exposes. The field help itself comes from the manager's metadata.
+ */
+function SecurityNotes({ form }: { form: SettingsForm }) {
+  const host = form.value({ key: "server.host", model: null });
+  const lan = typeof host === "string" && !isLoopback(host);
+  return (
+    <div class="stack" data-testid="security-notes">
+      <div class="field">
+        <span class="label">{t("settings.security.signin_label")}</span>
+        <div class="field-body stack">
+          <p class="body">{t("settings.security.signin_body")}</p>
+          <p class="body">{t("settings.security.signin_off_body")}</p>
+        </div>
+      </div>
+      <div class="field" data-testid="security-lan-tls">
+        <span class="label">{t("settings.security.lan_label")}</span>
+        <div class="field-body stack">
+          {lan ? (
+            <Banner tone="warn" title={t("settings.security.lan_warn_title")}>
+              {t("settings.security.lan_body")}
+            </Banner>
+          ) : (
+            <p class="body">{t("settings.security.lan_body")}</p>
+          )}
+          <p class="body mute">{t("settings.security.lan_advice")}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SectionExtras({ slug, form }: { slug: SettingsSlug; form: SettingsForm }) {
   switch (slug) {
     case "security":
-      return <ApiKeyField form={form} />;
+      return (
+        <>
+          <ApiKeyField form={form} />
+          <SecurityNotes form={form} />
+        </>
+      );
     case "hf":
       return <HfTokenField form={form} />;
     case "notifications":
