@@ -41,7 +41,7 @@ export const bandsStrings = {
   'bands.ane.state.split': 'Split',
   'bands.ane.state.off': 'Off · GPU only',
   'bands.ane.state.stopped': 'Stopped · GPU only until the engine restarts',
-  'bands.ane.reason_disabled': 'Turned off in Settings (--disable-ane).',
+  'bands.ane.reason_disabled': 'Turned off by GPU-only prefill in Settings (--disable-ane).',
   'bands.ane.share': 'Share',
   'bands.ane.share_v': '{p} of FFN channels',
   'bands.ane.chunk': 'Minimum prompt chunk',

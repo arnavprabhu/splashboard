@@ -69,7 +69,7 @@ describe('Status → Neural Engine band', () => {
 
   it('names the setting when --disable-ane turned it off', () => {
     render(<NeuralEngineBand raw={{ ane_ffn: { ...MOE_OFF.ane_ffn, reason: 'as given' } }} stopped={false} />);
-    expect(row('Prefill split').textContent).toBe('Off · GPU onlyTurned off in Settings (--disable-ane).');
+    expect(row('Prefill split').textContent).toBe('Off · GPU onlyTurned off by GPU-only prefill in Settings (--disable-ane).');
   });
 
   it('shows a stopped split without the accent, with why it stopped and what it ran', () => {
