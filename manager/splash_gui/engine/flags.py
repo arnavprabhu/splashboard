@@ -123,6 +123,12 @@ def serve_flags(
         argv += ["--request-timeout", _number(p.parse_request_timeout(repr(serve.request_timeout)))]
     if p.parse_queue_size(str(serve.queue_size)) != p.DEFAULT_QUEUE_SIZE:
         argv += ["--queue-size", str(serve.queue_size)]
+    if p.parse_idle_release(serve.idle_release) != p.DEFAULT_IDLE_RELEASE_S:
+        argv += ["--idle-release", serve.idle_release.strip()]
+    if serve.disable_ane:
+        argv.append("--disable-ane")
+    if serve.allow_idle_sleep:
+        argv.append("--allow-idle-sleep")
     for extra in extra_flags:
         # Validation refuses these on save; refuse here too so a hand-edited
         # settings.json cannot rebind the engine (`--hos 0.0.0.0`) or put a key on

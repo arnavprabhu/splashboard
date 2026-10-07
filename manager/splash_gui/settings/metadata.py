@@ -324,6 +324,15 @@ FIELDS: tuple[FieldMeta, ...] = (
         max=262144,
         unit="tokens",
     ),
+    _serve(
+        "serve.idle_release",
+        "Release weights when idle",
+        "Time without a request before Splash unwires its memory and frees the weights; "
+        "the next request restores them. Seconds or 90s, 30m, 2h; off keeps them.",
+        "memory_context",
+        "text",
+        "--idle-release",
+    ),
     # Cache
     _serve(
         "serve.max_cache_disk",
@@ -356,6 +365,25 @@ FIELDS: tuple[FieldMeta, ...] = (
         "--decode-share",
         scope="GM",
         min=0,
+    ),
+    _serve(
+        "serve.disable_ane",
+        "GPU-only prefill",
+        "Prefill on the GPU alone. By default a dense model's (27B) long prompts also use "
+        "the Neural Engine when that is faster; the 35B MoE always prefills on the GPU.",
+        "performance",
+        "toggle",
+        "--disable-ane",
+        scope="GM",
+    ),
+    _serve(
+        "serve.allow_idle_sleep",
+        "Let the Mac sleep during requests",
+        "By default Splash keeps the Mac awake until running requests finish (the display "
+        "may still sleep).",
+        "performance",
+        "toggle",
+        "--allow-idle-sleep",
     ),
     # Requests & limits
     _serve(

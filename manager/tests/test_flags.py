@@ -165,6 +165,13 @@ ROWS: list[tuple[str, dict[str, Any], dict[str, Any] | None, list[str]]] = [
         ["--request-timeout", "2.5"],
     ),
     ("--queue-size", {"serve": {"queue_size": 64}}, None, ["--queue-size", "64"]),
+    ("--idle-release", {"serve": {"idle_release": "30m"}}, None, ["--idle-release", "30m"]),
+    ("--idle-release off", {"serve": {"idle_release": "off"}}, None, ["--idle-release", "off"]),
+    ("--idle-release default", {"serve": {"idle_release": "600"}}, None, []),
+    ("--disable-ane", {"serve": {"disable_ane": True}}, None, ["--disable-ane"]),
+    ("--disable-ane model", {}, {"disable_ane": True}, ["--disable-ane"]),
+    ("--disable-ane model off", {"serve": {"disable_ane": True}}, {"disable_ane": False}, []),
+    ("--allow-idle-sleep", {"serve": {"allow_idle_sleep": True}}, None, ["--allow-idle-sleep"]),
     (
         "extra_flags",
         {"engine": {"extra_flags": [{"flag": "--future", "value": "x"}, {"flag": "--switch"}]}},
@@ -306,6 +313,9 @@ def test_full_command_order_matches_spec(paths: Paths) -> None:
                 "max_image_pixels": 65536,
                 "request_timeout": 600,
                 "queue_size": 8,
+                "idle_release": "2h",
+                "disable_ane": True,
+                "allow_idle_sleep": True,
             },
         },
         {
@@ -336,6 +346,9 @@ def test_full_command_order_matches_spec(paths: Paths) -> None:
         "--max-image-pixels",
         "--request-timeout",
         "--queue-size",
+        "--idle-release",
+        "--disable-ane",
+        "--allow-idle-sleep",
     ]
 
 
@@ -396,6 +409,9 @@ def test_splash_launcher_accepts_our_argv(paths: Paths, tmp_path: Path) -> None:
                 "max_image_pixels": 65536,
                 "request_timeout": 2.5,
                 "queue_size": 8,
+                "idle_release": "off",
+                "disable_ane": True,
+                "allow_idle_sleep": True,
             },
         },
         {
@@ -432,4 +448,6 @@ def test_splash_launcher_accepts_our_argv(paths: Paths, tmp_path: Path) -> None:
     assert parsed["max_context"] == 102400 and parsed["decode_share"] == 0.0
     assert parsed["max_request_size"] == 256 * 1024**2 and parsed["max_image_pixels"] == 65536
     assert parsed["request_timeout"] == 2.5 and parsed["queue_size"] == 8
+    assert parsed["idle_release"] == float("inf")
+    assert parsed["disable_ane"] and parsed["allow_idle_sleep"]
     assert parsed["api_key"] is None

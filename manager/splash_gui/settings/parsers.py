@@ -2,7 +2,7 @@
 
 Each function reproduces the logic and error message of its counterpart in
 splash/server/serve_options.py, server/origins.py, server/frontend.py and
-install/models.py at tag 1.2.0, so the GUI refuses exactly what Splash refuses.
+install/models.py at tag 1.3.0, so the GUI refuses exactly what Splash refuses.
 The parity test runs both under Splash's bundled Python when it is installed.
 Functions raise `ValueError` where Splash raises `argparse.ArgumentTypeError`.
 """
@@ -21,6 +21,9 @@ MAX_CONTEXT_TOKENS = 262144
 DEFAULT_MAX_REQUEST_BYTES = 128 * 1024 * 1024
 DEFAULT_QUEUE_SIZE = 32
 DEFAULT_DECODE_SHARE = 0.5  # the engine's default when --decode-share is absent
+# --idle-release's default, "10m" (serve_options.py help; 1.2.1 release notes).
+DEFAULT_IDLE_RELEASE = "10m"
+DEFAULT_IDLE_RELEASE_S = 600.0
 KV_FORMATS: tuple[str, ...] = ("int8", "bf16")
 # images.py
 MIN_IMAGE_PIXELS = 65_536
@@ -109,13 +112,34 @@ def parse_request_size(value: str) -> int:
     return size
 
 
-def parse_request_timeout(value: str) -> float:
+# The units a duration takes after its number; seconds without one.
+_DURATION_UNITS = {"s": 1, "m": 60, "h": 3600}
+
+
+def _duration_seconds(value: str) -> float | None:
+    """A duration in seconds, written as seconds or with an s, m or h suffix;
+    None unless positive and finite."""
+    text = value.strip().lower()
+    unit = _DURATION_UNITS.get(text[-1:])
     try:
-        seconds = float(value)
+        seconds = float(text[:-1]) * unit if unit else float(text)
     except ValueError:
-        seconds = math.nan
-    if not math.isfinite(seconds) or seconds <= 0:
-        raise ValueError("must be a positive number of seconds such as 3600")
+        return None
+    return seconds if math.isfinite(seconds) and seconds > 0 else None
+
+
+def parse_request_timeout(value: str) -> float:
+    if (seconds := _duration_seconds(value)) is None:
+        raise ValueError("must be a positive duration such as 30m, 2h or 3600")
+    return seconds
+
+
+def parse_idle_release(value: str) -> float:
+    """--idle-release in seconds, math.inf for off."""
+    if value.strip().lower() == "off":
+        return math.inf
+    if (seconds := _duration_seconds(value)) is None:
+        raise ValueError("must be off or a positive duration such as 30m, 2h or 600")
     return seconds
 
 

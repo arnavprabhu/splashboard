@@ -152,6 +152,10 @@ class GlobalServeSettings(_Strict):
     request_timeout: float | None = None
     queue_size: int = p.DEFAULT_QUEUE_SIZE
     default_reasoning_effort: ReasoningEffort | None = None
+    # --idle-release as typed: a duration ("10m", "90s", "600") or "off".
+    idle_release: str = p.DEFAULT_IDLE_RELEASE
+    disable_ane: bool = False
+    allow_idle_sleep: bool = False
 
     @field_validator("max_memory")
     @classmethod
@@ -196,6 +200,12 @@ class GlobalServeSettings(_Strict):
     @classmethod
     def _queue_size(cls, value: int) -> int:
         return p.parse_queue_size(str(value))
+
+    @field_validator("idle_release")
+    @classmethod
+    def _idle_release(cls, value: str) -> str:
+        p.parse_idle_release(value)
+        return value.strip()
 
 
 class StorageSettings(_Strict):
@@ -438,6 +448,7 @@ class ModelServeOverrides(_Sparse):
     max_context: SizeText = "auto"
     decode_share: float = p.DEFAULT_DECODE_SHARE
     max_image_pixels: int = p.MAX_IMAGE_PIXELS
+    disable_ane: bool = False
 
     @model_validator(mode="before")
     @classmethod

@@ -46,6 +46,9 @@ MANAGED_FLAGS = frozenset(
         "--max-image-pixels",
         "--request-timeout",
         "--queue-size",
+        "--idle-release",
+        "--disable-ane",
+        "--allow-idle-sleep",
         "--help",
         "--version",
     }

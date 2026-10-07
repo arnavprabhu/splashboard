@@ -69,6 +69,7 @@ _COMPARE: dict[str, Any] = {
     "serve.max_context": p.parse_max_context,
     "serve.max_cache_disk": p.parse_max_cache_disk,
     "serve.max_request_size": p.parse_request_size,
+    "serve.idle_release": p.parse_idle_release,
 }
 
 
@@ -151,6 +152,9 @@ class EffectiveServe:
     max_image_pixels: int
     request_timeout: float | None
     queue_size: int
+    idle_release: str = "10m"
+    disable_ane: bool = False
+    allow_idle_sleep: bool = False
 
 
 def effective_serve(doc: SettingsDocument, model_id: str) -> EffectiveServe:
@@ -179,6 +183,9 @@ def effective_serve(doc: SettingsDocument, model_id: str) -> EffectiveServe:
         max_image_pixels=int(v("serve.max_image_pixels")),
         request_timeout=v("serve.request_timeout"),
         queue_size=int(v("serve.queue_size")),
+        idle_release=str(v("serve.idle_release")),
+        disable_ane=bool(v("serve.disable_ane")),
+        allow_idle_sleep=bool(v("serve.allow_idle_sleep")),
     )
 
 
