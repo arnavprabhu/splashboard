@@ -68,7 +68,7 @@ def test_ls_load_status_unload(h: EngineHarness, capsys: pytest.CaptureFixture[s
     assert "profiles apply per request" in err
     assert h.engine()["state"] in ("ready", "busy") and h.engine()["model"] == MODEL
     code, out, _ = run(capsys, "status")
-    assert code == 0 and f"Engine     ready · Splash 1.2.0 · {MODEL}" in out
+    assert code == 0 and f"Engine     ready · Splash 1.3.0 · {MODEL}" in out
     assert "Endpoints  OpenAI  http://127.0.0.1:8000/v1" in out
     code, out, _ = run(capsys, "ps")
     assert code == 0 and "IN FLIGHT" in out and MODEL in out and "OpenAI" not in out
@@ -95,7 +95,7 @@ def test_config_get_set_unset_validates(
 
 def test_rm_and_version(h: EngineHarness, capsys: pytest.CaptureFixture[str]) -> None:
     code, out, _ = run(capsys, "version")
-    assert code == 0 and "Splash 1.2.0" in out
+    assert code == 0 and "Splash 1.3.0" in out
     code, out, _ = run(capsys, "rm", MODEL, "--yes")
     assert code == 0 and "Deleted ·" in out and "freed" in out
     assert h.client.get("/api/admin/models").json()["models"] == []

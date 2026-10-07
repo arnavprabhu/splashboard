@@ -18,7 +18,7 @@ from splash_gui.engine.serve_options import (
 from .conftest import HAVE_SPLASH, SPLASH_PKG, write_script
 
 
-def fake_pkg(root: Path, version: str = "1.2.0", *, release: bool = True) -> Path:
+def fake_pkg(root: Path, version: str = "1.3.0", *, release: bool = True) -> Path:
     """A Homebrew-shaped keg: <root>/bin/splash wrapper + <root>/libexec package."""
     pkg = root / "libexec"
     (pkg / "server").mkdir(parents=True)
@@ -63,11 +63,12 @@ def test_parse_version(text: str, expected: tuple[int, int, int] | None) -> None
 @pytest.mark.parametrize(
     ("version", "support"),
     [
-        ((1, 2, 0), "supported"),
-        ((1, 2, 9), "supported"),
-        ((1, 3, 0), "untested"),
+        ((1, 3, 0), "supported"),
+        ((1, 3, 9), "supported"),
+        ((1, 4, 0), "untested"),
         ((2, 0, 0), "untested"),
-        ((1, 1, 9), "too_old"),
+        ((1, 2, 1), "too_old"),
+        ((1, 2, 0), "too_old"),
         (None, "unknown"),
     ],
 )
@@ -83,11 +84,11 @@ def test_brew_location_is_preferred(tmp_path: Path) -> None:
     cli = keg / "bin" / "splash"
     info = d.discover(
         env={"PATH": str(other.parent / "bin")},
-        runner=runner_for({str(cli): "Splash 1.2.0"}),
+        runner=runner_for({str(cli): "Splash 1.3.0"}),
         prefix=prefix,
     )
     assert info.found and info.source == "brew" and info.cli == cli
-    assert info.version == "1.2.0" and info.support == "supported" and info.banner is None
+    assert info.version == "1.3.0" and info.support == "supported" and info.banner is None
     assert info.pkg == pkg.resolve() or info.pkg == pkg
     assert info.python == info.pkg / "python" / "bin" / "python3"
     assert info.install_dir is not None and info.server_dir is not None
@@ -95,16 +96,16 @@ def test_brew_location_is_preferred(tmp_path: Path) -> None:
 
 
 def test_setting_overrides_everything(tmp_path: Path) -> None:
-    custom = fake_pkg(tmp_path / "custom", "1.3.1")
+    custom = fake_pkg(tmp_path / "custom", "1.4.1")
     cli = custom.parent / "bin" / "splash"
     info = d.discover(
         str(cli),
         env={"PATH": ""},
-        runner=runner_for({str(cli): "Splash 1.3.1"}),
+        runner=runner_for({str(cli): "Splash 1.4.1"}),
         prefix=tmp_path / "nothing",
     )
     assert info.source == "setting" and info.support == "untested"
-    assert info.banner == "GUI untested with Splash 1.3"
+    assert info.banner == "GUI untested with Splash 1.4"
 
 
 def test_env_override(tmp_path: Path) -> None:
@@ -112,7 +113,7 @@ def test_env_override(tmp_path: Path) -> None:
     cli = custom.parent / "bin" / "splash"
     info = d.discover(
         env={"PATH": "", d.REAL_SPLASH_ENV: str(cli)},
-        runner=runner_for({str(cli): "Splash 1.2.0"}),
+        runner=runner_for({str(cli): "Splash 1.3.0"}),
         prefix=None,
     )
     assert info.source == "env"
@@ -128,7 +129,7 @@ def test_path_lookup_skips_our_shim(tmp_path: Path) -> None:
     info = d.discover(
         env={"PATH": f"{shim_dir}:{marked_dir}:{real_cli.parent}"},
         shim_paths=(shim,),
-        runner=runner_for({str(real_cli): "Splash 1.2.0"}),
+        runner=runner_for({str(real_cli): "Splash 1.3.0"}),
         prefix=None,
     )
     assert info.found and info.source == "path" and info.cli == real_cli
@@ -155,7 +156,7 @@ def test_bad_setting_is_reported_and_skipped(tmp_path: Path) -> None:
     info = d.discover(
         str(tmp_path / "missing"),
         env={"PATH": str(cli.parent)},
-        runner=runner_for({str(cli): "Splash 1.2.0"}),
+        runner=runner_for({str(cli): "Splash 1.3.0"}),
         prefix=None,
     )
     assert info.source == "path"
@@ -163,10 +164,10 @@ def test_bad_setting_is_reported_and_skipped(tmp_path: Path) -> None:
 
 
 def test_version_falls_back_to_release_json(tmp_path: Path) -> None:
-    real = fake_pkg(tmp_path / "real", "1.2.3")
+    real = fake_pkg(tmp_path / "real", "1.3.3")
     cli = real.parent / "bin" / "splash"
     info = d.discover(env={"PATH": str(cli.parent)}, runner=runner_for({}), prefix=None)
-    assert info.version == "1.2.3"
+    assert info.version == "1.3.3"
 
 
 def test_source_checkout(tmp_path: Path) -> None:
@@ -194,11 +195,11 @@ def test_brew_prefix_runner_failure() -> None:
     assert d.brew_prefix(boom, brew="/usr/bin/true") is None
 
 
-@pytest.mark.skipif(not HAVE_SPLASH, reason="Splash 1.2.0 is not installed via Homebrew")
+@pytest.mark.skipif(not HAVE_SPLASH, reason="Splash 1.3.0 is not installed via Homebrew")
 def test_real_homebrew_engine() -> None:
     info = d.discover(env={"PATH": "/usr/bin:/bin"})
     assert info.found and info.source == "brew"
-    assert info.version is not None and info.version.startswith("1.2.")
+    assert info.version is not None and info.version.startswith("1.3.")
     assert info.pkg is not None and info.pkg.resolve() == SPLASH_PKG.resolve()
     assert info.python is not None and info.python.exists()
 
@@ -232,7 +233,7 @@ def test_helper_failures_are_reported(tmp_path: Path) -> None:
     assert not run_helper(d.EngineInfo(found=False, error="nope")).available
 
 
-@pytest.mark.skipif(not HAVE_SPLASH, reason="Splash 1.2.0 is not installed via Homebrew")
+@pytest.mark.skipif(not HAVE_SPLASH, reason="Splash 1.3.0 is not installed via Homebrew")
 def test_helper_against_real_splash() -> None:
     info = d.discover(env={"PATH": "/usr/bin:/bin"})
     options = EngineOptionsCache().get(info)
@@ -257,4 +258,4 @@ def test_helper_against_real_splash() -> None:
     assert flags["--kv-format"].choices == ["int8", "bf16"]
     assert flags["--queue-size"].default == 32
     assert flags["--api-key"].secret and flags["--api-key"].environment == "SPLASH_API_KEY"
-    assert options.unknown() == []  # Splash 1.2.0 has no option Appendix A doesn't map
+    assert options.unknown() == []  # Splash 1.3.0 has no option Appendix A doesn't map

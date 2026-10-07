@@ -145,11 +145,11 @@ def test_the_shim_is_skipped_when_discovering_the_engine(paths, tmp_path):
 
     shim.install_shim(paths, ["/bin/true", "splash"])
     real = tmp_path / "splash"
-    real.write_text("#!/bin/sh\necho 'Splash 1.2.0'\n")
+    real.write_text("#!/bin/sh\necho 'Splash 1.3.0'\n")
     real.chmod(0o755)
 
     def runner(argv, timeout):
-        return subprocess.CompletedProcess(list(argv), 0, "Splash 1.2.0\n", "")
+        return subprocess.CompletedProcess(list(argv), 0, "Splash 1.3.0\n", "")
 
     # Only the shim is on PATH: discovery must skip it and report not found.
     only_shim = discover(
@@ -168,7 +168,7 @@ def test_the_shim_is_skipped_when_discovering_the_engine(paths, tmp_path):
         runner=runner,
     )
     assert both.cli == real
-    assert both.version == "1.2.0"
+    assert both.version == "1.3.0"
 
 
 def test_a_shim_without_the_marker_is_still_skipped_by_path(paths, tmp_path):
@@ -182,7 +182,7 @@ def test_a_shim_without_the_marker_is_still_skipped_by_path(paths, tmp_path):
     paths.shim.write_text("#!/bin/sh\n# rewritten by hand\nexec true\n")
 
     def runner(argv, timeout):
-        return subprocess.CompletedProcess(list(argv), 0, "Splash 1.2.0\n", "")
+        return subprocess.CompletedProcess(list(argv), 0, "Splash 1.3.0\n", "")
 
     result = discover(
         env={"PATH": str(paths.bin_dir)},
@@ -375,7 +375,7 @@ def test_the_generated_shim_carries_the_discovery_marker(paths, tmp_path):
     copy.chmod(0o755)
 
     def runner(argv, timeout):
-        return subprocess.CompletedProcess(list(argv), 0, "Splash 1.2.0\n", "")
+        return subprocess.CompletedProcess(list(argv), 0, "Splash 1.3.0\n", "")
 
     result = discover(env={"PATH": str(copy_dir)}, shim_paths=(), prefix=None, runner=runner)
     assert result.found is False

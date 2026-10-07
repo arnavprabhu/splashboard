@@ -2,7 +2,7 @@
 
 These check the assumptions the rest of the suite takes on faith:
 
-  * the engine is 1.2.x, inside the range v1 supports (SPEC §6.1);
+  * the engine is 1.3.x, inside the range v1 supports (SPEC §6.1);
   * `install/serve_options.py` still matches Appendix A, including that no
     option has appeared that we do not map (SPEC §8.4);
   * `helpers/inspect_model.py` really runs under Splash's own bundled Python and
@@ -40,7 +40,7 @@ GGUF_REPO = "unsloth/Qwen3.6-35B-A3B-GGUF"
 UNSUPPORTED = "mistralai/Mistral-7B-Instruct-v0.3"
 
 needs_engine = pytest.mark.skipif(
-    not HAVE_SPLASH, reason="Splash 1.2.0 is not installed via Homebrew"
+    not HAVE_SPLASH, reason="Splash 1.3.0 is not installed via Homebrew"
 )
 needs_network = pytest.mark.usefixtures("allow_network")
 
@@ -106,7 +106,7 @@ def test_the_installed_engine_is_in_the_supported_range() -> None:
 
     info = d.discover(env={"PATH": "/usr/bin:/bin"})
     assert info.found and info.source == "brew"
-    assert info.version is not None and info.version.startswith("1.2."), info.version
+    assert info.version is not None and info.version.startswith("1.3."), info.version
     assert info.support == "supported", info.version
     assert info.pkg is not None and info.pkg.resolve() == SPLASH_PKG.resolve()
     assert info.python is not None and info.python.exists()

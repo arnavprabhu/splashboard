@@ -21,8 +21,10 @@ from typing import Literal
 REAL_SPLASH_ENV = "SPLASH_GUI_REAL_SPLASH"
 # Our CLI shim (~/.splash/bin/splash) must contain this marker so discovery skips it.
 SHIM_MARKER = "SPLASH_GUI_SHIM"
-SUPPORTED_MIN = (1, 2, 0)
-SUPPORTED_BELOW = (1, 3, 0)
+# 1.3.0 is the first with the engine's model-check, which the helpers call (D51, §6.1).
+SUPPORTED_MIN = (1, 3, 0)
+SUPPORTED_BELOW = (1, 4, 0)
+SUPPORTED_RANGE = ">=1.3.0 <1.4.0"
 BREW_TIMEOUT_S = 10
 VERSION_TIMEOUT_S = 15
 _VERSION_RE = re.compile(r"Splash\s+(\d+)\.(\d+)\.(\d+)(\S*)")
@@ -65,7 +67,7 @@ class EngineInfo:
             major, minor, _ = self.version_tuple
             return f"GUI untested with Splash {major}.{minor}"
         if self.support == "too_old" and self.version:
-            return f"Splash {self.version} is older than 1.2.0; upgrade the engine"
+            return f"Splash {self.version} is older than 1.3.0; upgrade the engine"
         return None
 
     def as_dict(self) -> dict[str, object]:
@@ -75,7 +77,7 @@ class EngineInfo:
             "source": self.source,
             "version": self.version,
             "support": self.support,
-            "supported_range": ">=1.2.0 <1.3.0",
+            "supported_range": SUPPORTED_RANGE,
             "banner": self.banner,
             "source_checkout": self.source_checkout,
             "pkg": str(self.pkg) if self.pkg else None,

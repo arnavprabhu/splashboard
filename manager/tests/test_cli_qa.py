@@ -115,7 +115,7 @@ def test_global_options_before_the_command_are_ours_not_the_engines(
     code, out, _ = run(capsys, "ls", "--json", "--port=8124")
     assert code == 0 and ports[-1] == 8124 and json.loads(out)[0]["id"] == MODEL
     code, out, _ = run(capsys, "--color", "never", "-q", "version", "--json")
-    assert code == 0 and json.loads(out)["engine"] == "1.2.0"
+    assert code == 0 and json.loads(out)["engine"] == "1.3.0"
     assert execs == []
 
 
@@ -416,7 +416,7 @@ def test_doctor_works_without_the_manager(
         cli_module,
         "discover",
         lambda *a, **k: EngineInfo(
-            found=True, cli=Path("/x/bin/splash"), version="1.2.0", support="supported"
+            found=True, cli=Path("/x/bin/splash"), version="1.3.0", support="supported"
         ),
     )
     real = cli_module.Client
@@ -429,7 +429,7 @@ def test_doctor_works_without_the_manager(
     code, out, _ = run(capsys, "doctor")
     assert code == 0
     assert "! Not running" in out and "Fix: splash start" in out
-    assert "✓ Splash 1.2.0 · /x/bin/splash" in out
+    assert "✓ Splash 1.3.0 · /x/bin/splash" in out
 
 
 # 5. config get with no key --------------------------------------------------------------
@@ -482,7 +482,7 @@ def test_version_is_human_readable_unless_json(
     make()
     code, out, _ = run(capsys, "version")
     assert code == 0 and not out.lstrip().startswith("{")
-    assert out.startswith("Splash GUI 0.1.0 · manager 0.1.0 · Splash 1.2.0")
+    assert out.startswith("Splash GUI 0.1.0 · manager 0.1.0 · Splash 1.3.0")
     code, out, _ = run(capsys, "version", "--json")
     assert set(json.loads(out)) == {"gui", "manager", "engine", "engine_path", "status_schema"}
 
@@ -511,7 +511,7 @@ def test_launch_print_never_loads_a_model(
         code, out, err = run(capsys, *argv)
         assert code == 0, err
         assert json.loads(calls[-1]["SPLASH_GUI_CLIENT_SPEC"])["model"] == MODEL
-        assert out.startswith("# splash launch claude --print  (Splash 1.2.0 launcher")
+        assert out.startswith("# splash launch claude --print  (Splash 1.3.0 launcher")
         assert "not loaded now" in out
     assert not [s for s in seen if s[0] != "GET"], seen
     assert h.engine()["state"] == "stopped"

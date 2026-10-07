@@ -103,7 +103,7 @@ class EngineDiscoveryInfo(ApiModel):
     source: Literal["setting", "env", "brew", "path"] | None = None
     version: str | None = None
     support: Literal["supported", "untested", "too_old", "unknown"] = "unknown"
-    supported_range: str = ">=1.2.0 <1.3.0"
+    supported_range: str = ">=1.3.0 <1.4.0"
     banner: str | None = None
     source_checkout: bool = False
     pkg: str | None = None

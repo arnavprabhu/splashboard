@@ -1,4 +1,4 @@
-"""SPEC §6.4: engine output lines → structured events. Lines are Splash 1.2.0's own."""
+"""SPEC §6.4: engine output lines → structured events. Lines are Splash 1.3.0's own."""
 
 from __future__ import annotations
 

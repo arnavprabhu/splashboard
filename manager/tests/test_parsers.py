@@ -312,7 +312,7 @@ _SPLASH_SCRIPT = textwrap.dedent(
 )
 
 
-@pytest.mark.skipif(not HAVE_SPLASH, reason="Splash 1.2.0 is not installed via Homebrew")
+@pytest.mark.skipif(not HAVE_SPLASH, reason="Splash 1.3.0 is not installed via Homebrew")
 def test_parity_with_splash_parsers(tmp_path: Path) -> None:
     """Run every case through Splash's own parsers (bundled Python) and compare."""
     result = subprocess.run(

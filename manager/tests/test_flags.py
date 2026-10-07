@@ -390,7 +390,7 @@ def test_display_is_shell_quoted(paths: Paths) -> None:
     assert text.endswith(f"--model {MLX} --port {PORT} --host 127.0.0.1 --no-webui")
 
 
-@pytest.mark.skipif(not HAVE_SPLASH, reason="Splash 1.2.0 is not installed via Homebrew")
+@pytest.mark.skipif(not HAVE_SPLASH, reason="Splash 1.3.0 is not installed via Homebrew")
 def test_splash_launcher_accepts_our_argv(paths: Paths, tmp_path: Path) -> None:
     """Splash's own launcher parser reads the generated command as intended."""
     spec = launch(

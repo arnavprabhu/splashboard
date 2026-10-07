@@ -160,8 +160,8 @@ def real_clients_engine() -> EngineInfo:
     return EngineInfo(
         found=True,
         cli=Path("/x/splash"),
-        version="1.2.0",
-        version_tuple=(1, 2, 0),
+        version="1.3.0",
+        version_tuple=(1, 3, 0),
         support="supported",
         pkg=REPO / "splash",
         python=Path(sys.executable),

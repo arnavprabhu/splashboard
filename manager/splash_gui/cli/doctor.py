@@ -229,7 +229,7 @@ def engine_check(info: Any) -> Check:
             detail=[str(info.error)] if info.error else [],
             fix=["brew install incoai/tap/splash"],
         )
-    title = f"Splash {info.version} · {info.cli}   (Splash GUI supports ≥ 1.2.0, < 1.3.0)"
+    title = f"Splash {info.version} · {info.cli}   (Splash GUI supports ≥ 1.3.0, < 1.4.0)"
     if info.support == "supported":
         return Check("engine", "ok", title)
     status = "fail" if info.support == "too_old" else "warn"

@@ -139,7 +139,7 @@ def doctor(state: State) -> DoctorReport:
             if engine.support in ("untested", "unknown")
             else "ok",
             message=(
-                f"Splash {engine.version} ({engine.source}); Splash GUI supports >=1.2.0 <1.3.0"
+                f"Splash {engine.version} ({engine.source}); Splash GUI supports >=1.3.0 <1.4.0"
                 if engine.found
                 else engine.error or "Splash is not installed"
             ),

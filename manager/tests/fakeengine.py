@@ -194,7 +194,7 @@ def harness_factory(
             AppConfig(paths=paths, web_dist=tmp_path / "dist", secrets=SecretStore(MemoryBackend()))
         )
         engine = discover(str(FAKE_BIN), prefix=None)
-        assert engine.found and engine.version == "1.2.0", engine
+        assert engine.found and engine.version == "1.3.0", engine
         app.state.manager.discover_engine = lambda: engine
         # Never the developer's real home: shell rc files, ~/.hermes, ~/.pi, app configs.
         app.state.manager.user_home = tmp_path / "user-home"

@@ -65,7 +65,7 @@ def test_diagnostics_redacts_secrets(client: TestClient, app: FastAPI, paths: Pa
     assert key not in text and "abc123" not in text
     assert body["engine_log_tail"] == ["2026-10-03 10:00:00,000 stdout key=••••••"]
     assert body["status"] == {"schema_version": 6, "ready": True}
-    assert body["versions"]["engine"]["version"] == "1.2.0"
+    assert body["versions"]["engine"]["version"] == "1.3.0"
     assert body["engine"]["state"] == "stopped"
     assert app.state.manager.secrets.get(SecretName.API_KEY) == key
 
