@@ -228,7 +228,7 @@ class AdminGuard:
             raise ApiError(
                 403,
                 "The admin is reachable from other machines only with Settings → "
-                "Security → Require the API key for the admin "
+                "Security → Protect the admin "
                 "(security.admin_requires_key)",
                 "admin_remote_refused",
                 details={"setting": "security.admin_requires_key"},
