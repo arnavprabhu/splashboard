@@ -30,7 +30,6 @@ import {
   managerReachable,
   reconnectEvents,
   runAlertAction,
-  settingsLoaded,
   sortedAlerts,
   toggleTheme,
   wizardCompleted,
@@ -63,12 +62,21 @@ function BareHeader() {
   );
 }
 
-/** /admin goes to the welcome wizard until it has been completed (SPEC §10.2), else to Status. */
+/**
+ * /admin goes to the welcome wizard until it has been completed (SPEC §10.2), else to Status.
+ * Signed out, settings can't be read, so it asks for a sign-in that returns here (`next=/`)
+ * instead of guessing Status: a fresh install signs in and lands on the wizard (acceptance
+ * 2026-10-07). After a sign-in it reads settings again rather than trusting the failed load.
+ */
 function RootRedirect() {
+  const [checked, setChecked] = useState(wizardCompleted.value !== null);
   useEffect(() => {
-    if (!settingsLoaded.value) void loadSettings();
+    if (!checked) void loadSettings().finally(() => setChecked(true));
   }, []);
-  if (!settingsLoaded.value) return <Loading />;
+  if (!checked) return <Loading />;
+  if (wizardCompleted.value === null && authKnown.value && auth.value.admin_requires_key && !auth.value.authenticated) {
+    return <Redirect to={`/login?next=${encodeURIComponent('/')}`} replace />;
+  }
   return <Redirect to={wizardCompleted.value === false ? '/welcome' : '/status'} replace />;
 }
 

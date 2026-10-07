@@ -150,3 +150,17 @@ test.describe('admin sign-in (D58)', () => {
     }).toBe(false);
   });
 });
+
+test.describe('fresh install sign-in (acceptance 2026-10-07)', () => {
+  test.use({ managerOptions: { signedIn: false, wizardCompleted: false } });
+
+  test('signed out, /admin asks to sign in and a link lands on the welcome wizard', async ({ page, manager }) => {
+    await page.goto('/admin/');
+    await expect(page).toHaveURL(/\/admin\/login\?next=%2F$/);
+    // `splash open` with no page, or a link without next, also returns to the root.
+    await page.goto(await manager.mintLink());
+    await expect(page).toHaveURL(/\/admin\/welcome/);
+    await expect(page.getByText('Step 1 of 5 · Engine')).toBeVisible();
+  });
+});
+

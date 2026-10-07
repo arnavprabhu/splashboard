@@ -175,8 +175,11 @@ export async function exchangeLoginCode(code: string): Promise<void> {
   await signedIn(await api.post<unknown>('/auth/exchange', { code }));
 }
 
-/** A post-login target from `?next=`: only same-app paths, never another origin. */
-export function safeNext(next: string | null | undefined, fallback = '/status'): string {
+/**
+ * A post-login target from `?next=`: only same-app paths, never another origin. The fallback is
+ * the admin root, which sends a fresh install to the wizard and everyone else to Status.
+ */
+export function safeNext(next: string | null | undefined, fallback = '/'): string {
   if (!next || !next.startsWith('/') || next.startsWith('//') || next.startsWith('/\\')) return fallback;
   const path = next.replace(/^\/admin(?=\/|$)/, '') || '/';
   return path === '/login' ? fallback : path;

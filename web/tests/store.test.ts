@@ -254,11 +254,11 @@ describe('auth', () => {
   it('only accepts same-app next paths', () => {
     expect(safeNext('/models?model=a%2Fb')).toBe('/models?model=a%2Fb');
     expect(safeNext('/admin/settings/cache')).toBe('/settings/cache');
-    expect(safeNext('//evil.example/')).toBe('/status');
-    expect(safeNext('/\\evil.example')).toBe('/status');
-    expect(safeNext('https://evil.example/')).toBe('/status');
-    expect(safeNext('/login')).toBe('/status');
-    expect(safeNext(null)).toBe('/status');
+    expect(safeNext('//evil.example/')).toBe('/');
+    expect(safeNext('/\\evil.example')).toBe('/');
+    expect(safeNext('https://evil.example/')).toBe('/');
+    expect(safeNext('/login')).toBe('/');
+    expect(safeNext(null)).toBe('/');
   });
 });
 
