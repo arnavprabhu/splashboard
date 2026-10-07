@@ -94,16 +94,18 @@ test.describe('D43 MCP secrets', () => {
   });
 });
 
-test.describe('D44 warnings', () => {
-  test('Hermes row warns that the API key is stored in plain text', async ({ page }, info) => {
+test.describe('D44 warnings (Hermes part retired by D54)', () => {
+  test('Hermes row has no plain-text key warning from Splash 1.3.0 (D54)', async ({ page }, info) => {
     test.skip(info.project.name === 'phone', 'desktop layout');
+    // The manager no longer sends `plaintext_key_warning`; a stale field must not bring the banner back.
     const integrations = { ...INTEGRATIONS, cli: INTEGRATIONS.cli.map((c) => (c.name === 'hermes' ? { ...c, plaintext_key_warning: true } : c)) };
     await mockManager(page, { engine: READY, extra: (_m, path) => (path === '/integrations' ? { json: integrations } : undefined) });
     await page.route('**/v1/models', (r) => r.fulfill({ json: V1_MODELS }));
     await page.goto('/admin/integrations');
     const hermes = page.locator('.integration-row', { has: page.getByRole('heading', { name: /Hermes/ }) });
-    await expect(hermes.getByTestId('hermes-plaintext')).toContainText('stores your API key in plain text in the Hermes profile');
-    await expect(page.getByTestId('hermes-plaintext')).toHaveCount(1);
+    await expect(hermes).toBeVisible();
+    await expect(page.getByText(/plain text/)).toHaveCount(0);
+    await expect(page.getByTestId('hermes-plaintext')).toHaveCount(0);
   });
 
   test('Storage warns when the models folder is the user’s own Hugging Face cache', async ({ page }) => {

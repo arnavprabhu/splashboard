@@ -204,16 +204,19 @@ def test_lan_bind_with_admin_sign_in_saves(client: TestClient) -> None:
 
 
 def test_no_row_warns_about_a_plaintext_key_from_splash_1_3(client: TestClient) -> None:
-    """Splash 1.3.0 keeps the key out of the Hermes profile, so the D44 warning is gone."""
+    """Splash 1.3.0 keeps the key out of the Hermes profile, so the D44 warning and
+    its API field are gone (D54); the notes say what the profile stores."""
     client.post("/api/admin/settings/secrets/api-key")
     document = client.get("/api/admin/settings").json()["settings"]
     document["global"]["security"]["api_key_required"] = True
     assert client.put("/api/admin/settings", json=document).status_code == 200
     rows = {r["name"]: r for r in client.get("/api/admin/integrations").json()["cli"]}
-    assert [n for n, r in rows.items() if r["plaintext_key_warning"]] == []
-    assert rows["hermes"]["changes"]["notes"][-1] == (
-        "The profile's api_key is `${SPLASH_API_KEY}`; the key itself is never saved."
-    )
+    assert not any("plaintext_key_warning" in r for r in rows.values())
+    assert rows["hermes"]["changes"]["notes"][1:] == [
+        "The profile's api_key is `${SPLASH_API_KEY}`; the key itself is never saved.",
+        "A profile written by Splash 1.2.x keeps the old key until the next "
+        "`splash launch hermes` rewrites it.",
+    ]
 
 
 def test_storage_flags_a_models_dir_shared_with_the_hf_cache(

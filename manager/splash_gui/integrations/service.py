@@ -279,10 +279,6 @@ class IntegrationsService:
                         "command": f"splash launch {name}",
                         "changes": self.changes(name),
                         "entries": self.entries(name),
-                        # D44's warning is obsolete from Splash 1.3.0: the Hermes
-                        # profile stores "${SPLASH_API_KEY}", never the key
-                        # (install/clients.py:415-417), as Pi's stores "$SPLASH_API_KEY".
-                        "plaintext_key_warning": False,
                         "last_launched_at": launched.get(name),
                     }
                 )
@@ -383,6 +379,10 @@ class IntegrationsService:
                     f"Writes only its own Hermes profile `{entry}`; "
                     "your default profile is unchanged.",
                     f"The profile's api_key is `{profile_key}`; the key itself is never saved.",
+                    # D54: Splash 1.2.x wrote the key itself; 1.3.0 rewrites
+                    # model.api_key on every launch.
+                    "A profile written by Splash 1.2.x keeps the old key until the next "
+                    "`splash launch hermes` rewrites it.",
                 ],
             )
         models = self.pi_models()

@@ -336,11 +336,6 @@ function CliRow({
             ))}
         </p>
       </div>
-      {cli.plaintext_key_warning && (
-        <Banner tone="warn">
-          <span data-testid="hermes-plaintext">{t("integrations.cli.plaintext_key")}</span>
-        </Banner>
-      )}
       <div class="integration-command">
         <code class="mono integration-cmd" aria-label={t("integrations.cli.command_aria", { name: cli.label })}>
           $ {command}

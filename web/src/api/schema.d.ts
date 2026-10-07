@@ -2385,11 +2385,6 @@ export interface components {
             entries?: string[];
             /** Last Launched At */
             last_launched_at?: string | null;
-            /**
-             * Plaintext Key Warning
-             * @default false
-             */
-            plaintext_key_warning: boolean;
         };
         /** CodexAppSettings */
         CodexAppSettings: {

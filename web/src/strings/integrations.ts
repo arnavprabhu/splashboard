@@ -62,7 +62,6 @@ export const integrationsStrings = {
   'integrations.cli.source': 'Source: Splash install/clients.py. Splash GUI only sets SPLASH_PORT, the model argument with a profile, and for Codex -c features.apps=false.',
   'integrations.cli.profile_note': 'Profiles through {name} are passed as --model; if this version ignores it, the session uses the base model and the CLI prints a notice.',
   'integrations.cli.entry_hermes': 'Profile {entry} present',
-  'integrations.cli.plaintext_key': 'Splash’s Hermes setup stores your API key in plain text in the Hermes profile. Anyone who can read that file can use the key.',
   'integrations.cli.entry_pi': 'Provider {entry} present',
   'integrations.cli.remove': 'Remove',
   'integrations.cli.remove_title_hermes': 'Remove Hermes profile.',
