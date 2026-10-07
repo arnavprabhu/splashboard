@@ -29,7 +29,7 @@ def run_cli(tmp_path, *args, env=None, timeout=30):
 
 def test_version_matches_real_wording(tmp_path):
     result = run_cli(tmp_path, "--version")
-    assert result.returncode == 0 and result.stdout == "Splash 1.2.0\n"
+    assert result.returncode == 0 and result.stdout == "Splash 1.3.0\n"
     if REAL_CLI.exists():
         real = subprocess.run([str(REAL_CLI), "--version"], capture_output=True, text=True, timeout=30)
         assert real.stdout == result.stdout
@@ -389,7 +389,18 @@ def test_copied_engine_modules_are_verbatim():
     if not REAL_SPLASH.exists():
         pytest.skip("no ./splash reference clone")
     pkg = Path(SPLASH_BIN).parents[1]
-    for name in ("serve_options", "origins", "http_security", "errors", "images", "metrics", "latency", "json_codec"):
+    for name in (
+        "serve_options",
+        "origins",
+        "http_security",
+        "errors",
+        "images",
+        "metrics",
+        "latency",
+        "json_codec",
+        "lru",
+        "diagnostics",
+    ):
         assert (pkg / "server" / f"{name}.py").read_text() == (REAL_SPLASH / "server" / f"{name}.py").read_text(), name
     assert (pkg / "install/families.py").read_text() == (REAL_SPLASH / "install/families.py").read_text()
 

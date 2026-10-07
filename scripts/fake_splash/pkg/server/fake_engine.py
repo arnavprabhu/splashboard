@@ -42,6 +42,20 @@ PIPELINE_RESERVE = 256 * MIB  # runtime/model/Model.hpp kPipelineReserveBytes
 RUNTIME_RESERVE = 512 * MIB  # kRuntimeOverheadReserveBytes
 SPECULATIVE_SCRATCH_TOKENS = 64
 MAX_CONTEXT_TOKENS = 262144
+# The Neural Engine FFN split (1.3.0) as the real engine set it up for the 27B on
+# the owner's M5 Pro (docs/progress/engine-1.3-rechecks.md, Evidence): its share,
+# least chunk and memory. The MoE has no dense FFN layers and never splits.
+ANE_SHARE = 0.3235294118
+ANE_MINIMUM_ROWS = 524
+ANE_FFN_BYTES = 229_703_680
+ANE_LAYERS = 64
+# runtime/engine/AneFfnStartup.cpp decide(): each outcome's reason.
+ANE_SPLIT_REASON = (
+    "at share 0.32 for chunks of 524 rows or more, 2.2% from the GPU alone on the "
+    "Neural Engine's part (set up as calibrated before in 2.0 s)"
+)
+ANE_OFF_GIVEN = "as given"
+ANE_NOT_DENSE = "the target has no dense FFN layers"
 
 MODES = (
     "normal",
@@ -209,6 +223,16 @@ class ServeSettings:
     default_reasoning_effort: str | None
     decode_share: float | None
     max_image_pixels: int
+    # --idle-release in seconds, math.inf for off, None for the default (FakeConfig's).
+    idle_release: float | None = None
+    disable_ane: bool = False
+    allow_idle_sleep: bool = False
+
+    @property
+    def ane_split(self) -> bool:
+        """Whether the Neural Engine takes part of the prefill FFN: a dense target
+        without --disable-ane (AneFfnStartup.cpp decide)."""
+        return _family(self.model) == "Qwen3.8-27B" and not self.disable_ane
 
 
 def _family(model: str) -> str:
@@ -233,6 +257,7 @@ class Breakdown:
     shared_decode_bytes: int
     pipeline_reserve_bytes: int
     runtime_overhead_reserve_bytes: int
+    ane_ffn_bytes: int
     state_staging_bytes: int
     fixed_runtime_bytes: int
     dynamic_budget_bytes: int
@@ -272,7 +297,8 @@ class Breakdown:
                 f"shared decode: {m(self.shared_decode_bytes)}",
                 f"pipeline reserve: {m(self.pipeline_reserve_bytes)}",
                 f"allocator/runtime reserve: {m(self.runtime_overhead_reserve_bytes)}",
-                f"disk tier state staging: {m(self.state_staging_bytes)}",
+                f"Neural Engine split: {m(self.ane_ffn_bytes)}",
+                f"SSD cache state staging: {m(self.state_staging_bytes)}",
                 f"fixed runtime: {m(self.fixed_runtime_bytes)}",
                 f"elastic state/KV budget: {m(self.dynamic_budget_bytes)}",
                 f"KV page: {self.kv_page_tokens} tokens, {m(self.kv_page_bytes)}",
@@ -305,7 +331,8 @@ class MemoryPlan:
         lane_state = (96 if moe else 160) * MIB
         prefill, decode = 1_536 * MIB, 512 * MIB
         staging = lane_state if settings.max_cache_disk else 0
-        fixed = target + draft + vision + prefill + decode + PIPELINE_RESERVE + RUNTIME_RESERVE + staging
+        ane = ANE_FFN_BYTES if settings.ane_split else 0
+        fixed = target + draft + vision + prefill + decode + PIPELINE_RESERVE + RUNTIME_RESERVE + staging + ane
         dynamic = max(0, hard - fixed)
         # Full-attention KV per token: layers x KV heads x head_dim x (K, V).
         per_token = self.attention_layers * self.kv_heads * HEAD_DIMENSION * 2
@@ -332,6 +359,7 @@ class MemoryPlan:
             decode,
             PIPELINE_RESERVE,
             RUNTIME_RESERVE,
+            ane,
             staging,
             fixed,
             dynamic,
@@ -394,6 +422,7 @@ class MemoryPlan:
                         "shared_decode_bytes": b.shared_decode_bytes,
                         "pipeline_reserve_bytes": b.pipeline_reserve_bytes,
                         "runtime_overhead_reserve_bytes": b.runtime_overhead_reserve_bytes,
+                        "ane_ffn_bytes": b.ane_ffn_bytes,
                         "state_staging_bytes": b.state_staging_bytes,
                     },
                 },
@@ -577,8 +606,13 @@ class FakeEngine:
         self.response_store = ResponseStore()
         self.latencies = LatencyMetrics()
         self.persistent: PersistentCache | None = None
-        self.build_id = hashlib.sha256(b"splash-1.2.0-fake").hexdigest()[:16]
+        self.build_id = hashlib.sha256(b"splash-1.3.0-fake").hexdigest()[:16]
         self.weights_released = False
+        self.weights_restores = 0
+        # Status.cpp appendAneFfn counters; the warmup runs one split command over
+        # every layer, as the real engine's does.
+        split = settings.ane_split
+        self.ane = {"split_commands": int(split), "ane_ms": 1258.4 if split else 0.0, "evaluations": ANE_LAYERS * split}
         self.last_request = time.monotonic()
         self.prefix_cache: OrderedDict[tuple[int, ...], None] = OrderedDict()
         self.kill_requested = threading.Event()
@@ -680,6 +714,12 @@ class FakeEngine:
         log_startup(
             f"Kernel policy for GPU family {cfg.gpu_family} with {cfg.gpu_cores} cores."
         )  # RuntimeResources.mm:452
+        # runtime/engine/AneFfnStartup.cpp decide() and logOutcome(); the MoE logs nothing.
+        if s.ane_split:
+            log_startup("Setting up the Neural Engine FFN split (splash serve --disable-ane keeps the FFN on the GPU).")
+            log_startup(f"Neural Engine FFN split {ANE_SPLIT_REASON}.")
+        elif _family(s.model) == "Qwen3.8-27B":
+            log_startup(f"The GPU runs the prefill FFN alone, {ANE_OFF_GIVEN}.")
         if s.max_cache_disk:
             self._open_disk_tier(plan)
         automatic = plan.automatic_context
@@ -844,17 +884,25 @@ class FakeEngine:
         return self.plan.page_bytes if self.plan else 32 * KIB * KV_PAGE_TOKENS
 
     # --- weights keep-alive ----------------------------------------------------
+    @property
+    def idle_release_seconds(self) -> float:
+        """--idle-release, else FAKE_SPLASH_IDLE_RELEASE_SECONDS (default 600)."""
+        given = self.settings.idle_release
+        return self.config.idle_release_seconds if given is None else given
+
     def idle_tick(self) -> None:
         with self.lock:
             busy = self.c["queued"] + self.c["prefilling"] + self.c["decoding"]
             idle = time.monotonic() - self.last_request
-            release = self.ready and not self.weights_released and not busy and idle >= self.config.idle_release_seconds
+            release = self.ready and not self.weights_released and not busy and idle >= self.idle_release_seconds
             if release:
                 self.weights_released = True
         if release:
             # runtime/engine/NativeRuntime.cpp:133
+            if self.settings.ane_split:
+                write_stderr_line("Neural Engine FFN program unloaded while idle")  # ops/AneFfn.cpp:631
             write_stderr_line(
-                f"Weights released after {self.config.idle_release_seconds:g} s without a request; "
+                f"Weights released after {self.idle_release_seconds:g} s without a request; "
                 "the next request restores them"
             )
 
@@ -866,8 +914,13 @@ class FakeEngine:
             return
         started = time.monotonic()
         yield from self._sleep(self.config.restore_seconds)
-        # runtime/engine/NativeRuntime.cpp:143
+        # runtime/engine/NativeRuntime.cpp:150
         write_stderr_line(f"Weights restored in {time.monotonic() - started:.2f} s")
+        with self.lock:
+            self.weights_restores += 1
+        if self.settings.ane_split:
+            # ops/AneFfn.cpp:643
+            write_stderr_line(f"Neural Engine FFN program reloaded in {self.config.restore_seconds / 3:.2f} s")
 
     # --- generation --------------------------------------------------------------
     def _sleep(self, seconds: float, job: FakeJob | None = None) -> Iterator[tuple]:
@@ -1006,6 +1059,7 @@ class FakeEngine:
                     self.c["prefill_rows"] += uncached
                     self.c["prefill_input_tokens"] += uncached
                     self.c["prefill_wall_ms"] += (time.monotonic() - started) * 1000.0
+                    self._count_ane(uncached, prefill_seconds)
             reasoning, content, calls = self._output_plan(job)
             content_text = ""
             stop_sequence = None
@@ -1138,6 +1192,20 @@ class FakeEngine:
                 parts.append(f"{speed:.1f} tok/s")
         print_status(" · ".join(parts))
 
+    def _count_ane(self, rows: int, seconds: float) -> None:
+        """A prefill runs in chunks of PREFILL_TOKEN_BUDGET rows; each chunk of
+        ANE_MINIMUM_ROWS rows or more runs split, through every layer (caller
+        holds the lock)."""
+        if not self.settings.ane_split:
+            return
+        full, rest = divmod(rows, PREFILL_TOKEN_BUDGET)
+        split = full + (rest >= ANE_MINIMUM_ROWS)
+        if not split:
+            return
+        self.ane["split_commands"] += split
+        self.ane["evaluations"] += split * ANE_LAYERS
+        self.ane["ane_ms"] += seconds * 1000.0 * ANE_SHARE
+
     def _count_decode(self, tokens: int) -> None:
         with self.lock:
             width = min(MAX_BATCH_WIDTH, max(1, self.c["decoding"]))
@@ -1212,6 +1280,7 @@ class FakeEngine:
         b = plan.breakdown if plan else None
         with self.lock:
             c = dict(self.c)
+            ane = dict(self.ane)
             cache_tokens = sum(len(k) for k in self.prefix_cache)
             ttft = deque(self.ttft_samples)
             itl = deque(self.itl_samples)
@@ -1304,6 +1373,25 @@ class FakeEngine:
                 "device_current_allocated_bytes": current,
                 "device_peak_allocated_bytes": peak,
                 "backend_peak_allocated_bytes": peak,
+            },
+            # runtime/engine/Status.cpp appendWeights: null while --idle-release off.
+            "weights": {
+                "idle_release_seconds": None if math.isinf(self.idle_release_seconds) else self.idle_release_seconds,
+                "released": self.weights_released,
+                "restores": self.weights_restores,
+            },
+            # Status.cpp appendAneFfn
+            "ane_ffn": {
+                "state": "split" if s.ane_split else "off",
+                "share": ANE_SHARE if s.ane_split else 0,
+                "minimum_rows": ANE_MINIMUM_ROWS if s.ane_split else 0,
+                "reason": ANE_SPLIT_REASON
+                if s.ane_split
+                else (ANE_OFF_GIVEN if _family(s.model) == "Qwen3.8-27B" else ANE_NOT_DENSE),
+                "split_commands": ane["split_commands"],
+                "reruns": 0,
+                "ane_ms": round(ane["ane_ms"], 6),
+                "evaluations": ane["evaluations"],
             },
             "kv": {
                 "block_tokens": KV_PAGE_TOKENS,

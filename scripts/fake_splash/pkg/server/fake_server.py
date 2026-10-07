@@ -35,7 +35,15 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import fake_text, json_codec, serve_options
-from .errors import APIError, ContextLengthError
+from .errors import (
+    ANTHROPIC_ERRORS,
+    OPENAI_ERRORS,
+    RETRY_STATUSES,
+    SYSTEMONE_ERRORS,
+    APIError,
+    ContextLengthError,
+    ErrorDialect,
+)
 from .fake_engine import (
     LATER_SYSTEM_UNSUPPORTED,
     FakeConfig,
@@ -78,6 +86,28 @@ POST_ROUTES = (
     "/v1/systemone",
 )
 PUBLIC_GET = ("/", "/index.html", "/favicon.ico", "/health", "/ready")
+
+
+def path_errors(path: str) -> ErrorDialect:
+    """server/server.py path_errors (1.3.0): every error on a path is answered in
+    its API's format, before a handler runs too."""
+    if path == "/v1/systemone":
+        return SYSTEMONE_ERRORS
+    if path in ("/v1/messages", "/v1/messages/count_tokens") or path.startswith("/v1/messages/"):
+        return ANTHROPIC_ERRORS
+    return OPENAI_ERRORS
+
+
+# server/connections.py CONNECTION_OVERLOADED_RESPONSE (1.3.0): a connection that
+# gets no slot is answered at once, before its request is read, instead of reset.
+_CONNECTION_OVERLOADED_PAYLOAD = (
+    b'{"error":{"type":"server_error","code":"frontend_overloaded","message":"HTTP connection capacity is exhausted"}}'
+)
+CONNECTION_OVERLOADED_RESPONSE = (
+    b"HTTP/1.1 503 Service Unavailable\r\n"
+    b"Content-Type: application/json\r\nConnection: close\r\nRetry-After: 1\r\n"
+    b"Content-Length: %d\r\n\r\n%s" % (len(_CONNECTION_OVERLOADED_PAYLOAD), _CONNECTION_OVERLOADED_PAYLOAD)
+)
 REASONING_EFFORTS = serve_options.REASONING_EFFORTS
 PRIORITIES = ("foreground", "normal", "background")
 MIN_FLOAT32_SUBNORMAL = float.fromhex("0x1p-149")
@@ -217,14 +247,23 @@ class FakeHandler(BaseHTTPRequestHandler):
         return normalize_path(getattr(self, "path", ""))
 
     @property
-    def anthropic(self) -> bool:
-        return self.route.startswith("/v1/messages")
+    def errors(self) -> ErrorDialect:
+        return path_errors(self.route)
+
+    def handle(self) -> None:
+        """server/connections.py ConnectionSlots (1.3.0): a connection holds a slot
+        from accept to close; one past every slot gets the canned 503 with
+        Retry-After before its request is read, instead of a reset."""
+        if not self.engine.connections.acquire():
+            with contextlib.suppress(OSError):
+                self.wfile.write(CONNECTION_OVERLOADED_RESPONSE)
+            return
+        self._connection_counted = True
+        super().handle()
 
     def parse_request(self) -> bool:
         if not super().parse_request():
             return False
-        self.engine.connections.acquire()
-        self._connection_counted = True
         if self.route.startswith("/_fake/"):
             return True
         self._record = {
@@ -267,7 +306,7 @@ class FakeHandler(BaseHTTPRequestHandler):
 
     def _send(self, status: int, data: bytes, content_type: str) -> None:
         self.send_response(status)
-        if status == 503:
+        if status in RETRY_STATUSES:
             self.send_header("Retry-After", "1")
         if status == 401:
             self.send_header("WWW-Authenticate", "Bearer")
@@ -287,31 +326,21 @@ class FakeHandler(BaseHTTPRequestHandler):
     def _json(self, status: int, payload: object) -> None:
         self._send(status, json_codec.encode(payload), "application/json")
 
-    def _error(self, error: APIError) -> None:
-        """server/server.py FrontendHandler._error."""
-        anthropic = self.anthropic
-        error_type = error.protocol_type(anthropic)
-        message = error.message
-        if anthropic and isinstance(error, ContextLengthError):
-            message = (
-                f"prompt is too long: {error.input_tokens} tokens > {error.maximum_input_tokens} maximum input tokens"
-            )
-        self._json(
-            error.status,
-            {"type": "error", "error": {"type": error_type, "message": message}}
-            if anthropic
-            else {"error": {"message": error.message, "type": error_type, "code": error.code}},
-        )
+    def _error(self, error: APIError) -> tuple[int, str]:
+        """server/server.py _safe_error: the path's API answers (errors.py dialects)."""
+        status, code, payload = self.errors.answer(error)
+        self._json(status, payload)
+        return status, code
 
-    def _log_api_error(self, error: APIError) -> None:
+    def _log_api_error(self, code: str) -> None:
         path = "".join(c if c.isprintable() else "?" for c in self.route)
-        print_status(f"Error · {error.code} · {self.command} {path[:256]}", error=True)
+        print_status(f"Error · {code} · {self.command} {path[:256]}", error=True)
 
     def _safe_error(self, error: APIError, *, log: bool = True) -> None:
         if self._response_started:
             return
         if log:
-            self._log_api_error(error)
+            self._log_api_error(self.errors.answer(error)[1])
         with contextlib.suppress(BrokenPipeError, ConnectionResetError, TimeoutError):
             self._error(error)
 
@@ -395,7 +424,7 @@ class FakeHandler(BaseHTTPRequestHandler):
         self._write_sse(b": splash-keepalive\n\n")
 
     def _sse_error(self, error: APIError) -> None:
-        self._sse({"error": {"message": error.message, "type": error.protocol_type(), "code": error.code}})
+        self._sse(self.errors.payload(error))
         self._sse("[DONE]")
 
     # --- GET / DELETE / OPTIONS ---------------------------------------------------
@@ -550,15 +579,11 @@ class FakeHandler(BaseHTTPRequestHandler):
         engine = self.engine
         refusal = None if prompt_only else engine.refusal()
         if refusal is not None:
-            if systemone and refusal.status == 503:
-                refusal = APIError(529, refusal.message, refusal.code)
             self._safe_error(refusal, log=False)
             return
         admission = engine.token_counts if prompt_only else engine.requests
         if (not prompt_only and engine.queue_full()) or not admission.acquire():
-            self._safe_error(
-                APIError(529 if systemone else 503, "frontend request capacity is exhausted", "frontend_overloaded")
-            )
+            self._safe_error(APIError(503, "frontend request capacity is exhausted", "frontend_overloaded"))
             return
         try:
             with engine.latencies.measure("upload"):
@@ -585,8 +610,6 @@ class FakeHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
         except APIError as error:
-            if systemone and error.status == 503:
-                error = APIError(529, error.message, error.code)
             self._safe_error(error)
         except Exception as error:  # pragma: no cover - diagnostics
             print_status(f"Error · internal_server_error · {type(error).__name__}", error=True)
@@ -847,7 +870,7 @@ class FakeHandler(BaseHTTPRequestHandler):
             if not self._response_started:
                 raise
             if error.status >= 500:
-                self._log_api_error(error)
+                self._log_api_error(error.code)
             with contextlib.suppress(BrokenPipeError, ConnectionResetError, TimeoutError):
                 send_error(error)
 
@@ -1232,7 +1255,7 @@ class FakeHandler(BaseHTTPRequestHandler):
                     job,
                     "failed",
                     output,
-                    error={"type": error.protocol_type(), "code": error.code, "message": error.message},
+                    error=self.errors.payload(error)["error"],
                 ),
             )
 
@@ -1439,7 +1462,7 @@ class FakeHandler(BaseHTTPRequestHandler):
             send("message_stop", {})
 
         def send_error(error: APIError) -> None:
-            send("error", {"error": {"type": error.protocol_type(True), "message": error.message}})
+            send("error", {"error": self.errors.payload(error)["error"]})
 
         self._guarded(run, send_error)
 
@@ -1656,7 +1679,7 @@ class FakeHandler(BaseHTTPRequestHandler):
     def _systemone_error(self, error: SystemOneError) -> None:
         if self._response_started:
             return
-        self._log_api_error(APIError(422, error.details[0]["msg"], "unprocessable_entity"))
+        self._log_api_error("unprocessable_entity")
         with contextlib.suppress(BrokenPipeError, ConnectionResetError, TimeoutError):
             self._json(422, {"detail": error.details})
 
@@ -1779,6 +1802,9 @@ def settings_from_args(args) -> ServeSettings:
         default_reasoning_effort=args.default_reasoning_effort,
         decode_share=args.decode_share,
         max_image_pixels=args.max_image_pixels,
+        idle_release=args.idle_release,
+        disable_ane=args.disable_ane,
+        allow_idle_sleep=args.allow_idle_sleep,
     )
 
 

@@ -12,6 +12,8 @@ extend-exclude = [
     "pkg/server/metrics.py",
     "pkg/server/latency.py",
     "pkg/server/json_codec.py",
+    "pkg/server/lru.py",
+    "pkg/server/diagnostics.py",
     "pkg/install/families.py",
 ]
 

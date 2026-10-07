@@ -1,11 +1,11 @@
 # Fake Splash engine
 
-A stdlib-only stand-in for Homebrew's `splash` 1.2.0 package (SPEC §20.2). The
+A stdlib-only stand-in for Homebrew's `splash` 1.3.0 package (SPEC §20.2). The
 manager, the web app's Playwright tests and local development use it in place
 of the real engine, so nothing needs a model, Metal or the network. It runs
 under any Python 3.12+, including Splash's bundled interpreter.
 
-Every engine fact it reproduces was checked against `./splash` at tag `1.2.0`.
+Every engine fact it reproduces was checked against `./splash` at tag `1.3.0`.
 Comments in `pkg/server/fake_engine.py` and `fake_server.py` give the source
 file and line for each output string.
 
@@ -17,9 +17,9 @@ pkg/                     laid out like $(brew --prefix)/opt/splash (bin/) and it
 ├── libexec -> .         so pkg/ also works as an opt/splash prefix
 ├── python/bin/python3   runs $FAKE_SPLASH_PYTHON, else the first Python ≥ 3.12 on PATH
 ├── engine/splash        answers `device-check` only (FAKE_SPLASH_DEVICE_CHECK=fail refuses the Mac)
-├── release.json         {"version": "1.2.0", ...}
+├── release.json         {"version": "1.3.0", ...}
 ├── install/
-│   ├── launcher.py      `splash --version | serve | claude|opencode|codex|hermes|pi`
+│   ├── launcher.py      `splash --version | serve | claude|opencode|codex|hermes|pi [--port PORT] [-- ARGS]`
 │   ├── models.py        fake installer, same CLI as the real install/models.py
 │   ├── paths.py         DATA from SPLASH_GUI_FAKE_DATA (never ~/Library/Application Support/Splash)
 │   ├── families.py      verbatim copy (1.3.0: names and draft repos only)
@@ -32,7 +32,7 @@ pkg/                     laid out like $(brew --prefix)/opt/splash (bin/) and it
     ├── fake_text.py     deterministic tokenizer, ChatML template, reply text
     ├── crash_trace.py   `python -m server.crash_trace <trace>`: prints the trace's frames
     └── serve_options.py origins.py http_security.py errors.py images.py
-        metrics.py latency.py json_codec.py   verbatim copies (a test checks this)
+        metrics.py latency.py json_codec.py lru.py diagnostics.py   verbatim copies (a test checks this)
 harness.py               pytest helpers: FakeSplash, run_installer, fake_env, free_port
 tests/                   the fake's own tests
 ```
@@ -41,7 +41,7 @@ tests/                   the fake's own tests
 
 ```sh
 export SPLASH_GUI_FAKE_DATA=/tmp/fake-splash HF_HUB_CACHE=/tmp/fake-splash/models
-scripts/fake_splash/pkg/bin/splash --version          # Splash 1.2.0
+scripts/fake_splash/pkg/bin/splash --version          # Splash 1.3.0
 scripts/fake_splash/pkg/bin/splash serve --model unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_M --port 8001 --no-webui
 curl -s localhost:8001/v1/chat/completions -H 'content-type: application/json' \
   -d '{"messages":[{"role":"user","content":"hi"}],"stream":true}'
@@ -105,7 +105,7 @@ Modes:
 | `normal` | Serve |
 | `engine_recovering` | 503 `engine_recovering`, `/ready` 503, `transport.recovering`. Prints `Engine failed · …`; returning to `normal` prints `Engine restarted` and bumps `transport.restarts` (backend.py) |
 | `engine_failed` | 500 `engine_failed` with Splash's crash-loop message, `transport.stopped` (backend.py) |
-| `queue_full` | 503 `frontend_overloaded` (529 for `/v1/systemone`). `--queue-size` is also enforced for real |
+| `queue_full` | 503 `frontend_overloaded` with `Retry-After: 1` (529 for `/v1/systemone`), in the path's API format (errors.py dialects). `--queue-size` is also enforced for real, and a connection past `--queue-size` + 64 slots gets 1.3.0's canned 503 before its request is read (server/connections.py) |
 | `capacity_exhausted` | 400 `capacity_exhausted` after admission; `metrics.capacity_failures` increments |
 | `resource_timeout` | 503 `resource_timeout` (Engine.cpp, retryable) |
 | `fail_midstream` | The stream fails halfway with 503 `runtime_unavailable`: an SSE error plus `[DONE]`, `response.failed`, or an Anthropic `error` event |
@@ -134,7 +134,7 @@ Engine (`serve`). Each `FakeConfig` field can also be changed live through `/_fa
 | `FAKE_SPLASH_REASONING` | auto | `auto` (reasoning unless effort is `none`), `always` or `never` |
 | `FAKE_SPLASH_KEEPALIVE_SECONDS` | 2.0 | SSE keepalive interval (`SSE_KEEPALIVE_SECONDS`) |
 | `FAKE_SPLASH_FLUSH_SECONDS` | 0.5 | Persistent-cache flush time on a clean stop |
-| `FAKE_SPLASH_IDLE_RELEASE_SECONDS` / `FAKE_SPLASH_RESTORE_SECONDS` | 600 / 0.3 | Idle weight release and restore |
+| `FAKE_SPLASH_IDLE_RELEASE_SECONDS` / `FAKE_SPLASH_RESTORE_SECONDS` | 600 / 0.3 | Idle weight release and restore; `--idle-release DURATION\|off` overrides the first, and `/status` `weights` reports both |
 | `FAKE_SPLASH_CRASH_CODE` | 1 | Default exit status for `/_fake/crash` |
 | `FAKE_SPLASH_SKIP_INSTALL` | — | `1` skips the installer step of `serve` |
 | `FAKE_SPLASH_DEVICE_CHECK` | — | `fail` makes the launcher's device check refuse the Mac before any download (exit 1, the engine's message) |
@@ -145,7 +145,7 @@ Installer (`install/models.py`, and the install step of `serve`):
 |---|---|---|
 | `HF_HUB_CACHE` | `$SPLASH_GUI_FAKE_DATA/hub` | Where `models--owner--repo/{blobs,snapshots,refs}` are written |
 | `FAKE_SPLASH_DL_BPS` | 64M | Download rate in bytes/s (`.incomplete` blobs grow at this rate) |
-| `FAKE_SPLASH_DL_HUB` | — | Unset: huggingface_hub 1.28 partials, as Splash 1.2.0 bundles (`blobs/<hash>.<uuid8>.incomplete`, a new file per run, deleted on a handled error, never resumed). `legacy`: older hubs (`blobs/<hash>.incomplete`, appended to by the next run) |
+| `FAKE_SPLASH_DL_HUB` | — | Unset: huggingface_hub 1.28 partials, as Splash 1.2.0 and 1.3.0 bundle (`blobs/<hash>.<uuid8>.incomplete`, a new file per run, deleted on a handled error, never resumed). `legacy`: older hubs (`blobs/<hash>.incomplete`, appended to by the next run) |
 | `FAKE_SPLASH_DL_SHARD_BYTES`, `_SHARDS`, `_DRAFT_BYTES`, `_VISION_BYTES` | 2M, 2, 1M, 512K | File sizes |
 | `FAKE_SPLASH_DL_COMMIT_SALT` | — | Changes every resolved commit, so `prepare` reports "moved from … to …" (simulates updates). The first weight file changes too, so an update fetches one file; if that fails, the old commit is kept with `Warning: keeping the installed …` and `prepare` still exits 0 (upstream.py `_keeping_installation`) |
 | `FAKE_SPLASH_DL_FAIL` | — | `gated` (401 unless `HF_TOKEN` is set), `network` (Hub unreachable), `network_mid`, `disk_full` (ENOSPC mid-download), `incompatible` |
@@ -174,6 +174,7 @@ blob stays.
 - Tool calls happen when `tool_choice` forces them, or when the last user message names the tool. Arguments fill the required parameters.
 - Structured output (`response_format`) returns a JSON object built from the schema's required properties. There is no grammar engine.
 - `/status` values are invented but internally consistent. Every field name comes from Status.cpp, backend.py, frontend.py and server.py.
+- The Neural Engine FFN split (1.3.0) uses the share, least chunk (524 rows) and memory (219 MiB) the real engine set up for the 27B on an M5 Pro: a 27B target reports `ane_ffn.state` `split` and counts a split command per prefill chunk of 524 rows or more; the 35B MoE and `--disable-ane` report `off` with the engine's reasons. It never calibrates, stops or reruns.
 - The agent subcommands (`splash claude`, and the rest) read `/v1/models` and print the banner, then a JSON line describing what they would run. They exec nothing.
 - Legacy `incoai/*-Splash` packages install like ordinary MLX repositories.
 - Per-request log lines (`Done ·`, `Cancelled ·`, `Error · code`) cover generation requests; judgments and System One requests log none.
