@@ -108,7 +108,11 @@ export function StepStorage() {
   const [saving, setSaving] = useState(false);
   const [saveIssues, setSaveIssues] = useState<IssueOut[] | null>(null);
 
-  const currentPort = g?.server?.port ?? 8000;
+  // Acceptance 1.3 F2: "current" is where the manager listens, which differs from
+  // `server.port` when it was started with `--port`; the stored port may belong to
+  // another process (oMLX on 8000), so it is never proposed unchecked.
+  const storedPort = g?.server?.port ?? 8000;
+  const currentPort = s?.listening_port ?? storedPort;
   useEffect(() => {
     if (!g) return;
     setPort((p) => p ?? progress.value.pendingPort ?? currentPort);
@@ -139,7 +143,8 @@ export function StepStorage() {
       )
         .then((v) => {
           if (mine !== seq.current) return;
-          const issue = portIssue(v.errors);
+          // A busy stored port comes back as a warning (saving it is allowed); here it is a block.
+          const issue = portIssue([...v.errors, ...v.warnings]);
           if (!issue) setCheck({ kind: 'ok' });
           else setCheck({ kind: 'error', message: issue.code === 'port_in_use' ? t('welcome.storage.port_in_use', { port: String(port) }) : issue.message });
         })
@@ -197,7 +202,9 @@ export function StepStorage() {
         d.global.security = { ...(d.global.security ?? { admin_requires_key: false, api_key_required: false }), api_key_required: Boolean(keyOn) };
         d.global.lifecycle = { ...(d.global.lifecycle ?? { stop_on_quit: true, auto_restart: true, idle_unload: false, idle_unload_minutes: 30, launch_at_login: true }), launch_at_login: Boolean(launch) };
       });
-      updateProgress({ pendingPort: port !== null && port !== currentPort ? port : null });
+      // Step 5 saves the port when it differs from the stored one, even if it is where the
+      // manager already listens, so the next start (menu bar, `splash start`) uses it too.
+      updateProgress({ pendingPort: port !== null && port !== storedPort ? port : null });
       goTo(nextStep(step)!);
     } catch (err) {
       if (err instanceof ApiError && err.issues.length > 0) setSaveIssues(err.issues as unknown as IssueOut[]);

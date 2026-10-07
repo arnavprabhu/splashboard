@@ -161,6 +161,46 @@ def test_port_change_to_a_busy_port_is_refused(client: TestClient) -> None:
     assert client.get("/api/admin/settings").json()["settings"]["global"]["server"]["port"] == 8000
 
 
+def test_a_manager_started_with_port_reports_where_it_listens(client: TestClient) -> None:
+    """Acceptance 1.3 F2: started with `--port 8151` while `server.port` is 8000 (where
+    oMLX runs on the owner's Mac), the wizard must show 8151 as current and must not
+    propose a busy port. GET /settings says where the manager listens, and validation
+    probes any other address, the stored one included."""
+    with socket.socket() as busy, socket.socket() as ours:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        taken = busy.getsockname()[1]
+        ours.bind(("127.0.0.1", 0))
+        bound = ours.getsockname()[1]
+        client.app.state.manager.bound = ("127.0.0.1", bound)  # type: ignore[attr-defined]
+        doc = client.get("/api/admin/settings").json()
+        assert doc["listening_port"] == bound
+        settings = doc["settings"]
+        # The stored port is someone else's (here: the busy socket's).
+        settings["global"]["server"]["port"] = taken
+        client.app.state.manager.settings.current.global_.server.port = taken  # type: ignore[attr-defined]
+
+        same = client.post("/api/admin/settings/validate", json=settings).json()
+        assert same["valid"] is True, "a save that keeps the stored port still works"
+        assert [w["code"] for w in same["warnings"]] == ["port_in_use"]
+
+        settings["global"]["server"]["port"] = bound
+        assert client.post("/api/admin/settings/validate", json=settings).json() == {
+            "valid": True,
+            "errors": [],
+            "warnings": [],
+        }, "the port we listen on is never probed"
+
+    with socket.socket() as other:
+        other.bind(("127.0.0.1", 0))
+        other.listen()
+        busy_port = other.getsockname()[1]
+        settings["global"]["server"]["port"] = busy_port
+        result = client.post("/api/admin/settings/validate", json=settings).json()
+        assert result["valid"] is False
+        assert [e["code"] for e in result["errors"]] == ["port_in_use"]
+
+
 def test_saving_the_address_already_bound_does_not_rebind(
     paths: Paths, secrets: SecretStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -109,6 +109,7 @@ def _settings_response(state: ManagerState) -> SettingsResponse:
         ),
         read_only=store.read_only,
         load_warnings=list(store.load_warnings),
+        listening_port=state.bound[1] if state.bound else None,
     )
 
 
@@ -137,32 +138,46 @@ def _change_out(
     return SettingChange(key=change.key, model=change.model, applies=applies)
 
 
-def _check_new_bind(state: ManagerState, raw: Any) -> None:
-    """A new `server.host/port` must be free before the manager moves there."""
+def _bind_issue(state: ManagerState, raw: Any, *, validating: bool) -> IssueOut | None:
+    """A new `server.host/port` must be free before the manager moves there.
+
+    The address the manager listens on is never probed (it is ours). Saving refuses
+    a busy address only when the save changes `server.host/port`, so a manager
+    started with `--port` can still save other settings while its stored port is
+    busy. Validation also probes an unchanged stored address that differs from the
+    bound one, as a warning: that is where a restart would go, and the welcome
+    wizard must not propose it when another process holds it."""
     if state.bound is None:
-        return
+        return None
     result = state.settings.validate(raw, _context(state))
     if result.document is None or not result.ok:
-        return
+        return None
     server = result.document.global_.server
     current = state.settings.current.global_.server
     target = (server.host, server.port)
-    if target in (state.bound, (current.host, current.port)) or server.port == state.bound[1]:
-        return
+    if target == state.bound or server.port == state.bound[1]:
+        return None
+    unchanged = target == (current.host, current.port)
+    if unchanged and not validating:
+        return None
     try:
         probe_bind(*target)
     except OSError as error:
-        issue = IssueOut(
+        return IssueOut(
             path=["global", "server", "port"],
             key="server.port",
             model=None,
             message=f"cannot listen on {target[0]}:{target[1]}: {error.strerror or error}",
-            severity="error",
+            severity="warning" if unchanged else "error",
             code="port_in_use",
         )
-        raise ApiError(
-            422, "Settings are invalid", "invalid_settings", issues=[issue.model_dump()]
-        ) from None
+    return None
+
+
+def _check_new_bind(state: ManagerState, raw: Any) -> None:
+    issue = _bind_issue(state, raw, validating=False)
+    if issue is not None:
+        raise ApiError(422, "Settings are invalid", "invalid_settings", issues=[issue.model_dump()])
 
 
 def save_settings(state: ManagerState, raw: Any) -> SettingsSaveResult:
@@ -266,9 +281,12 @@ async def reset_settings(
 @router.post("/settings/validate", response_model=SettingsValidation, openapi_extra=_SETTINGS_BODY)
 def validate_settings(state: State, body: Annotated[dict[str, Any], Body()]) -> SettingsValidation:
     result = state.settings.validate(body, _context(state))
-    return SettingsValidation(
-        valid=result.ok, errors=_issues(result.errors), warnings=_issues(result.warnings)
-    )
+    errors, warnings = _issues(result.errors), _issues(result.warnings)
+    # The same bind check a save makes (docs/api.md §6.2 `port_in_use`).
+    bind = _bind_issue(state, body, validating=True)
+    if bind is not None:
+        (errors if bind.severity == "error" else warnings).append(bind)
+    return SettingsValidation(valid=result.ok and not errors, errors=errors, warnings=warnings)
 
 
 @router.get("/settings/schema", response_model=SettingsSchema)

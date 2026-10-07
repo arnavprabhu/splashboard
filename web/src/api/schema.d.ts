@@ -4657,6 +4657,11 @@ export interface components {
             read_only: boolean;
             /** Load Warnings */
             load_warnings?: string[];
+            /**
+             * Listening Port
+             * @description The port the manager actually listens on. It differs from `server.port` when the manager was started with `--port`; null before it binds.
+             */
+            listening_port?: number | null;
         };
         /** SettingsSaveResult */
         SettingsSaveResult: {

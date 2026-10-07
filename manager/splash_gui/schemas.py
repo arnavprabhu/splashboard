@@ -593,6 +593,11 @@ class SettingsResponse(ApiModel):
     resolved: ResolvedPaths
     read_only: bool = False
     load_warnings: list[str] = Field(default_factory=list)
+    listening_port: int | None = Field(
+        default=None,
+        description="The port the manager actually listens on. It differs from "
+        "`server.port` when the manager was started with `--port`; null before it binds.",
+    )
 
 
 class SettingsSaveResult(ApiModel):
