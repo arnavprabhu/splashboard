@@ -20,8 +20,9 @@
   `install_in_progress`), because stopping loses the file in progress (Q24).
 - **Stale partials** (§9.4): at every start and every session end, the per-process
   `<etag>.<uuid8>.incomplete` files killed runs left in the model's repositories are
-  deleted (never an open one, the legacy `<etag>.incomplete`, or one the Downloader
-  still needs).
+  deleted, and the Downloader's resumable `<etag>.splashgui.incomplete` with its
+  sidecar (D61) when no unfinished download claims it (never an open one, the legacy
+  `<etag>.incomplete`, or one the Downloader still needs).
 """
 
 from __future__ import annotations
