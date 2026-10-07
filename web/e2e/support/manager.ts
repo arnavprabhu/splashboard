@@ -12,7 +12,7 @@
  * (see ./stubs.ts) and say so in their title: "[stub: <route>]".
  */
 
-import { test as base, expect } from '@playwright/test';
+import { test as base, expect, type BrowserContext } from '@playwright/test';
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
@@ -39,6 +39,11 @@ export interface ManagerOptions {
   wizardCompleted?: boolean;
   /** Models to install with the fake installer before the manager starts. */
   installed?: string[];
+  /**
+   * Sign the test's browser context in before the test (default true). Admin sign-in is on by
+   * default (D58), so pages need a session; tests of the sign-in flow itself pass false.
+   */
+  signedIn?: boolean;
 }
 
 export interface RealManager {
@@ -51,6 +56,10 @@ export interface RealManager {
   /** Reads and rewrites the settings document with `edit`. */
   patchSettings(edit: (doc: SettingsDoc) => void): Promise<void>;
   completeWizard(): Promise<void>;
+  /** `POST /auth/link` with the CLI token: a one-time `/admin/login?code=…` path (D58). */
+  mintLink(): Promise<string>;
+  /** Gives `context` a session cookie the way the menu bar does: mint a link, exchange the code. */
+  signIn(context: BrowserContext): Promise<void>;
   log(): string;
 }
 
@@ -186,12 +195,28 @@ export async function startManager(options: ManagerOptions = {}): Promise<RealMa
     const put = await api('PUT', '/settings', doc);
     if (put.status !== 200) throw new Error(`PUT /settings → ${put.status}: ${JSON.stringify(put.body)}`);
   };
+  const mintLink = async () => {
+    const res = await api<{ url: string }>('POST', '/auth/link');
+    if (res.status !== 200) throw new Error(`POST /auth/link → ${res.status}: ${JSON.stringify(res.body)}`);
+    return res.body.url;
+  };
+  const signIn = async (context: BrowserContext) => {
+    const code = new URL(await mintLink(), url).searchParams.get('code');
+    // context.request shares the context's cookie jar; the exchange wants a same-origin page.
+    const res = await context.request.post(`${url}/api/admin/auth/exchange`, {
+      data: { code },
+      headers: { Origin: url, 'Sec-Fetch-Site': 'same-origin' },
+    });
+    if (!res.ok()) throw new Error(`POST /auth/exchange → ${res.status()}: ${await res.text()}`);
+  };
   const manager = {
     url,
     port,
     home,
     token,
     api,
+    mintLink,
+    signIn,
     patchSettings,
     completeWizard: () =>
       patchSettings((doc) => {
@@ -222,6 +247,10 @@ export const test = base.extend<Fixtures>({
   },
   baseURL: async ({ manager }, use) => {
     await use(manager.url);
+  },
+  context: async ({ context, manager, managerOptions }, use) => {
+    if (managerOptions.signedIn !== false) await manager.signIn(context);
+    await use(context);
   },
 });
 

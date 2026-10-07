@@ -106,11 +106,14 @@ test.describe('pages against the real manager', () => {
 });
 
 test.describe('5b1c9ad routes against the real manager', () => {
-  test('print and secret meta answer in the shapes the pages read', async ({ page }) => {
-    const print = await (await page.request.get('/api/admin/integrations/hermes/print?model=mlx-community/Qwen3.6-35B-A3B-4bit')).json();
+  test('print and secret meta answer in the shapes the pages read', async ({ page, manager }) => {
+    // D58: /print runs programs, so it is a read-only POST from a same-origin page.
+    const sameOrigin = { headers: { Origin: manager.url, 'Sec-Fetch-Site': 'same-origin' } };
+    expect((await page.request.get('/api/admin/integrations/hermes/print')).status()).toBe(405);
+    const print = await (await page.request.post('/api/admin/integrations/hermes/print?model=mlx-community/Qwen3.6-35B-A3B-4bit', sameOrigin)).json();
     expect(print).toMatchObject({ client: 'hermes', exact: false });
     expect(Array.isArray(print.files)).toBe(true);
-    const claude = await (await page.request.get('/api/admin/integrations/claude/print?model=mlx-community/Qwen3.6-35B-A3B-4bit')).json();
+    const claude = await (await page.request.post('/api/admin/integrations/claude/print?model=mlx-community/Qwen3.6-35B-A3B-4bit', sameOrigin)).json();
     expect(typeof claude.exact).toBe('boolean'); // exact only when the engine's install/clients.py is reachable
     expect(Array.isArray(claude.secret_env)).toBe(true);
     const meta = await (await page.request.get('/api/admin/settings/secret/meta?name=hf_token')).json();
