@@ -84,7 +84,8 @@ export const settingsApi = {
   mcpServers: (signal?: AbortSignal) => api.get<{ servers: Record<string, McpServerView> }>('/mcp/servers', undefined, signal),
   saveMcpServers: (servers: Record<string, McpServerView>) => api.put<{ servers: Record<string, McpServerView> }>('/mcp/servers', { servers }),
   mcpTools: (signal?: AbortSignal) =>
-    api.get<{ tools: Array<{ server: string; name: string }>; errors: Array<{ server: string; message: string }> }>('/mcp/tools', undefined, signal),
+    // POST since D58: listing starts the servers, so it needs a session even with sign-in off.
+    api.post<{ tools: Array<{ server: string; name: string }>; errors: Array<{ server: string; message: string }> }>('/mcp/tools', undefined, signal),
 
   dataSizes: (signal?: AbortSignal) => api.get<DataSizes>('/data/sizes', undefined, signal),
   clearData: (target: string) => api.post<DataClearResult>('/data/clear', { target }),

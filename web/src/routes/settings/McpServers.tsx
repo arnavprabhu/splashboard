@@ -1,6 +1,6 @@
 /**
  * Settings → Chat & MCP servers (docs/ui/05 §3.11): a table with the live state from
- * `GET /mcp/tools`, an Add/Edit server sheet (stdio command or http URL) and Import mcp.json.
+ * `POST /mcp/tools` (D58: it starts the servers), an Add/Edit server sheet (stdio command or http URL) and Import mcp.json.
  * Saves immediately through `PUT /mcp/servers` (not the save bar).
  *
  * `env` and `headers` values live in the Keychain (D43): the manager returns each one as

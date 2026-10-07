@@ -60,7 +60,7 @@ SPEC_ROUTES = [
     ("delete", "/chats"),
     ("get", "/mcp/servers"),
     ("put", "/mcp/servers"),
-    ("get", "/mcp/tools"),
+    ("post", "/mcp/tools"),
     ("post", "/mcp/call"),
     ("get", "/usage/summary"),
     ("get", "/usage/timeseries"),

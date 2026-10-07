@@ -303,7 +303,7 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
 
   // MCP
   const mcpServers = useApi((s) => api.get<McpServers>("/mcp/servers", undefined, s), [], mode === "mcp");
-  const mcpTools = useApi((s) => api.get<McpToolList>("/mcp/tools", undefined, s), [], mode === "mcp");
+  const mcpTools = useApi((s) => api.post<McpToolList>("/mcp/tools", undefined, s), [], mode === "mcp");
 
   // ---------- derived validation ----------
   const toolCheck = useMemo(() => checkTools(toolsText), [toolsText]);

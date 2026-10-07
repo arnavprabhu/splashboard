@@ -1146,13 +1146,17 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /**
          * Tools
          * @description Tools of every enabled server; a server that fails is listed under `errors`.
+         *
+         *     D58: listing starts each enabled server, i.e. runs the owner's configured command
+         *     (stdio) or sends its stored headers (http). So it is a POST, and not one of the
+         *     read-only POSTs: it needs a session or the CLI token even with sign-in off.
          */
-        get: operations["tools_api_admin_mcp_tools_get"];
-        put?: never;
-        post?: never;
+        post: operations["tools_api_admin_mcp_tools_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8253,7 +8257,7 @@ export interface operations {
             };
         };
     };
-    tools_api_admin_mcp_tools_get: {
+    tools_api_admin_mcp_tools_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -8269,6 +8273,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["McpToolList"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };

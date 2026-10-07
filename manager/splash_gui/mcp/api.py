@@ -41,9 +41,13 @@ def _manager(state: ManagerState) -> McpManager:
     return state.mcp
 
 
-@router.get("/mcp/tools", response_model=McpToolList)
+@router.post("/mcp/tools", response_model=McpToolList, responses=error_responses(401))
 async def tools(state: State) -> McpToolList:
-    """Tools of every enabled server; a server that fails is listed under `errors`."""
+    """Tools of every enabled server; a server that fails is listed under `errors`.
+
+    D58: listing starts each enabled server, i.e. runs the owner's configured command
+    (stdio) or sends its stored headers (http). So it is a POST, and not one of the
+    read-only POSTs: it needs a session or the CLI token even with sign-in off."""
     return await _manager(state).tools()
 
 

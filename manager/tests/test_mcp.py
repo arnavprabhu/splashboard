@@ -60,7 +60,7 @@ def stdio_server(tmp_path: Path, **extra: Any) -> dict[str, Any]:
 
 def test_stdio_tools_are_listed_across_pages(client: TestClient, tmp_path: Path) -> None:
     configure(client, {"calc": stdio_server(tmp_path)})
-    listing = client.get("/api/admin/mcp/tools").json()
+    listing = client.post("/api/admin/mcp/tools").json()
     assert listing["errors"] == []
     assert [t["name"] for t in listing["tools"]] == ["add", "fail"]
     add = listing["tools"][0]
@@ -94,7 +94,7 @@ def test_tool_errors_and_unknown_servers(client: TestClient, tmp_path: Path) -> 
         json={"server": "calc", "tool": "add", "arguments": {}, "confirmed": True},
     )
     assert disabled.status_code == 403
-    assert client.get("/api/admin/mcp/tools").json()["tools"] == [], "disabled servers are skipped"
+    assert client.post("/api/admin/mcp/tools").json()["tools"] == [], "disabled servers are skipped"
 
 
 def test_a_broken_server_is_reported_not_raised(client: TestClient, tmp_path: Path) -> None:
@@ -105,7 +105,7 @@ def test_a_broken_server_is_reported_not_raised(client: TestClient, tmp_path: Pa
             "broken": {"command": str(tmp_path / "does-not-exist")},
         },
     )
-    listing = client.get("/api/admin/mcp/tools").json()
+    listing = client.post("/api/admin/mcp/tools").json()
     assert [t["name"] for t in listing["tools"]] == ["add", "fail"]
     assert [e["server"] for e in listing["errors"]] == ["broken"]
 

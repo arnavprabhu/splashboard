@@ -40,6 +40,9 @@ AUTH_EXEMPT = frozenset(
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # D58: reads that run programs moved from GET to POST so a cross-site <img> or link
 # cannot trigger them. They stay reads: with sign-in off they need no credential.
+# Only fixed diagnostics belong here. Anything that starts, stops, creates, writes or
+# runs a command the user configured (e.g. `POST /mcp/tools`, which starts MCP
+# servers) is a write and always needs a session or the CLI token.
 READ_ONLY_POSTS = frozenset(
     f"{ADMIN_API}/{name}"
     for name in (

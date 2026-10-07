@@ -409,6 +409,63 @@ def test_sign_in_off_keeps_reads_open_but_not_secrets_or_writes(
     assert browser.get("/api/admin/settings/secrets/api-key").json()["key"].startswith("sk-splash-")
 
 
+# The documented read-only POSTs (docs/api.md §12.5). Adding one is a security decision:
+# only fixed diagnostics, never a route that starts, writes or runs a configured command.
+DOCUMENTED_READ_ONLY_POSTS = {
+    "/doctor",
+    "/diagnostics",
+    "/system",
+    "/system/brew",
+    "/integrations",
+    "/integrations/{name}/print",
+    "/benchmark/preflight",
+    "/inspect",
+}
+
+
+def _admin_routes(app: FastAPI) -> list[tuple[str, str]]:
+    """(METHOD, path template) of every admin route, from the app's OpenAPI schema."""
+    paths = app.openapi()["paths"]
+    return sorted(
+        (method.upper(), path)
+        for path, operations in paths.items()
+        if path.startswith("/api/admin/")
+        for method in operations
+    )
+
+
+def test_every_admin_write_needs_a_credential_with_sign_in_off(
+    app: FastAPI, client: TestClient, browser: TestClient
+) -> None:
+    """D58: with sign-in off, every non-GET admin route but the documented read-only
+    POSTs and the auth routes answers 401 to a same-origin page with no session. Walks
+    the app's own routes, so a new write route is covered without editing this test."""
+    import re
+
+    from splash_gui.auth.guard import AUTH_EXEMPT, is_read_only_post
+
+    _sign_in_off(client)
+    read_only, checked = set(), 0
+    for method, template in _admin_routes(app):
+        if method in ("GET", "HEAD"):
+            continue
+        path = re.sub(r"\{([^}:]+)(:[^}]*)?\}", "claude", template)
+        if path in AUTH_EXEMPT:
+            continue
+        if is_read_only_post(path):
+            assert method == "POST", (method, template)
+            read_only.add(template.removeprefix("/api/admin"))
+            continue
+        response = browser.request(method, path, json={})
+        assert response.status_code == 401, (method, template, response.text)
+        assert response.json()["error"]["code"] == "auth_required", (method, template)
+        checked += 1
+    assert read_only == DOCUMENTED_READ_ONLY_POSTS
+    assert checked > 60, "the walk found the admin routes"
+    assert ("POST", "/api/admin/mcp/tools") in _admin_routes(app)
+    assert ("GET", "/api/admin/mcp/tools") not in _admin_routes(app)
+
+
 def test_read_only_posts_still_need_same_origin(app: FastAPI, client: TestClient) -> None:
     _sign_in_off(client)
     cross = TestClient(app, base_url=ORIGIN, client=LOOPBACK_CLIENT)
