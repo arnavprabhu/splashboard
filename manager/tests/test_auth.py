@@ -550,10 +550,25 @@ def test_expired_revocations_are_pruned(auth: AuthManager, paths: Paths) -> None
     assert json.loads(paths.revoked_sessions.read_text())["revoked"] == {"live": now + 100}
 
 
-def test_an_unreadable_revocation_file_is_ignored(auth: AuthManager, paths: Paths) -> None:
-    paths.revoked_sessions.write_text("{not json")
+@pytest.mark.parametrize("content", ["{not json", "[]", '{"version": 1}', '{"revoked": 3}'])
+def test_an_unreadable_revocation_file_fails_closed(
+    auth: AuthManager, paths: Paths, content: str
+) -> None:
+    """D58 review: a corrupt file may have held logouts, so every old session ends
+    (the session secret rotates) rather than coming back; new sign-ins work."""
+    revoked = auth.issue_session()
+    auth.revoke_session(revoked)
+    kept = auth.issue_session()
+    paths.revoked_sessions.write_text(content)
     restarted = AuthManager(paths, auth.secrets)
-    assert restarted.verify_session(restarted.issue_session())
+    assert not restarted.verify_session(revoked), "a revoked session came back"
+    assert not restarted.verify_session(kept), "sessions from before the bad file end too"
+    fresh = restarted.issue_session()
+    assert restarted.verify_session(fresh)
+    assert json.loads(paths.revoked_sessions.read_text()) == {"version": 1, "revoked": {}}
+    assert mode(paths.revoked_sessions) == 0o600
+    again = AuthManager(paths, auth.secrets)  # the next start keeps the new secret
+    assert again.verify_session(fresh)
 
 
 def test_logout_over_http_survives_a_restart(

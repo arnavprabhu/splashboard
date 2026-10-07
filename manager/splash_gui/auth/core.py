@@ -138,7 +138,10 @@ class AuthManager:
         fingerprint = self._key_fingerprint()
         if fingerprint is None:
             raise ValueError("no API key: sessions need one")
-        expiry = int((time.time() if now is None else now) + SESSION_TTL_S)
+        now = time.time() if now is None else now
+        with self._lock:
+            self._revoked_map(now)  # a bad revocation file rotates the secret first
+        expiry = int(now + SESSION_TTL_S)
         payload = f"{_VERSION}.{expiry}.{_token()}"
         return f"{payload}.{self._sign(payload, fingerprint)}"
 
@@ -150,6 +153,8 @@ class AuthManager:
         if len(parts) != 4 or parts[0] != _VERSION:
             return None
         version, expiry_text, nonce, signature = parts
+        with self._lock:
+            self._revoked_map(now)  # loaded before the signature check: see _fail_closed
         fingerprint = self._key_fingerprint()
         if fingerprint is None or not expiry_text.isdigit():
             return None
@@ -192,12 +197,10 @@ class AuthManager:
         except FileNotFoundError:
             return {}
         except (OSError, ValueError) as error:
-            log.warning("ignoring unreadable %s (%s)", path.name, error)
-            return {}
+            return self._fail_closed(f"unreadable ({error})")
         entries = data.get("revoked") if isinstance(data, dict) else None
         if not isinstance(entries, dict):
-            log.warning("ignoring %s: no revoked map", path.name)
-            return {}
+            return self._fail_closed("no revoked map")
         revoked = {
             str(nonce): float(expiry)
             for nonce, expiry in entries.items()
@@ -206,6 +209,25 @@ class AuthManager:
         if len(revoked) != len(entries):
             self._save_revoked(revoked)
         return revoked
+
+    def _fail_closed(self, reason: str) -> dict[str, float]:
+        """A revocation file we cannot read may have held logouts, and ignoring it
+        would bring those cookies back. Rotating the session secret ends every
+        session instead (browsers sign in again; the CLI token is unaffected), then a
+        fresh, empty file replaces the bad one. Call with the lock held."""
+        log.warning(
+            "%s is %s; signing every browser out so no revoked session comes back",
+            self.paths.revoked_sessions.name,
+            reason,
+        )
+        value: str | None = None
+        try:
+            value = self.secrets.generate(SecretName.SESSION, prefix="")
+        except SecretsError as error:
+            log.warning("could not rotate the session secret (%s); using a per-process one", error)
+        self._session_secret = (value or _token()).encode()
+        self._save_revoked({})
+        return {}
 
     def _save_revoked(self, revoked: dict[str, float]) -> None:
         payload = {"version": _REVOKED_VERSION, "revoked": revoked}
