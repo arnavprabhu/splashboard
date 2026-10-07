@@ -31,6 +31,7 @@ log = logging.getLogger(__name__)
 NAMESPACE_LIMIT = 64  # a namespace and each of its tools (api_shapes.py `_namespace_alias`)
 FUNCTION_LIMIT = 128  # a plain function tool (tool_schema.py `normalize_tools`)
 HASH_LENGTH = 10
+SEARCH_NAME = "tool_search"  # tool_search.NAME (codex-rs `TOOL_SEARCH_TOOL_NAME`)
 _INVALID = re.compile(r"[^A-Za-z0-9_-]")
 
 
@@ -49,9 +50,12 @@ class ToolNames:
     namespaces: dict[str, str] = field(default_factory=dict)
     children: dict[str, str] = field(default_factory=dict)
     functions: dict[str, str] = field(default_factory=dict)
+    # The request carried Codex's tool search (tool_search.py): a `tool_search`
+    # function call in the answer goes back to Codex as a `tool_search_call`.
+    search: bool = False
 
     def __bool__(self) -> bool:
-        return bool(self.namespaces or self.children or self.functions)
+        return bool(self.namespaces or self.children or self.functions or self.search)
 
     def _alias(self, table: dict[str, str], name: Any, limit: int) -> Any:
         if not isinstance(name, str):
@@ -107,10 +111,13 @@ class ToolNames:
         return [*self.namespaces, *self.children, *self.functions]
 
 
-def alias_request(body: dict[str, Any]) -> tuple[dict[str, Any], ToolNames]:
+def alias_request(
+    body: dict[str, Any], *, search: bool = False
+) -> tuple[dict[str, Any], ToolNames]:
     """`body` with every tool name Splash would refuse renamed, in its tools, its named
-    tool_choice and the function calls of its input."""
-    names = ToolNames()
+    tool_choice and the function calls of its input. `search`: the request carried
+    Codex's tool search, so the answer's `tool_search` calls are converted back."""
+    names = ToolNames(search=search)
     tools = body.get("tools")
     if isinstance(tools, list):
         renamed: list[Any] = []
@@ -147,7 +154,7 @@ def alias_request(body: dict[str, Any]) -> tuple[dict[str, Any], ToolNames]:
                 for item in items
             ],
         }
-    if names:
+    if names.aliases:
         log.info(
             "codex router: renamed %d tool names Splash refuses: %s",
             len(names.aliases),
@@ -171,6 +178,10 @@ def restore(value: Any, names: ToolNames) -> Any:
     out = {key: restore(item, names) for key, item in value.items()}
     if out.get("type") == "function_call":
         out = names.original(out)
+        if names.search and out.get("namespace") is None and out.get("name") == SEARCH_NAME:
+            from .tool_search import to_codex_call  # tool_search imports this module
+
+            out = to_codex_call(out)
     elif out.get("type") == "response.function_call_arguments.done" and "name" in out:
         out["name"] = names.bare(out["name"])
     return out
@@ -183,6 +194,8 @@ def restore_response(response: Response, names: ToolNames) -> None:
     if "content-length" in response.headers:
         del response.headers["content-length"]
     markers = [a.encode() for a in names.aliases]
+    if names.search:
+        markers.append(SEARCH_NAME.encode())
     sse = "text/event-stream" in response.headers.get("content-type", "")
     source = response.body_iterator
     response.body_iterator = (
