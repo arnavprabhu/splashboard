@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from fastapi import Request
+from starlette.requests import HTTPConnection
 
 from . import paths as _paths
 from .auth.core import AuthManager
@@ -133,7 +133,7 @@ class ManagerState:
         return info
 
 
-def get_state(request: Request) -> ManagerState:
+def get_state(request: HTTPConnection) -> ManagerState:
     state = request.app.state.manager
     assert isinstance(state, ManagerState)
     return state

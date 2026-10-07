@@ -11,16 +11,20 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
+from fastapi.testclient import TestClient
+from starlette.testclient import WebSocketDenialResponse
 
 from splash_gui.errors import ApiError
 from splash_gui.integrations.service import IntegrationsService
 from splash_gui.integrations.snapshots import read_document
-from splash_gui.secrets import SecretName
+from splash_gui.secrets import SecretName, redact_text
 
 from .fakeengine import MODEL
 
@@ -358,7 +362,8 @@ def test_codex_returns_503_when_the_app_is_not_connected(harness_factory):
     assert response.status_code == 503
 
 
-def test_codex_refuses_a_websocket_upgrade(harness_factory):
+def test_codex_refuses_a_websocket_upgrade_off_responses(harness_factory):
+    """D63: only `/v1/responses` has a WebSocket form; 426 sends Codex to HTTP."""
     harness = harness_factory(installed=())
     _allow(harness, "splash-model")
     _connected(harness)
@@ -366,6 +371,305 @@ def test_codex_refuses_a_websocket_upgrade(harness_factory):
         "/api/codex/v1/models", headers={"Upgrade": "websocket", "Connection": "Upgrade"}
     )
     assert response.status_code == 426
+    token = harness.state.secrets.generate(SecretName.CODEX_ROUTER, prefix="")
+    with (
+        pytest.raises(WebSocketDenialResponse) as refused,
+        harness.client.websocket_connect(f"{WS}/api/codex/t/{token}/v1/models"),
+    ):
+        pass
+    assert refused.value.status_code == 426
+
+
+# --- Codex router: the Responses WebSocket (D63) ----------------------------------
+
+# TestClient.websocket_connect joins a bare path onto ws://testserver.
+WS = "ws://127.0.0.1:8000"
+
+
+def _ws_ready(harness_factory, text: str = "Hello from the fake engine."):
+    """A loaded fake engine, the Codex app connected, and the router token."""
+    h = harness_factory()
+    assert h.load()["state"] == "ready"
+    h.fake("POST", "/_fake/mode", {"config": {"text": text}})
+    _allow(h, MODEL)
+    _connected(h)
+    token = h.state.secrets.generate(SecretName.CODEX_ROUTER, prefix="")
+    return h, f"{WS}/api/codex/t/{token}/v1/responses"
+
+
+def _engine_responses(h: Any) -> list[dict[str, Any]]:
+    return [r["body"] for r in h.last_engine_requests() if r["path"] == "/v1/responses"]
+
+
+def _create(text: str, **extra: Any) -> dict[str, Any]:
+    return {
+        "type": "response.create",
+        "model": MODEL,
+        "instructions": "You are Codex.",
+        "input": [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}
+        ],
+        "stream": True,
+        "store": False,
+        **extra,
+    }
+
+
+def _turn(ws: Any) -> list[dict[str, Any]]:
+    """Frames up to and including the one that ends the response."""
+    frames: list[dict[str, Any]] = []
+    while True:
+        frame = json.loads(ws.receive_text())
+        frames.append(frame)
+        if frame["type"] in (
+            "response.completed",
+            "response.incomplete",
+            "response.failed",
+            "error",
+        ):
+            return frames
+
+
+def _text(frames: list[dict[str, Any]]) -> str:
+    return "".join(f["delta"] for f in frames if f["type"] == "response.output_text.delta")
+
+
+CODEX_TOOLS = [
+    {"type": "function", "name": "exec_command", "parameters": {"type": "object"}},
+    {"type": "web_search", "external_web_access": False},
+]
+
+
+def test_codex_websocket_streams_a_splash_model(harness_factory):
+    h, url = _ws_ready(harness_factory)
+    with h.client.websocket_connect(url) as ws:
+        ws.send_text(json.dumps(_create("say hi", tools=CODEX_TOOLS)))
+        frames = _turn(ws)
+    kinds = [f["type"] for f in frames]
+    assert kinds[0] == "response.created"
+    assert kinds[-1] == "response.completed"
+    assert "response.output_item.done" in kinds
+    assert _text(frames) == "Hello from the fake engine."
+    assert frames[-1]["response"]["id"] == frames[0]["response"]["id"]
+    # The same code path as HTTP: the request reached the engine with the Codex body,
+    # and usage recorded it as a complete codex-app request.
+    (sent,) = _engine_responses(h)
+    assert "type" not in sent and sent["stream"] is True
+    # Splash refuses OpenAI's hosted tools with a 400, so they stay with the app.
+    assert sent["tools"] == CODEX_TOOLS[:1]
+    deadline = time.monotonic() + 5
+    while not (rows := h.client.get("/api/admin/usage/requests").json()["rows"]):
+        assert time.monotonic() < deadline, "no usage row"
+        time.sleep(0.02)
+    assert (rows[0]["client"], rows[0]["status"]) == ("codex-app", 200)
+
+
+def test_codex_http_drops_hosted_tools_for_splash_models(harness_factory):
+    """Codex sends `web_search` with every request; Splash 1.3.0 runs function tools only."""
+    h, url = _ws_ready(harness_factory)
+    body = {k: v for k, v in _create("hi", tools=CODEX_TOOLS).items() if k != "type"}
+    response = h.client.post(url.replace(WS, ""), json=body)
+    assert response.status_code == 200
+    (sent,) = _engine_responses(h)
+    assert sent["tools"] == CODEX_TOOLS[:1]
+
+
+def test_codex_websocket_runs_turns_on_one_connection(harness_factory):
+    """A prewarm, a turn, then a continuation that sends only the new items."""
+    h, url = _ws_ready(harness_factory)
+    with h.client.websocket_connect(url) as ws:
+        ws.send_text(json.dumps(_create("first", generate=False)))
+        warm = _turn(ws)
+        assert [f["type"] for f in warm] == ["response.created", "response.completed"]
+        assert warm[-1]["response"]["output"] == []
+        assert _engine_responses(h) == [], "a prewarm never reaches the engine"
+
+        ws.send_text(
+            json.dumps(_create("", previous_response_id=warm[-1]["response"]["id"], input=[]))
+        )
+        first = _turn(ws)
+        assert first[-1]["type"] == "response.completed"
+        assert _text(first) == "Hello from the fake engine."
+
+        follow_up = {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "and again"}],
+        }
+        ws.send_text(
+            json.dumps(
+                _create("", previous_response_id=first[-1]["response"]["id"], input=[follow_up])
+            )
+        )
+        second = _turn(ws)
+        assert second[-1]["type"] == "response.completed"
+        assert _text(second) == "Hello from the fake engine."
+    engine = _engine_responses(h)
+    assert len(engine) == 2
+    assert "previous_response_id" not in engine[1]
+    # The second request carries the whole conversation: the first input, the items
+    # the first answer produced, then the new item.
+    answer = [f["item"] for f in first if f["type"] == "response.output_item.done"]
+    assert answer and answer[-1]["role"] == "assistant"
+    assert engine[1]["input"] == [*engine[0]["input"], *answer, follow_up]
+    assert engine[0]["input"][0]["content"][0]["text"] == "first"
+
+
+def test_codex_websocket_interrupt_stops_the_engine(harness_factory):
+    """codex-rs sends `response.interrupt` and reads on until the response ends."""
+    h, url = _ws_ready(harness_factory)
+    h.fake(
+        "POST",
+        "/_fake/mode",
+        {"config": {"text": None, "reply_tokens": 4000, "tokens_per_second": 40}},
+    )
+    with h.client.websocket_connect(url) as ws:
+        ws.send_text(json.dumps(_create("write a long story")))
+        while json.loads(ws.receive_text())["type"] != "response.output_text.delta":
+            pass
+        ws.send_text(json.dumps({"type": "response.interrupt", "mode": "discard_partial_items"}))
+        frames = _turn(ws)
+    assert frames[-1]["type"] == "response.incomplete"
+    assert frames[-1]["response"]["incomplete_details"] == {"reason": "interrupted"}
+    deadline = time.monotonic() + 5
+    while h.engine()["requests_in_flight"]:
+        assert time.monotonic() < deadline, "the engine request was never cancelled"
+        time.sleep(0.02)
+
+
+def test_the_router_token_is_redacted_from_logs():
+    """uvicorn logs each WebSocket handshake path, which holds the token (D58)."""
+    line = '127.0.0.1:5000 - "WebSocket /api/codex/t/9f8e7d6c5b4a/v1/responses" [accepted]'
+    assert "9f8e7d6c5b4a" not in redact_text(line)
+
+
+def test_codex_websocket_unknown_previous_response(harness_factory):
+    """codex-rs retries the full request when it reads previous_response_not_found."""
+    h, url = _ws_ready(harness_factory)
+    with h.client.websocket_connect(url) as ws:
+        ws.send_text(json.dumps(_create("hi", previous_response_id="resp_unknown")))
+        frames = _turn(ws)
+    assert frames == [
+        {
+            "type": "error",
+            "status": 400,
+            "error": {
+                "type": "invalid_request_error",
+                "code": "previous_response_not_found",
+                "message": "Previous response with id 'resp_unknown' not found.",
+            },
+        }
+    ]
+
+
+def test_codex_websocket_refuses_a_wrong_token(harness_factory):
+    h, _ = _ws_ready(harness_factory)
+    with (
+        pytest.raises(WebSocketDenialResponse) as refused,
+        h.client.websocket_connect(f"{WS}/api/codex/t/not-the-token/v1/responses"),
+    ):
+        pass
+    assert refused.value.status_code == 401
+    assert refused.value.json()["error"]["code"] == "invalid_router_token"
+    # The legacy path without the API key: the socket opens, a Splash model is refused.
+    with h.client.websocket_connect(
+        f"{WS}/api/codex/v1/responses", headers={"Authorization": ""}
+    ) as ws:
+        ws.send_text(json.dumps(_create("hi")))
+        frames = _turn(ws)
+    assert frames[-1]["type"] == "error"
+    assert frames[-1]["status"] == 401
+    assert frames[-1]["error"]["type"] == "authentication_error"
+
+
+def test_codex_websocket_is_loopback_only(harness_factory):
+    h, url = _ws_ready(harness_factory)
+    lan = TestClient(h.app, base_url="http://127.0.0.1:8000", client=("192.168.1.20", 50000))
+    with lan, pytest.raises(WebSocketDenialResponse) as refused, lan.websocket_connect(url):
+        pass
+    assert refused.value.status_code == 403
+    # A browser page (Origin header) is refused too: no cross-site WebSocket.
+    with (
+        pytest.raises(WebSocketDenialResponse) as browser,
+        h.client.websocket_connect(url, headers={"Origin": "http://evil.example"}),
+    ):
+        pass
+    assert browser.value.status_code == 403
+
+
+def test_codex_websocket_engine_errors_become_error_frames(harness_factory):
+    h, url = _ws_ready(harness_factory)
+    h.fake("POST", "/_fake/mode", {"mode": "queue_full"})
+    with h.client.websocket_connect(url) as ws:
+        ws.send_text(json.dumps(_create("hi")))
+        frames = _turn(ws)
+        assert frames == [
+            {
+                "type": "error",
+                "status": 503,
+                "error": {
+                    "message": "frontend request capacity is exhausted",
+                    "type": "server_error",
+                    "code": "frontend_overloaded",
+                },
+                "headers": {"retry-after": "1"},
+            }
+        ]
+        # A failure after the stream began becomes response.failed, which codex-rs reads.
+        h.fake("POST", "/_fake/mode", {"mode": "fail_midstream"})
+        ws.send_text(json.dumps(_create("hi")))
+        failed = _turn(ws)
+    assert failed[0]["type"] == "response.created"
+    assert failed[-1]["type"] == "response.failed"
+    assert failed[-1]["response"]["status"] == "failed"
+    assert failed[-1]["response"]["error"]["code"]
+    assert failed[-1]["response"]["id"] == failed[0]["response"]["id"]
+
+
+def test_codex_websocket_sends_native_models_upstream(harness_factory, monkeypatch):
+    """A model off the allow list goes upstream over HTTP with the caller's own
+    credentials, as on the HTTP route, and its SSE events come back as frames."""
+    h, url = _ws_ready(harness_factory)
+    seen: list[httpx.Request] = []
+    events: list[dict[str, Any]] = [
+        {"type": "response.created", "response": {"id": "resp_up"}},
+        {"type": "response.output_text.delta", "delta": "from upstream"},
+        {"type": "response.completed", "response": {"id": "resp_up", "usage": None}},
+    ]
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        body = "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=httpx.ByteStream(body.encode()),
+        )
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: real(transport=httpx.MockTransport(upstream), **kw),
+    )
+    headers = {
+        "Authorization": "Bearer chatgpt-user-token",
+        "ChatGPT-Account-ID": "acct-1",
+        "OpenAI-Beta": "responses_websockets=2026-02-06",
+    }
+    with h.client.websocket_connect(url, headers=headers) as ws:
+        ws.send_text(json.dumps({**_create("hi"), "model": "gpt-5-codex"}))
+        frames = _turn(ws)
+    assert frames == events
+    (request,) = seen
+    assert str(request.url) == "https://chatgpt.com/backend-api/codex/responses"
+    assert request.headers["authorization"] == "Bearer chatgpt-user-token"
+    assert request.headers["chatgpt-account-id"] == "acct-1"
+    assert "openai-beta" not in request.headers, "the WebSocket beta header stays here"
+    assert not [k for k in request.headers if k.startswith("sec-websocket")]
+    body = json.loads(request.content)
+    assert body["model"] == "gpt-5-codex" and "type" not in body
+    assert _engine_responses(h) == [], "never answered by Splash"
 
 
 def test_codex_only_serves_the_routed_endpoints(harness_factory):

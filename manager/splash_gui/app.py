@@ -37,7 +37,7 @@ from .errors import install_error_handlers
 from .events.api import router as events_router
 from .hardening import Hardening, spa_csp
 from .integrations.api import router as integrations_router
-from .integrations.router import router as codex_router
+from .integrations.codex_ws import router as codex_router  # the router, with its WebSocket routes
 from .logs.api import router as logs_router
 from .mcp.api import router as mcp_router
 from .metrics.api import router as metrics_router
