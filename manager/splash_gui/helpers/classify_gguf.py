@@ -29,7 +29,7 @@ def family_of(metadata: Any) -> Any:
 
 
 def classify(path: str) -> dict[str, object]:
-    from install import gguf, models  # type: ignore[import-not-found]
+    from install import gguf, models  # type: ignore[import-not-found,unused-ignore]
 
     try:
         metadata = gguf.Metadata(path, tensors=True)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -40,7 +41,7 @@ def test_bodies_over_the_cap_get_413() -> None:
     assert declared.status_code == 413
     assert declared.json()["error"]["code"] == "body_too_large"
 
-    def chunks():  # no Content-Length: the streamed count is capped
+    def chunks() -> Iterator[bytes]:  # no Content-Length: the streamed count is capped
         for _ in range(5):
             yield b"x" * 50
 
