@@ -31,7 +31,23 @@ def _v0_to_v1(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-MIGRATIONS: dict[int, Migration] = {0: _v0_to_v1}
+def _v1_to_v2(data: dict[str, Any]) -> dict[str, Any]:
+    """D58: admin sign-in is on by default. Version 1 wrote the whole global section,
+    so a stored `admin_requires_key: false` is indistinguishable from the old
+    default; it is turned on once, and the user's later choice is kept."""
+    glob = data.get("global")
+    if isinstance(glob, dict):
+        security = glob.get("security")
+        if not isinstance(security, dict):
+            security = glob["security"] = {}
+        if security.get("admin_requires_key") is not True:
+            security["admin_requires_key"] = True
+            log.info("settings.json v2: admin sign-in turned on (D58)")
+    data["version"] = 2
+    return data
+
+
+MIGRATIONS: dict[int, Migration] = {0: _v0_to_v1, 1: _v1_to_v2}
 
 
 class SettingsError(RuntimeError):

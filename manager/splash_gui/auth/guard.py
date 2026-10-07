@@ -5,12 +5,15 @@ A pure ASGI middleware, so streaming (SSE) responses pass through unbuffered.
 - **Host** (`/`, `/admin*`, `/api/admin*`): as Splash's `validate_headers`, only
   loopback names, the bind address, the socket's own address and
   `server.allowed_hosts` are served. This keeps DNS-rebound pages out of the admin.
-- **CSRF** (mutating `/api/admin/*`): a same-origin `Origin` **and**
-  `Sec-Fetch-Site: same-origin`, or the CLI token. Applies even with admin auth off.
-- **Auth** (`/api/admin/*` except `/auth/*`): when `security.admin_requires_key` is
-  on, a valid session cookie or the CLI token. When it is off, only loopback clients
-  are served (a LAN bind must not expose an unauthenticated admin). The SPA's static
-  files stay public so the login page can load; they hold no data.
+- **No local trust** (D58): every `/api/admin/*` request needs a valid session cookie
+  or the CLI token, except `/auth/state|login|logout|exchange`. With
+  `security.admin_requires_key` turned off, clients on this Mac may still *read*
+  without one, but every write and every secret read needs one. Being on loopback
+  is never a credential.
+- **CSRF** (mutating `/api/admin/*` from a browser): a same-origin `Origin` **and**
+  `Sec-Fetch-Site: same-origin`, or the CLI token. A non-browser client can forge
+  both, so this is an extra layer for cookie writes, never enough on its own.
+- The SPA's static files stay public so the login page can load; they hold no data.
 
 `check_host` and `allowed_hosts` are reused by the proxy for `/v1/*`.
 """
@@ -31,8 +34,25 @@ from ..settings.store import SettingsStore
 from .core import SESSION_COOKIE, AuthManager
 
 ADMIN_API = "/api/admin"
-AUTH_EXEMPT = frozenset(f"{ADMIN_API}/auth/{name}" for name in ("state", "login", "logout"))
+AUTH_EXEMPT = frozenset(
+    f"{ADMIN_API}/auth/{name}" for name in ("state", "login", "logout", "exchange")
+)
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+# D58: reads that run programs moved from GET to POST so a cross-site <img> or link
+# cannot trigger them. They stay reads: with sign-in off they need no credential.
+READ_ONLY_POSTS = frozenset(
+    f"{ADMIN_API}/{name}"
+    for name in (
+        "doctor",
+        "diagnostics",
+        "system",
+        "system/brew",
+        "integrations",
+        "benchmark/preflight",
+        "inspect",
+    )
+)
+SECRET_READS = (f"{ADMIN_API}/settings/secrets/",)
 LOOPBACK_NAMES = ("localhost", "127.0.0.1", "::1")
 WILDCARD_BINDS = ("0.0.0.0", "::")  # noqa: S104
 
@@ -123,6 +143,18 @@ def bearer(headers: Headers) -> str | None:
     return value.strip() if scheme.lower() == "bearer" and value.strip() else None
 
 
+def is_read_only_post(path: str) -> bool:
+    if path in READ_ONLY_POSTS:
+        return True
+    # /integrations/{client}/print
+    prefix = f"{ADMIN_API}/integrations/"
+    return path.startswith(prefix) and path.endswith("/print") and path.count("/") == 5
+
+
+def is_secret_read(path: str) -> bool:
+    return path.startswith(SECRET_READS)
+
+
 def _guarded(path: str) -> bool:
     return (
         path == "/"
@@ -163,8 +195,10 @@ class AdminGuard:
         path: str = scope["path"]
         if not (path == ADMIN_API or path.startswith(f"{ADMIN_API}/")):
             return None
-        cli = is_local_client(scope) and self.auth.check_cli_token(bearer(headers))
-        if scope["method"] not in SAFE_METHODS and not cli:
+        if is_local_client(scope) and self.auth.check_cli_token(bearer(headers)):
+            return "cli_token"
+        method = scope["method"]
+        if method not in SAFE_METHODS:
             same_origin = is_same_origin(headers.get("origin"), headers.get("host"))
             if not same_origin or headers.get("sec-fetch-site") != "same-origin":
                 raise ApiError(
@@ -173,27 +207,39 @@ class AdminGuard:
                     "or the CLI token",
                     "csrf_refused",
                 )
-        if cli:
-            return "cli_token"
-        if not g.security.admin_requires_key:
-            if not is_local_client(scope):
-                # With admin auth off the admin is open, and the CSRF headers above
-                # are trivially forged by a non-browser client. On a LAN bind that
-                # would hand any machine on the network the API key
-                # (GET /settings/secrets/api-key) and command execution (MCP stdio
-                # servers), defeating the key a LAN bind requires (SPEC §17.1).
-                raise ApiError(
-                    403,
-                    "The admin is reachable from other machines only with Settings → "
-                    "Security → Require the API key for the admin "
-                    "(security.admin_requires_key)",
-                    "admin_remote_refused",
-                    details={"setting": "security.admin_requires_key"},
-                )
-            return "open"
         cookie = cookie_parser(headers.get("cookie", "")).get(SESSION_COOKIE)
         if self.auth.verify_session(cookie):
             return "session"
         if path in AUTH_EXEMPT:
             return None
-        raise ApiError(401, "Log in with the API key to use the admin", "auth_required")
+        if g.security.admin_requires_key:
+            raise ApiError(
+                401,
+                "Sign in with the API key to use the admin",
+                "auth_required",
+                details={"admin_requires_key": True},
+            )
+        if not is_local_client(scope):
+            # With admin sign-in off the admin reads are open to this Mac only. On a
+            # LAN bind (which D42 refuses anyway) other machines get nothing.
+            raise ApiError(
+                403,
+                "The admin is reachable from other machines only with Settings → "
+                "Security → Require the API key for the admin "
+                "(security.admin_requires_key)",
+                "admin_remote_refused",
+                details={"setting": "security.admin_requires_key"},
+            )
+        write = method not in SAFE_METHODS and not is_read_only_post(path)
+        if write or is_secret_read(path):
+            # D58: Origin and Sec-Fetch-Site are trivially forged by a local process,
+            # so loopback alone never changes settings, reads a key or starts an MCP
+            # server (which runs code as the user).
+            raise ApiError(
+                401,
+                "Sign in to make changes or read secrets; admin sign-in is off, so this "
+                "Mac can only read",
+                "auth_required",
+                details={"admin_requires_key": False},
+            )
+        return "open"

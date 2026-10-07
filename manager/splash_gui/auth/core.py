@@ -3,9 +3,12 @@
 - **Session cookie** `splash_gui_session`: `v1.<expiry>.<nonce>.<signature>`, signed with
   HMAC-SHA256 under the session secret (Keychain `ai.splashgui.session`) and bound to a
   fingerprint of the current API key, so rotating the key logs every browser out.
-  Sessions survive manager restarts; logout revokes the nonce until it would expire.
+  Sessions survive manager restarts; logout revokes the nonce until it would expire,
+  and the revocation is kept in `run/revoked-sessions.json` (D58) so it survives too.
 - **CLI token** `~/.splash/run/cli.token` (0600): a random token the CLI shim and the
   menu bar app send as `Authorization: Bearer <token>` from loopback.
+- **One-time login codes** (D58): `POST /auth/link` (CLI token) mints a code, valid
+  60 s and single-use, that `POST /auth/exchange` turns into a session. In memory only.
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ import base64
 import contextlib
 import hashlib
 import hmac
+import json
 import logging
 import secrets as _stdlib_secrets
 import threading
@@ -30,7 +34,9 @@ SESSION_COOKIE = "splash_gui_session"
 SESSION_TTL_S = 12 * 3600
 LOGIN_WINDOW_S = 60.0
 LOGIN_MAX_FAILURES = 10
+LINK_TTL_S = 60
 _VERSION = "v1"
+_REVOKED_VERSION = 1
 
 
 def _b64(data: bytes) -> str:
@@ -47,7 +53,8 @@ class AuthManager:
     secrets: SecretStore
     _cli_token: str | None = None
     _session_secret: bytes | None = None
-    _revoked: dict[str, float] = field(default_factory=dict)
+    _revoked: dict[str, float] | None = None  # loaded from disk on first use
+    _codes: dict[str, float] = field(default_factory=dict)  # code -> monotonic expiry
     # Failed logins per client address, so one LAN host cannot lock out the others.
     _failures: dict[str, deque[float]] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -85,6 +92,20 @@ class AuthManager:
         except SecretsError:
             return False
         return bool(key) and hmac.compare_digest(value.encode(), str(key).encode())
+
+    def ensure_api_key(self) -> bool:
+        """D58: sign-in uses the API key, so one exists from the first start.
+        Returns whether a key was created. A Keychain failure is logged, not raised:
+        the CLI token still works, and the login page explains the missing key."""
+        try:
+            if self.secrets.has(SecretName.API_KEY):
+                return False
+            self.secrets.generate(SecretName.API_KEY)
+        except SecretsError as error:
+            log.warning("could not create the API key (%s); browser sign-in needs one", error)
+            return False
+        log.info("created the API key (admin sign-in and the /v1 key use it)")
+        return True
 
     def _key_fingerprint(self) -> str | None:
         try:
@@ -139,7 +160,7 @@ class AuthManager:
         if expiry <= now:
             return None
         with self._lock:
-            if nonce in self._revoked:
+            if nonce in self._revoked_map(now):
                 return None
         return nonce, expiry
 
@@ -150,9 +171,75 @@ class AuthManager:
         now = time.time() if now is None else now
         parsed = self._parse(cookie, now)
         with self._lock:
-            self._revoked = {n: e for n, e in self._revoked.items() if e > now}
+            revoked = {n: e for n, e in self._revoked_map(now).items() if e > now}
             if parsed is not None:
-                self._revoked[parsed[0]] = parsed[1]
+                revoked[parsed[0]] = parsed[1]
+            self._revoked = revoked
+            self._save_revoked(revoked)
+
+    # Revocations on disk (D58) -------------------------------------------------
+
+    def _revoked_map(self, now: float) -> dict[str, float]:
+        """Call with the lock held."""
+        if self._revoked is None:
+            self._revoked = self._load_revoked(now)
+        return self._revoked
+
+    def _load_revoked(self, now: float) -> dict[str, float]:
+        path = self.paths.revoked_sessions
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError) as error:
+            log.warning("ignoring unreadable %s (%s)", path.name, error)
+            return {}
+        entries = data.get("revoked") if isinstance(data, dict) else None
+        if not isinstance(entries, dict):
+            log.warning("ignoring %s: no revoked map", path.name)
+            return {}
+        revoked = {
+            str(nonce): float(expiry)
+            for nonce, expiry in entries.items()
+            if isinstance(expiry, (int, float)) and expiry > now
+        }
+        if len(revoked) != len(entries):
+            self._save_revoked(revoked)
+        return revoked
+
+    def _save_revoked(self, revoked: dict[str, float]) -> None:
+        payload = {"version": _REVOKED_VERSION, "revoked": revoked}
+        try:
+            write_atomic(
+                self.paths.revoked_sessions,
+                (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode(),
+                FILE_MODE,
+            )
+        except OSError as error:
+            log.warning("could not save session revocations (%s)", error)
+
+    # One-time login codes (D58) ------------------------------------------------
+
+    def issue_code(self, now: float | None = None) -> str:
+        now = time.monotonic() if now is None else now
+        code = _token()
+        with self._lock:
+            self._codes = {c: e for c, e in self._codes.items() if e > now}
+            self._codes[code] = now + LINK_TTL_S
+        return code
+
+    def redeem_code(self, code: str, now: float | None = None) -> bool:
+        """True once for a live code; the code is gone afterwards either way."""
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            match = next(
+                (c for c in self._codes if hmac.compare_digest(c.encode(), code.encode())),
+                None,
+            )
+            if match is None:
+                return False
+            expiry = self._codes.pop(match)
+            return expiry > now
 
     # Login throttling ----------------------------------------------------------
 

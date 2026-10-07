@@ -1,12 +1,15 @@
-"""Admin auth, CSRF and the Host allowlist (SPEC §8.2, §14, §17.1)."""
+"""Admin auth, CSRF and the Host allowlist (SPEC §8.2, §14, §17.1, D58)."""
 
 from __future__ import annotations
+
+import json
+import time
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from splash_gui.auth.core import SESSION_COOKIE, SESSION_TTL_S, AuthManager
+from splash_gui.auth.core import LINK_TTL_S, SESSION_COOKIE, SESSION_TTL_S, AuthManager
 from splash_gui.auth.guard import allowed_hosts, check_host, is_same_origin
 from splash_gui.errors import ApiError
 from splash_gui.paths import Paths
@@ -24,6 +27,17 @@ def _require_admin_key(client: TestClient) -> str:
     doc["global"]["security"]["admin_requires_key"] = True
     assert client.put("/api/admin/settings", json=doc).status_code == 200
     return str(key)
+
+
+def _sign_in_off(client: TestClient) -> None:
+    doc = client.get("/api/admin/settings").json()["settings"]
+    doc["global"]["security"]["admin_requires_key"] = False
+    assert client.put("/api/admin/settings", json=doc).status_code == 200
+
+
+def _login(browser: TestClient, client: TestClient) -> None:
+    key = client.get("/api/admin/settings/secrets/api-key").json()["key"]
+    assert browser.post("/api/admin/auth/login", json={"key": key}).status_code == 200
 
 
 # CLI token -------------------------------------------------------------------
@@ -163,7 +177,20 @@ def test_same_origin(origin: str | None, host: str, same: bool) -> None:
     assert is_same_origin(origin, host) is same
 
 
-def test_reads_need_no_origin(app: FastAPI) -> None:
+def test_reads_need_a_credential_by_default(app: FastAPI) -> None:
+    plain = TestClient(app, client=LOOPBACK_CLIENT)
+    refused = plain.get("/api/admin/settings")
+    assert refused.status_code == 401
+    assert refused.json()["error"] == {
+        "message": "Sign in with the API key to use the admin",
+        "type": "authentication_error",
+        "code": "auth_required",
+        "details": {"admin_requires_key": True},
+    }
+
+
+def test_reads_need_no_origin_with_sign_in_off(app: FastAPI, client: TestClient) -> None:
+    _sign_in_off(client)
     plain = TestClient(app, client=LOOPBACK_CLIENT)
     assert plain.get("/api/admin/settings").status_code == 200
 
@@ -180,6 +207,7 @@ def test_reads_need_no_origin(app: FastAPI) -> None:
     ],
 )
 def test_cross_site_writes_refused(app: FastAPI, headers: dict[str, str]) -> None:
+    before = app.state.manager.secrets.get(SecretName.API_KEY)
     page = TestClient(app, base_url=ORIGIN, client=LOOPBACK_CLIENT)
     response = page.post("/api/admin/settings/secrets/api-key", headers=headers)
     assert response.status_code == 403
@@ -189,10 +217,18 @@ def test_cross_site_writes_refused(app: FastAPI, headers: dict[str, str]) -> Non
         "type": "permission_error",
         "code": "csrf_refused",
     }
-    assert not app.state.manager.secrets.has(SecretName.API_KEY)
+    assert app.state.manager.secrets.get(SecretName.API_KEY) == before
 
 
-def test_same_origin_page_may_write(browser: TestClient) -> None:
+def test_same_origin_page_needs_a_session_to_write(browser: TestClient, client: TestClient) -> None:
+    for sign_in in (True, False):
+        if not sign_in:
+            _sign_in_off(client)
+        refused = browser.post("/api/admin/settings/secrets/api-key")
+        assert refused.status_code == 401, sign_in
+        assert refused.json()["error"]["code"] == "auth_required"
+        assert refused.json()["error"]["details"] == {"admin_requires_key": sign_in}
+    _login(browser, client)
     assert browser.post("/api/admin/settings/secrets/api-key").status_code == 200
 
 
@@ -209,9 +245,9 @@ def test_cli_token_only_from_loopback(app: FastAPI) -> None:
 def test_open_admin_refuses_network_clients(app: FastAPI, client: TestClient) -> None:
     # A LAN bind needs an API key (SPEC §17.1). With admin auth off, a LAN machine
     # forging the CSRF headers must not be able to read that key or change settings.
-    client.post("/api/admin/settings/secrets/api-key")
     doc = client.get("/api/admin/settings").json()["settings"]
     doc["global"]["server"]["allowed_hosts"] = ["mymac.local"]
+    doc["global"]["security"]["admin_requires_key"] = False
     assert client.put("/api/admin/settings", json=doc).status_code == 200
     lan = TestClient(
         app,
@@ -301,32 +337,29 @@ def _require_api_key(client: TestClient) -> None:
     assert client.put("/api/admin/settings", json=doc).status_code == 200
 
 
-def test_admin_pages_reach_the_api_with_admin_sign_in_off(
+def test_v1_trusts_no_page_without_a_session(
     app: FastAPI, client: TestClient, browser: TestClient
 ) -> None:
-    # The wizard's key toggle (or a LAN bind) turns api_key_required on with admin
-    # sign-in off: the web Chat/Playground then has no cookie and was refused (401).
+    # D58: before, with admin sign-in off, a same-origin page on this Mac reached /v1
+    # without the key. A local process can forge those headers, so it needs a session.
     _require_api_key(client)
+    _sign_in_off(client)
+    assert browser.get("/v1/models").status_code == 401
+    forged = TestClient(
+        app, base_url=ORIGIN, client=LOOPBACK_CLIENT, headers={"Sec-Fetch-Site": "same-origin"}
+    )
+    assert forged.get("/v1/models").status_code == 401
+    _login(browser, client)
     assert browser.get("/v1/models").status_code == 200
     # A same-origin GET carries no Origin header, only Sec-Fetch-Site.
+    session = browser.cookies.get(SESSION_COOKIE)
     plain_get = TestClient(
         app, base_url=ORIGIN, client=LOOPBACK_CLIENT, headers={"Sec-Fetch-Site": "same-origin"}
     )
+    plain_get.cookies.set(SESSION_COOKIE, session or "")
     assert plain_get.get("/v1/models").status_code == 200
     evil = plain_get.get("/v1/models", headers={"Origin": "http://evil.example"})
     assert evil.status_code == 403
-    cross = TestClient(app, base_url=ORIGIN, client=LOOPBACK_CLIENT)
-    assert cross.get("/v1/models").status_code == 401, "no same-origin headers, no pass"
-    lan = TestClient(
-        app,
-        base_url="http://127.0.0.1:8000",
-        client=("192.168.1.20", 50000),
-        headers={"Origin": "http://127.0.0.1:8000", "Sec-Fetch-Site": "same-origin"},
-    )
-    assert lan.get("/v1/models").status_code == 401, "forged headers from the LAN"
-    # With admin sign-in on, the page needs its session cookie again.
-    _require_admin_key(client)
-    assert browser.get("/v1/models").status_code == 401
 
 
 def test_cli_token_from_the_macs_own_lan_address(app: FastAPI) -> None:
@@ -347,3 +380,139 @@ def test_cli_token_from_the_macs_own_lan_address(app: FastAPI) -> None:
         headers={"Authorization": f"Bearer {token}"},
     )
     assert other.post("/api/admin/settings/secrets/api-key").status_code == 403
+
+
+# D58: no local trust with sign-in off ------------------------------------------------
+
+
+def test_sign_in_off_keeps_reads_open_but_not_secrets_or_writes(
+    app: FastAPI, client: TestClient, browser: TestClient
+) -> None:
+    _sign_in_off(client)
+    assert browser.get("/api/admin/auth/state").json() == {
+        "admin_requires_key": False,
+        "authenticated": False,
+        "method": "open",
+    }
+    assert browser.get("/api/admin/settings").status_code == 200
+    secret = browser.get("/api/admin/settings/secrets/api-key")
+    assert secret.status_code == 401 and "sk-splash-" not in secret.text
+    assert browser.put("/api/admin/mcp/servers", json={"servers": {}}).status_code == 401
+    # Reads that moved to POST (they run programs) stay reads.
+    assert browser.post("/api/admin/system").status_code == 200
+    assert browser.post("/api/admin/benchmark/preflight").status_code == 200
+    # The old GETs are gone.
+    assert browser.get("/api/admin/doctor").status_code == 405
+    # A signed-in page may do everything.
+    _login(browser, client)
+    assert browser.get("/api/admin/auth/state").json()["method"] == "session"
+    assert browser.get("/api/admin/settings/secrets/api-key").json()["key"].startswith("sk-splash-")
+
+
+def test_read_only_posts_still_need_same_origin(app: FastAPI, client: TestClient) -> None:
+    _sign_in_off(client)
+    cross = TestClient(app, base_url=ORIGIN, client=LOOPBACK_CLIENT)
+    response = cross.post("/api/admin/doctor", headers={"Origin": "http://evil.example"})
+    assert response.status_code == 403 and response.json()["error"]["code"] == "csrf_refused"
+
+
+# D58: one-time login link -----------------------------------------------------------
+
+
+def test_login_link_and_exchange(app: FastAPI, client: TestClient, browser: TestClient) -> None:
+    link = client.post("/api/admin/auth/link")
+    assert link.status_code == 200
+    body = link.json()
+    assert body["expires_in"] == LINK_TTL_S == 60
+    assert body["url"].startswith("/admin/login?code=")
+    code = body["url"].split("code=", 1)[1]
+    assert len(code) >= 43
+
+    # A plain (non-browser) client cannot spend it, even with the CLI token.
+    assert client.post("/api/admin/auth/exchange", json={"code": code}).status_code == 403
+    cross = TestClient(app, base_url=ORIGIN, client=LOOPBACK_CLIENT)
+    assert cross.post("/api/admin/auth/exchange", json={"code": code}).status_code == 403
+
+    assert browser.get("/api/admin/settings").status_code == 401
+    good = browser.post("/api/admin/auth/exchange", json={"code": code})
+    assert good.status_code == 200
+    assert good.json() == {"admin_requires_key": True, "authenticated": True, "method": "session"}
+    assert "httponly" in good.headers["set-cookie"].lower()
+    assert browser.get("/api/admin/settings").status_code == 200
+
+    # Single use.
+    again = TestClient(
+        app,
+        base_url=ORIGIN,
+        client=LOOPBACK_CLIENT,
+        headers={"Origin": ORIGIN, "Sec-Fetch-Site": "same-origin"},
+    )
+    reused = again.post("/api/admin/auth/exchange", json={"code": code})
+    assert reused.status_code == 401
+    assert reused.json()["error"]["code"] == "invalid_code"
+
+
+def test_only_the_cli_token_mints_links(client: TestClient, browser: TestClient) -> None:
+    assert browser.post("/api/admin/auth/link").status_code == 401
+    _login(browser, client)
+    refused = browser.post("/api/admin/auth/link")
+    assert refused.status_code == 403
+    assert refused.json()["error"]["code"] == "cli_token_required"
+
+
+def test_codes_expire(auth: AuthManager) -> None:
+    code = auth.issue_code(now=100.0)
+    assert not auth.redeem_code(code, now=100.0 + LINK_TTL_S + 1)
+    assert not auth.redeem_code(code, now=101.0), "an expired code is gone"
+    fresh = auth.issue_code(now=200.0)
+    assert auth.redeem_code(fresh, now=230.0)
+    assert not auth.redeem_code("nonsense", now=230.0)
+
+
+# D58: revocations survive a restart ------------------------------------------------
+
+
+def test_revocations_persist_across_restarts(auth: AuthManager, paths: Paths) -> None:
+    cookie = auth.issue_session()
+    auth.revoke_session(cookie)
+    assert mode(paths.revoked_sessions) == 0o600
+    stored = json.loads(paths.revoked_sessions.read_text())
+    assert stored["version"] == 1 and len(stored["revoked"]) == 1
+    restarted = AuthManager(paths, auth.secrets)  # same Keychain, new process
+    assert not restarted.verify_session(cookie)
+    assert restarted.verify_session(restarted.issue_session())
+
+
+def test_expired_revocations_are_pruned(auth: AuthManager, paths: Paths) -> None:
+    now = time.time()
+    paths.revoked_sessions.write_text(
+        json.dumps({"version": 1, "revoked": {"old": now - 10, "live": now + 100}})
+    )
+    restarted = AuthManager(paths, auth.secrets)
+    assert restarted.verify_session(restarted.issue_session())
+    assert json.loads(paths.revoked_sessions.read_text())["revoked"] == {"live": now + 100}
+
+
+def test_an_unreadable_revocation_file_is_ignored(auth: AuthManager, paths: Paths) -> None:
+    paths.revoked_sessions.write_text("{not json")
+    restarted = AuthManager(paths, auth.secrets)
+    assert restarted.verify_session(restarted.issue_session())
+
+
+def test_logout_over_http_survives_a_restart(
+    app: FastAPI, client: TestClient, browser: TestClient, paths: Paths
+) -> None:
+    _login(browser, client)
+    session = browser.cookies.get(SESSION_COOKIE)
+    assert browser.post("/api/admin/auth/logout").status_code == 204
+    restarted = AuthManager(paths, app.state.manager.secrets)
+    assert not restarted.verify_session(session)
+
+
+def test_the_manager_creates_the_api_key(paths: Paths) -> None:
+    secrets = SecretStore(MemoryBackend())
+    auth = AuthManager(paths, secrets)
+    assert auth.ensure_api_key() is True
+    key = secrets.get(SecretName.API_KEY)
+    assert key and key.startswith("sk-splash-")
+    assert auth.ensure_api_key() is False and secrets.get(SecretName.API_KEY) == key

@@ -39,7 +39,7 @@ def test_defaults_match_spec() -> None:
     g = SettingsDocument().global_
     assert g.server.host == "127.0.0.1" and g.server.port == 8000
     assert g.server.allowed_hosts == [] and g.server.allowed_origins == []
-    assert g.security.api_key_required is False and g.security.admin_requires_key is False
+    assert g.security.api_key_required is False and g.security.admin_requires_key is True
     assert g.engine.path is None and g.engine.internal_port == "auto"
     assert g.engine.extra_flags == []
     # Appendix A defaults are Splash's own.
@@ -234,6 +234,7 @@ def test_lan_bind_requires_admin_sign_in() -> None:
     for host in ("0.0.0.0", "192.168.1.20"):  # noqa: S104
         raw = doc_with("server.host", host)
         raw["global"]["security"]["api_key_required"] = True
+        raw["global"]["security"]["admin_requires_key"] = False
         result = validate_document(raw, ValidationContext(api_key_present=True))
         assert [(i.key, i.code) for i in result.errors] == [
             ("security.admin_requires_key", "lan_requires_admin_key")

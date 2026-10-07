@@ -113,7 +113,7 @@ def test_connect_and_disconnect_report_their_steps(
     ]
     rows = [d for e, d in seen if e == "integration.state"]
     assert all(r.name == "claude-desktop" for r in rows) and rows[1].message
-    assert client.get("/api/admin/integrations").json()["desktop"][0]["step"] is None
+    assert client.post("/api/admin/integrations").json()["desktop"][0]["step"] is None
     seen.clear()
     assert client.post("/api/admin/integrations/claude-desktop/disconnect").status_code == 200
     assert steps(seen) == [
@@ -180,7 +180,7 @@ def test_print_runs_splash_s_configurator(
 ) -> None:
     monkeypatch.setattr(app.state.manager, "engine_cached", real_clients_engine)
     model = f"{MODEL}:no-think"
-    claude = client.get("/api/admin/integrations/claude/print", params={"model": model}).json()
+    claude = client.post("/api/admin/integrations/claude/print", params={"model": model}).json()
     assert claude["exact"] is True and claude["model"] == model
     assert claude["env"]["ANTHROPIC_MODEL"] == model
     assert claude["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8000"
@@ -188,11 +188,11 @@ def test_print_runs_splash_s_configurator(
     assert "ANTHROPIC_API_KEY" in claude["removed_env"]
     assert claude["args"][claude["args"].index("--model") + 1] == model
     assert claude["command"].startswith("claude ") and claude["files"] == []
-    codex = client.get("/api/admin/integrations/codex/print", params={"model": model}).json()
+    codex = client.post("/api/admin/integrations/codex/print", params={"model": model}).json()
     assert codex["exact"] is True and f'model="{model}"' in codex["args"]
     assert "-c features.apps=false" in codex["command"], "D46 shows in the preview"
     assert "features.apps=false" not in claude["command"]
-    opencode = client.get("/api/admin/integrations/opencode/print", params={"model": model}).json()
+    opencode = client.post("/api/admin/integrations/opencode/print", params={"model": model}).json()
     assert f"splash/{model}" in opencode["env"]["OPENCODE_CONFIG_CONTENT"]
 
 
@@ -205,7 +205,7 @@ def test_print_masks_the_api_key(
     document = client.get("/api/admin/settings").json()["settings"]
     document["global"]["security"]["api_key_required"] = True
     assert client.put("/api/admin/settings", json=document).status_code == 200
-    claude = client.get("/api/admin/integrations/claude/print", params={"model": MODEL}).json()
+    claude = client.post("/api/admin/integrations/claude/print", params={"model": MODEL}).json()
     assert claude["env"]["ANTHROPIC_AUTH_TOKEN"] == "••••"
     assert claude["secret_env"] == ["ANTHROPIC_AUTH_TOKEN"]
     assert key not in json.dumps(claude)
@@ -214,17 +214,17 @@ def test_print_masks_the_api_key(
 def test_print_falls_back_to_a_description(svc: Any, client: TestClient, home: Path) -> None:
     """The fake engine has no install/clients.py; Hermes and Pi are never configured
     just to preview (their configurators write their profile/provider)."""
-    fallback = client.get("/api/admin/integrations/claude/print", params={"model": MODEL}).json()
+    fallback = client.post("/api/admin/integrations/claude/print", params={"model": MODEL}).json()
     assert fallback["exact"] is False and fallback["env"]["ANTHROPIC_MODEL"] == MODEL
-    hermes = client.get("/api/admin/integrations/hermes/print", params={"model": MODEL}).json()
+    hermes = client.post("/api/admin/integrations/hermes/print", params={"model": MODEL}).json()
     assert hermes["exact"] is False
     assert hermes["files"][0]["path"] == str(
         home / ".hermes" / "profiles" / "splash" / "config.yaml"
     )
     assert hermes["args"] == ["--provider", "custom", "--model", MODEL]
-    pi = client.get("/api/admin/integrations/pi/print").json()
+    pi = client.post("/api/admin/integrations/pi/print").json()
     assert pi["model"] is None and pi["files"][0]["change"]
-    codex = client.get("/api/admin/integrations/codex/print", params={"model": MODEL}).json()
+    codex = client.post("/api/admin/integrations/codex/print", params={"model": MODEL}).json()
     assert codex["exact"] is False
     assert codex["args"][-2:] == ["-c", "features.apps=false"], "D46 in the static description"
     assert any("64 characters" in n for n in codex["notes"])
@@ -283,9 +283,9 @@ def test_reset_restarts_the_engine_when_the_model_s_flags_change(harness_factory
 
 
 def test_secret_meta_masks_and_never_returns_the_value(app: FastAPI, client: TestClient) -> None:
-    empty = client.get("/api/admin/settings/secret/meta").json()
+    empty = client.get("/api/admin/settings/secret/meta", params={"name": "hf_token"}).json()
     assert empty == {
-        "name": "api_key",
+        "name": "hf_token",
         "set": False,
         "prefix": None,
         "last4": None,
@@ -362,7 +362,7 @@ def hub_harness(harness_factory: H, fake_hub: str, monkeypatch: pytest.MonkeyPat
 
 def test_inspect_carries_download_plans(hub_harness: Any) -> None:
     h = hub_harness(installed=())
-    result = h.client.get("/api/admin/inspect", params={"id": MODEL}).json()
+    result = h.client.post("/api/admin/inspect", params={"id": MODEL}).json()
     plan, text_only = result["download_plan"], result["language_only_plan"]
     names = [f["name"] for f in plan["files"]]
     assert any(n.endswith("UD-Q4_K_M.gguf") for n in names)
@@ -383,7 +383,7 @@ def test_installed_files_count_as_present(
     hub_harness: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     h = hub_harness(installed=(MODEL,))
-    plan = h.client.get("/api/admin/inspect", params={"id": MODEL}).json()["download_plan"]
+    plan = h.client.post("/api/admin/inspect", params={"id": MODEL}).json()["download_plan"]
     present = [f for f in plan["files"] if f["present"]]
     assert present, plan
     assert plan["remaining_bytes"] == sum(f["bytes"] for f in plan["files"] if not f["present"])
@@ -391,7 +391,7 @@ def test_installed_files_count_as_present(
 
     usage = shutil.disk_usage(h.home)
     monkeypatch.setattr(shutil, "disk_usage", lambda _p: usage._replace(free=0))
-    tight = h.client.get("/api/admin/inspect", params={"id": MODEL}).json()["download_plan"]
+    tight = h.client.post("/api/admin/inspect", params={"id": MODEL}).json()["download_plan"]
     assert tight["free_bytes"] == 0 and tight["fits_on_disk"] is False
 
 

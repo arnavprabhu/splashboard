@@ -110,6 +110,7 @@ def build_state(config: AppConfig) -> ManagerState:
         web_dist=config.web_dist or default_web_dist(),
     )
     state.auth.ensure_cli_token()
+    state.auth.ensure_api_key()  # D58: sign-in needs a key from the first start
     attach_core(state)
     return state
 

@@ -52,7 +52,7 @@ def test_a_full_run_is_saved_with_metrics(h: EngineHarness) -> None:
     run = wait_run(h, started.json()["run_id"])
     assert run["state"] == "done", run
     assert run["model"] == MODEL and run["engine_version"] == "1.3.0"
-    assert run["hardware"] and "power" in run and run["settings"]["version"] == 1
+    assert run["hardware"] and "power" in run and run["settings"]["version"] == 2
     scenarios = [(r["scenario"], r["params"]["value"]) for r in run["results"]]
     assert scenarios == [
         ("decode_short", 128),
@@ -132,7 +132,7 @@ def test_benchmark_needs_a_loaded_model(harness_factory: H) -> None:
     h = harness_factory()
     response = h.client.post("/api/admin/benchmark", json=SMALL)
     assert response.status_code == 503 and response.json()["error"]["code"] == "engine_unavailable"
-    preflight = h.client.get("/api/admin/benchmark/preflight").json()
+    preflight = h.client.post("/api/admin/benchmark/preflight").json()
     assert preflight["ready"] is False and "No model is loaded." in preflight["warnings"]
 
 

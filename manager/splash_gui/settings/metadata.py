@@ -174,7 +174,10 @@ FIELDS: tuple[FieldMeta, ...] = (
     FieldMeta(
         "security.admin_requires_key",
         "Protect the admin",
-        "Require the API key to open /admin and /api/admin (12-hour session cookie).",
+        "Require the API key to open /admin and /api/admin (12-hour session cookie). On by "
+        "default. Turned off, this Mac can still read the admin without signing in, but "
+        "every change and every secret still needs a session or the CLI token. On a "
+        "local-network bind the cookie travels over plain HTTP; use a TLS reverse proxy.",
         "security",
         "toggle",
     ),

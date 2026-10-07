@@ -18,10 +18,10 @@ GGUF = "unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M"
 
 # Every route in SPEC §14 (path parameters as FastAPI names them).
 SPEC_ROUTES = [
-    ("get", "/system"),
+    ("post", "/system"),
     ("get", "/versions"),
     ("post", "/engine/upgrade"),
-    ("get", "/doctor"),
+    ("post", "/doctor"),
     ("get", "/engine"),
     ("post", "/engine/load"),
     ("post", "/engine/stop"),
@@ -42,7 +42,7 @@ SPEC_ROUTES = [
     ("post", "/models/{model_id}/update"),
     ("get", "/catalog"),
     ("get", "/search"),
-    ("get", "/inspect"),
+    ("post", "/inspect"),
     ("get", "/card"),
     ("get", "/downloads"),
     ("post", "/downloads"),
@@ -72,7 +72,7 @@ SPEC_ROUTES = [
     ("get", "/benchmark/runs/{rid}"),
     ("delete", "/benchmark/runs/{rid}"),
     ("post", "/benchmark/cancel"),
-    ("get", "/integrations"),
+    ("post", "/integrations"),
     ("post", "/integrations/{name}/connect"),
     ("post", "/integrations/{name}/disconnect"),
     ("post", "/integrations/restore-all"),
@@ -210,7 +210,7 @@ def test_versions(client: TestClient) -> None:
 
 
 def test_system(client: TestClient) -> None:
-    body = client.get("/api/admin/system").json()
+    body = client.post("/api/admin/system").json()
     assert body["memory_bytes"] >= 0 and "power" in body and "models" in body["disk"]
 
 
@@ -219,9 +219,11 @@ def test_system(client: TestClient) -> None:
 
 def test_get_settings(client: TestClient, paths: Paths) -> None:
     body = client.get("/api/admin/settings").json()
-    assert body["settings"]["version"] == 1
+    assert body["settings"]["version"] == 2
     assert body["settings"]["global"]["server"]["port"] == 8000
-    assert body["secrets"]["api_key_set"] is False
+    # D58: sign-in is on by default, and the manager creates the key it needs.
+    assert body["settings"]["global"]["security"]["admin_requires_key"] is True
+    assert body["secrets"]["api_key_set"] is True
     assert body["resolved"]["models_dir"] == str(paths.models_dir)
     assert body["resolved"]["tmp_dir"] == str(paths.cache_dir / "tmp")
 
@@ -310,7 +312,7 @@ def test_lan_bind_needs_generated_key(client: TestClient) -> None:
     doc = _settings(client)
     doc["global"]["server"]["host"] = "0.0.0.0"  # noqa: S104
     doc["global"]["security"]["api_key_required"] = True
-    assert client.put("/api/admin/settings", json=doc).status_code == 422
+    doc["global"]["security"]["admin_requires_key"] = False
     key = client.post("/api/admin/settings/secrets/api-key").json()["key"]
     assert key.startswith("sk-splash-")
     refused = client.put("/api/admin/settings", json=doc)
@@ -321,7 +323,7 @@ def test_lan_bind_needs_generated_key(client: TestClient) -> None:
     )
     doc["global"]["security"]["admin_requires_key"] = True
     assert client.put("/api/admin/settings", json=doc).status_code == 200
-    # The key cannot be deleted while it is required.
+    # The key is the sign-in credential: it is never deleted (D58).
     assert client.delete("/api/admin/settings/secrets/api-key").status_code == 409
 
 
@@ -474,13 +476,15 @@ def test_put_profiles_validates_ranges(client: TestClient) -> None:
 
 
 def test_api_key_lifecycle(client: TestClient, secrets: SecretStore) -> None:
-    assert client.get("/api/admin/settings/secrets/api-key").json() == {"key": None}
+    created = client.get("/api/admin/settings/secrets/api-key").json()["key"]
+    assert created.startswith("sk-splash-") and secrets.get(SecretName.API_KEY) == created
     first = client.post("/api/admin/settings/secrets/api-key").json()["key"]
     second = client.post("/api/admin/settings/secrets/api-key").json()["key"]
-    assert first != second and secrets.get(SecretName.API_KEY) == second
+    assert len({created, first, second}) == 3 and secrets.get(SecretName.API_KEY) == second
     assert client.get("/api/admin/settings").json()["secrets"]["api_key_set"] is True
-    assert client.delete("/api/admin/settings/secrets/api-key").status_code == 204
-    assert secrets.get(SecretName.API_KEY) is None
+    refused = client.delete("/api/admin/settings/secrets/api-key")
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "api_key_in_use"
+    assert secrets.get(SecretName.API_KEY) == second
 
 
 def test_hf_token_set_and_test(client: TestClient, secrets: SecretStore) -> None:
@@ -547,11 +551,11 @@ def test_logs_tail_and_clear(client: TestClient, paths: Paths) -> None:
     assert client.get("/api/admin/logs/bogus").status_code == 422
 
 
-def test_auth_state_open_by_default(browser: TestClient) -> None:
+def test_auth_state_signed_out_by_default(browser: TestClient) -> None:
     assert browser.get("/api/admin/auth/state").json() == {
-        "admin_requires_key": False,
-        "authenticated": True,
-        "method": "open",
+        "admin_requires_key": True,
+        "authenticated": False,
+        "method": None,
     }
 
 
@@ -569,7 +573,7 @@ def test_request_validation_error_shape(client: TestClient) -> None:
 
 
 def test_doctor_covers_the_spec_checks(client: TestClient) -> None:
-    report = client.get("/api/admin/doctor").json()
+    report = client.post("/api/admin/doctor").json()
     ids = {c["id"] for c in report["checks"]}
     assert ids >= {
         "hardware",
@@ -599,7 +603,7 @@ def test_doctor_formats_sizes_and_offers_fixes_only_for_problems(
 
     base = app.state.manager.paths.base
     base.chmod(0o700)
-    by = {c["id"]: c for c in client.get("/api/admin/doctor").json()["checks"]}
+    by = {c["id"]: c for c in client.post("/api/admin/doctor").json()["checks"]}
     message = by["disk"]["message"]
     assert re.fullmatch(r"\d+(\.\d)? (KB|MB|GB|TB) free on the models volume", message)
     assert "bytes" not in by["disk"]["message"]
@@ -607,7 +611,7 @@ def test_doctor_formats_sizes_and_offers_fixes_only_for_problems(
     assert all(c["fix"] is None for c in by.values() if c["status"] == "ok")
     base.chmod(0o755)
     try:
-        check = {c["id"]: c for c in client.get("/api/admin/doctor").json()["checks"]}
+        check = {c["id"]: c for c in client.post("/api/admin/doctor").json()["checks"]}
         assert check["permissions"]["status"] == "warn"
         assert check["permissions"]["fix"] == f"chmod 700 {base}"
     finally:

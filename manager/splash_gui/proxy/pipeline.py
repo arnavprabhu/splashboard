@@ -293,26 +293,16 @@ class ProxyPipeline:
         local = is_local_client(request.scope)
         if local and auth.check_cli_token(bearer(headers)):
             return
-        same_origin_page = (
-            is_same_origin(headers.get("origin"), headers.get("host"))
-            and headers.get("sec-fetch-site") == "same-origin"
+        # Browsers omit Origin on same-origin GETs but always send Sec-Fetch-Site.
+        origin = headers.get("origin")
+        same_origin_page = headers.get("sec-fetch-site") == "same-origin" and (
+            origin is None or is_same_origin(origin, headers.get("host"))
         )
         cookie = cookie_parser(headers.get("cookie", "")).get(SESSION_COOKIE)
         if cookie and same_origin_page and auth.verify_session(cookie):
             return
-        origin = headers.get("origin")
-        if (
-            local
-            and headers.get("sec-fetch-site") == "same-origin"
-            and (origin is None or is_same_origin(origin, headers.get("host")))
-            and not self.state.settings.current.global_.security.admin_requires_key
-        ):
-            # The admin's own pages (Chat, Playground, Tokenizer, Judgments) on this
-            # Mac with admin sign-in off: they get no session cookie, and the open
-            # admin would hand them the key anyway (GET /settings/secrets/api-key).
-            # Browsers omit Origin on same-origin GETs but always send Sec-Fetch-Site,
-            # which a page cannot set; the Host check above keeps rebound names out.
-            return
+        # D58: no local trust. Before D58 a same-origin page on this Mac was accepted
+        # here while admin sign-in was off; a local process can forge those headers.
         raise ProxyError(401, "invalid or missing API key", "authentication_error")
 
     @staticmethod

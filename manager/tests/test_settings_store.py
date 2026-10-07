@@ -23,7 +23,7 @@ from splash_gui.settings.store import (
     migrate,
     repair,
 )
-from splash_gui.settings.validation import validate_document
+from splash_gui.settings.validation import ValidationContext, validate_document
 
 from .conftest import mode
 
@@ -192,7 +192,7 @@ def test_loose_file_mode_is_tightened(paths: Paths) -> None:
 def test_migrate_from_unversioned() -> None:
     data, newer = migrate({"global": {"serve": {"offline": True}}})
     assert not newer
-    assert data["version"] == 1
+    assert data["version"] == 2
     assert data["global"]["hf"]["offline"] is True
     assert "offline" not in data["global"]["serve"]
 
@@ -201,7 +201,26 @@ def test_unversioned_file_is_rewritten(paths: Paths) -> None:
     paths.settings_file.write_text(json.dumps({"global": {"ui": {"theme": "dark"}}}))
     doc_ = SettingsStore(paths).load()
     assert doc_.global_.ui.theme == "dark"
-    assert json.loads(paths.settings_file.read_text())["version"] == 1
+    assert json.loads(paths.settings_file.read_text())["version"] == 2
+
+
+def test_v1_turns_admin_sign_in_on_once(paths: Paths) -> None:
+    """D58: version 1 stored the whole global section, so `false` may only be the old
+    default. It becomes `true` once; the user's later choice is kept."""
+    v1 = {
+        "version": 1,
+        "global": {"security": {"api_key_required": False, "admin_requires_key": False}},
+    }
+    paths.settings_file.write_text(json.dumps(v1))
+    store = SettingsStore(paths)
+    assert store.load().global_.security.admin_requires_key is True
+    on_disk = json.loads(paths.settings_file.read_text())
+    assert on_disk["version"] == 2 and on_disk["global"]["security"]["admin_requires_key"] is True
+    raw = store.current.to_json_dict()
+    raw["global"]["security"]["admin_requires_key"] = False
+    result, _ = store.save(raw, ValidationContext(api_key_present=True))
+    assert result.ok
+    assert SettingsStore(paths).load().global_.security.admin_requires_key is False
 
 
 def test_repair_drops_only_bad_values(paths: Paths) -> None:

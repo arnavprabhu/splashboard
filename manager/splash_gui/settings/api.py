@@ -429,19 +429,13 @@ def rotate_api_key(state: State) -> ApiKeyOut:
 
 @router.delete("/settings/secrets/api-key", status_code=204, responses=error_responses(409))
 def delete_api_key(state: State) -> Response:
-    g = state.settings.current.global_
-    if (
-        g.security.api_key_required
-        or g.security.admin_requires_key
-        or not p.is_loopback_host(g.server.host)
-    ):
-        raise ApiError(
-            409,
-            "Turn off key requirements (and the LAN bind) before deleting the key",
-            "api_key_in_use",
-        )
-    _secret_call(state.secrets.delete, SecretName.API_KEY)
-    return Response(status_code=204)
+    # D58: the key is the admin sign-in credential, with or without sign-in on
+    # (writes always need a session), so it is rotated, never deleted.
+    raise ApiError(
+        409,
+        "The API key is how you sign in to the admin; rotate it instead of deleting it",
+        "api_key_in_use",
+    )
 
 
 @router.put(

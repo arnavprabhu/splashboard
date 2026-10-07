@@ -24,7 +24,7 @@ from pydantic import (
 
 from . import parsers as p
 
-SETTINGS_VERSION = 1
+SETTINGS_VERSION = 2
 
 Theme = Literal["light", "dark", "system"]
 KvFormat = Literal["int8", "bf16"]
@@ -94,7 +94,7 @@ class ServerSettings(_Strict):
 
 class SecuritySettings(_Strict):
     api_key_required: bool = False
-    admin_requires_key: bool = False
+    admin_requires_key: bool = True  # D58: admin sign-in is on by default
 
 
 class ExtraFlag(_Strict):

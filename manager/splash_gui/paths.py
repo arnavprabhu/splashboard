@@ -135,6 +135,11 @@ class Paths:
         return self.run_dir / "cli.token"
 
     @property
+    def revoked_sessions(self) -> Path:
+        """Logged-out session nonces until they expire (D58)."""
+        return self.run_dir / "revoked-sessions.json"
+
+    @property
     def bin_dir(self) -> Path:
         return self.base / "bin"
 
