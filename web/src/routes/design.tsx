@@ -460,6 +460,12 @@ function Gallery({ theme }: { theme: "light" | "dark" }) {
                 meta: "memory_governor.limit_bytes",
               },
               { key: "fail", label: "Copy failures", value: "2", accent: true },
+              {
+                key: "ane",
+                label: "Prefill split",
+                value: "Off · GPU only",
+                meta: "the target has no dense FFN layers",
+              },
               { key: "none", label: "Draft", value: null },
             ]}
           />
@@ -484,6 +490,17 @@ function Gallery({ theme }: { theme: "light" | "dark" }) {
               schema_version: 6,
               scheduler: { decoding: 1, prefilling: 0, queued: 0 },
               memory_governor: { system_pressure: "normal" },
+              weights: { idle_release_seconds: 600, released: false, restores: 0 },
+              ane_ffn: {
+                state: "split",
+                share: 0.25,
+                minimum_rows: 1024,
+                reason: "split",
+                split_commands: 40,
+                reruns: 0,
+                ane_ms: 1240,
+                evaluations: 1234,
+              },
             }}
             label="/status"
           />

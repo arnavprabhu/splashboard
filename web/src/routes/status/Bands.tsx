@@ -1,7 +1,8 @@
 /**
- * The lower Status bands (docs/ui/02 §8–9): Memory, Cache, Scheduler & admission, Latency and
- * Claude Code. Field names are Splash's `/status` schema 6 (runtime/engine/Status.cpp,
- * server/latency.py). Loaded lazily: they sit below the fold (SPEC §18.6 budget).
+ * The lower Status bands (docs/ui/02 §8–9): Memory, Neural Engine, Cache, Scheduler & admission,
+ * Latency and Claude Code. Field names are Splash's `/status` schema 6 (runtime/engine/Status.cpp,
+ * server/latency.py; `weights` since 1.2.1, `ane_ffn` since 1.3.0). Loaded lazily: they sit below
+ * the fold (SPEC §18.6 budget).
  */
 import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useState } from 'preact/hooks';
@@ -54,6 +55,30 @@ function Stopped({ label }: { label: string }) {
 
 function groupMissing(raw: unknown, group: string): boolean {
   return raw !== null && rawGet(raw, group) === undefined;
+}
+
+/** `--idle-release` as written: 600 → "10 m", 7200 → "2 h", 90 → "90 s". */
+export function idleText(seconds: number): string {
+  if (seconds >= 3600 && seconds % 3600 === 0) return `${seconds / 3600} h`;
+  if (seconds >= 60 && seconds % 60 === 0) return `${seconds / 60} m`;
+  return `${formatCount(seconds)} s`;
+}
+
+/** The Weights row: Splash's `weights` block (1.2.1+), `—` without it. */
+function weightsItem(raw: unknown): KeyValueItem {
+  const released = rawGet(raw, 'weights.released');
+  const idle = rawGet(raw, 'weights.idle_release_seconds');
+  const restores = rawNum(raw, 'weights.restores');
+  const meta = [
+    idle === null ? t('bands.memory.weights_keep') : typeof idle === 'number' ? t('bands.memory.weights_idle', { d: idleText(idle) }) : null,
+    restores === null ? null : t('bands.memory.weights_restores', { n: restores }),
+  ].filter(Boolean);
+  return {
+    key: 'weights',
+    label: t('bands.memory.weights'),
+    value: typeof released === 'boolean' ? t(released ? 'bands.memory.weights_released' : 'bands.memory.weights_loaded') : null,
+    meta: meta.length ? meta.join(' · ') : undefined,
+  };
 }
 
 // ---------- §8.1 Memory ----------
@@ -124,6 +149,7 @@ export function MemoryBand({ raw, stopped }: BandsProps) {
           : null,
       accent: healthy === false,
     },
+    weightsItem(raw),
   ];
   return (
     <Section label={t('bands.memory.label')} id="memory">
@@ -143,6 +169,63 @@ export function MemoryBand({ raw, stopped }: BandsProps) {
         )}
         <KeyValue items={items} label={t('bands.memory.label')} />
         <p class="meta">{t('bands.memory.explainer')}</p>
+      </div>
+    </Section>
+  );
+}
+
+// ---------- §8.5 Neural Engine (Splash 1.3.0 `ane_ffn`) ----------
+
+/** The reason Splash gives when `--disable-ane` turned the split off (AneFfnStartup.cpp). */
+export const ANE_DISABLED_REASON = 'as given';
+const ANE_STATES = ['split', 'off', 'stopped'] as const;
+
+export function NeuralEngineBand({ raw, stopped }: BandsProps) {
+  const label = t('bands.ane.label');
+  if (stopped) return <Stopped label={label} />;
+  if (groupMissing(raw, 'ane_ffn'))
+    return (
+      <Section label={label} id="neural-engine" tight>
+        <p class="meta">{t('bands.bands.not_reported')}</p>
+      </Section>
+    );
+  const state = rawGet(raw, 'ane_ffn.state');
+  const known = (ANE_STATES as readonly unknown[]).includes(state) ? (state as (typeof ANE_STATES)[number]) : null;
+  const reason = rawGet(raw, 'ane_ffn.reason');
+  const reasonText =
+    typeof reason === 'string' && reason ? (reason === ANE_DISABLED_REASON ? t('bands.ane.reason_disabled') : reason) : undefined;
+  const share = rawNum(raw, 'ane_ffn.share');
+  const rows = rawNum(raw, 'ane_ffn.minimum_rows');
+  const commands = rawNum(raw, 'ane_ffn.split_commands');
+  const items: KeyValueItem[] = [
+    {
+      key: 'state',
+      label: t('bands.ane.state'),
+      value: known ? t(`bands.ane.state.${known}`) : typeof state === 'string' ? state : null,
+      // The accent means live: only a split that is serving.
+      accent: known === 'split',
+      meta: known === 'split' ? undefined : reasonText,
+    },
+  ];
+  // Off: nothing ran, and share and minimum_rows are 0 (DEVELOPMENT.md, /status fields).
+  if (known !== 'off')
+    items.push(
+      { key: 'share', label: t('bands.ane.share'), value: share === null ? null : t('bands.ane.share_v', { p: formatPercent(share) }) },
+      { key: 'chunk', label: t('bands.ane.chunk'), value: rows === null ? null : t('bands.ane.chunk_v', { n: rows }) },
+      {
+        key: 'evaluations',
+        label: t('bands.ane.evaluations'),
+        value: count(rawNum(raw, 'ane_ffn.evaluations')),
+        meta: commands === null ? undefined : t('bands.ane.commands', { n: commands }),
+      },
+      { key: 'time', label: t('bands.ane.time'), value: rawNum(raw, 'ane_ffn.ane_ms') === null ? null : formatMs(rawNum(raw, 'ane_ffn.ane_ms')) },
+      { key: 'reruns', label: t('bands.ane.reruns'), value: count(rawNum(raw, 'ane_ffn.reruns')), meta: t('bands.ane.reruns_meta') },
+    );
+  return (
+    <Section label={label} id="neural-engine">
+      <div class="stack">
+        <KeyValue items={items} label={label} />
+        <p class="meta">{t('bands.ane.explainer')}</p>
       </div>
     </Section>
   );
@@ -536,6 +619,7 @@ export default function LowerBands({ raw, stopped, models }: BandsProps & { mode
   return (
     <>
       <MemoryBand raw={raw} stopped={stopped} />
+      <NeuralEngineBand raw={raw} stopped={stopped} />
       <CacheBand raw={raw} stopped={stopped} />
       <SchedulerBand raw={raw} stopped={stopped} />
       <LatencyBand raw={raw} stopped={stopped} />
