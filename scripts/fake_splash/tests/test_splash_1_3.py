@@ -9,7 +9,7 @@ import time
 
 from test_startup_and_signals import run_cli
 
-from conftest import chat_body
+from conftest import chat_body, sse
 from harness import free_port
 
 MODEL_27B = "unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M"
@@ -129,3 +129,36 @@ def test_agent_launcher_takes_its_own_port_and_passes_the_agents_after_the_separ
         "Run 'splash serve --model <HF_REPO_ID>' in another terminal first. "
         "If --port was meant for hermes itself, put it after --.\n"
     )
+
+
+def test_responses_namespace_tools_follow_splash_rules(engine):
+    """api_shapes.py `_namespace_alias` (1.3.0): each part must match
+    [A-Za-z0-9_-]{1,64}; a call comes back as its name plus its namespace."""
+    child = {"type": "function", "name": "js", "parameters": {"type": "object", "properties": {}}}
+    tools = [{"type": "namespace", "name": "mcp__node_repl", "description": "", "tools": [child]}]
+    forced = {"type": "function", "namespace": "mcp__node_repl", "name": "js"}
+    status, body = engine.json(
+        "POST", "/v1/responses", {"input": "run it", "tools": tools, "tool_choice": forced, "store": False}
+    )
+    assert status == 200
+    (call,) = [item for item in body["output"] if item["type"] == "function_call"]
+    assert (call["namespace"], call["name"]) == ("mcp__node_repl", "js")
+    events = sse(engine, "/v1/responses", {"input": "run it", "tools": tools, "tool_choice": forced, "stream": True})
+    done = [d for e, d in events if e == "response.output_item.done" and d["item"]["type"] == "function_call"]
+    assert (done[0]["item"]["namespace"], done[0]["item"]["name"]) == ("mcp__node_repl", "js")
+    history = [
+        {"type": "message", "role": "user", "content": "run it"},
+        {**call, "namespace": "mcp__node_repl"},
+        {"type": "function_call_output", "call_id": call["call_id"], "output": "ok"},
+    ]
+    assert engine.json("POST", "/v1/responses", {"input": history, "tools": tools, "store": False})[0] == 200
+
+    for namespace, name in (("browser@openai-bundled", "js"), ("mcp__node_repl", "x" * 65)):
+        bad = [{"type": "namespace", "name": namespace, "tools": [{**child, "name": name}]}]
+        status, error = engine.json("POST", "/v1/responses", {"input": "x", "tools": bad})
+        assert (status, error["error"]["message"]) == (400, "invalid namespace tool name")
+    bad_history = [{**history[1], "namespace": "a.b"}]
+    status, error = engine.json("POST", "/v1/responses", {"input": bad_history, "store": False})
+    assert (status, error["error"]["message"]) == (400, "invalid namespace tool name")
+    status, error = engine.json("POST", "/v1/responses", {"input": "x", "tools": [{**child, "name": "a.b"}]})
+    assert (status, error["error"]["message"]) == (400, "tool name must match [A-Za-z0-9_-]{1,128}")

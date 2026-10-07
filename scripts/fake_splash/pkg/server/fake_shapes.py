@@ -56,6 +56,9 @@ class FakeJob:
     tools: list | None = None
     tool_choice: object = None
     parallel_tool_calls: bool = True
+    # api_shapes.py normalize_responses_tools (1.3.0): Splash's alias of each
+    # namespaced tool -> (namespace, name), read back into function_call items.
+    tool_namespaces: dict = field(default_factory=dict)
     response_format: dict | None = None
     response_store: bool = False
     response_previous_id: str | None = None
@@ -276,14 +279,18 @@ def responses_item(job, block, index):
             "role": "assistant",
             "content": [] if status == "in_progress" else [{"type": "output_text", "text": text, "annotations": []}],
         }
-    return {
+    namespaced = job.tool_namespaces.get(block.name)
+    item = {
         "id": item_id,
         "type": "function_call",
         "status": status,
         "call_id": block.call_id,
-        "name": block.name,
+        "name": namespaced[1] if namespaced else block.name,
         "arguments": text,
     }
+    if namespaced:
+        item["namespace"] = namespaced[0]
+    return item
 
 
 def responses_output(job, blocks):

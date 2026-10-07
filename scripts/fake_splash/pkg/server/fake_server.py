@@ -190,6 +190,60 @@ def concentration(probabilities: list[float]) -> float:
     return max(0.0, 1.0 - entropy / math.log(len(probabilities)))
 
 
+def _namespace_alias(namespace: object, name: object) -> str:
+    """api_shapes.py `_namespace_alias` (1.3.0, lines 468-479)."""
+    if (
+        not isinstance(namespace, str)
+        or re.fullmatch(r"[A-Za-z0-9_-]{1,64}", namespace) is None
+        or not isinstance(name, str)
+        or re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name) is None
+    ):
+        raise APIError(400, "invalid namespace tool name")
+    alias = f"{namespace}__{name}"
+    if len(alias) <= 64:
+        return alias
+    digest = hashlib.sha256(f"{namespace}\0{name}".encode()).hexdigest()[:16]
+    return f"{namespace[:20]}__{name[:24]}__{digest}"
+
+
+def _response_function(tool: dict, name: str | None = None) -> dict:
+    function = {key: tool[key] for key in ("name", "description", "parameters", "strict") if key in tool}
+    if name is not None:
+        function["name"] = name
+    return {"type": "function", "function": function}
+
+
+def _responses_tools(tools: object) -> tuple[list | None, dict]:
+    """api_shapes.py `normalize_responses_tools` (1.3.0, lines 494-517), plus the
+    plain tool-name rule of tool_schema.py `normalize_tools` (lines 857-859)."""
+    if not isinstance(tools, list):
+        raise APIError(400, "tools must be an array")
+    output: list = []
+    namespaces: dict = {}
+    for tool in tools:
+        if isinstance(tool, dict) and tool.get("type") == "namespace":
+            namespace, children = tool.get("name"), tool.get("tools")
+            if not isinstance(children, list):
+                raise APIError(400, "namespace tools must be an array")
+            for child in children:
+                if not isinstance(child, dict) or child.get("type") != "function":
+                    raise APIError(400, "only function namespace tools are supported")
+                name = child.get("name")
+                alias = _namespace_alias(namespace, name)
+                if alias in namespaces:
+                    raise APIError(400, f"duplicate tool name: {alias}")
+                namespaces[alias] = (namespace, name)
+                output.append(_response_function(child, alias))
+            continue
+        if not isinstance(tool, dict) or tool.get("type") != "function":
+            kind = tool.get("type") if isinstance(tool, dict) else type(tool).__name__
+            raise APIError(400, f"only function tools are supported, not {kind!r}")
+        name = tool.get("name")
+        if not isinstance(name, str) or re.fullmatch(r"[A-Za-z0-9_-]{1,128}", name) is None:
+            raise APIError(400, "tool name must match [A-Za-z0-9_-]{1,128}")
+        output.append(_response_function(tool))
+    return output or None, namespaces
+
 class SystemOneError(Exception):
     def __init__(self, details: list[dict]):
         self.details = details
@@ -1014,16 +1068,19 @@ class FakeHandler(BaseHTTPRequestHandler):
         if instructions is not None and not isinstance(instructions, str):
             raise APIError(400, "instructions must be a string")
         chat: dict = {"messages": self._responses_messages(instructions, items)}
+        namespaces: dict = {}
         if body.get("tools") is not None:
-            chat["tools"] = [
-                {"type": "function", "function": {k: v for k, v in t.items() if k != "type"}}
-                if isinstance(t, dict) and "function" not in t
-                else t
-                for t in body["tools"]
-            ]
+            chat["tools"], namespaces = _responses_tools(body["tools"])
         choice = body.get("tool_choice")
         if isinstance(choice, dict):
-            choice = {"type": "function", "function": {"name": choice.get("name")}}
+            if choice.get("type") != "function" or not isinstance(choice.get("name"), str):
+                raise APIError(400, "invalid named tool_choice")
+            name = choice["name"]
+            if choice.get("namespace") is not None:
+                name = _namespace_alias(choice["namespace"], name)
+                if namespaces.get(name) != (choice["namespace"], choice["name"]):
+                    raise APIError(400, "invalid named tool_choice")
+            choice = {"type": "function", "function": {"name": name}}
         if choice is not None:
             chat["tool_choice"] = choice
         reasoning = body.get("reasoning")
@@ -1057,6 +1114,7 @@ class FakeHandler(BaseHTTPRequestHandler):
         if body.get("max_output_tokens") is not None:
             chat["max_completion_tokens"] = body["max_output_tokens"]
         job = self._chat_job(chat, output_field="max_output_tokens", clamp=False)
+        job.tool_namespaces = namespaces
         job.response_store = store
         job.response_previous_id = previous_id
         job.response_history_items = items if store else None
@@ -1104,6 +1162,9 @@ class FakeHandler(BaseHTTPRequestHandler):
                     {"role": item.get("role", "user"), "content": fake_text.content_text(item.get("content"))}
                 )
             elif kind == "function_call":
+                name = item.get("name")
+                if item.get("namespace") is not None:
+                    name = _namespace_alias(item["namespace"], name)
                 messages.append(
                     {
                         "role": "assistant",
@@ -1112,7 +1173,7 @@ class FakeHandler(BaseHTTPRequestHandler):
                             {
                                 "id": item.get("call_id"),
                                 "type": "function",
-                                "function": {"name": item.get("name"), "arguments": item.get("arguments", "{}")},
+                                "function": {"name": name, "arguments": item.get("arguments", "{}")},
                             }
                         ],
                     }
