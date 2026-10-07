@@ -286,8 +286,8 @@ def test_stop_sequence_escalates_to_sigkill(
         found=True,
         cli=stubborn,
         source="setting",
-        version="1.2.0",
-        version_tuple=(1, 2, 0),
+        version="1.3.0",
+        version_tuple=(1, 3, 0),
         support="supported",
     )
     h.state.forget_engine()
@@ -322,8 +322,8 @@ def test_startup_failure_is_failed_not_a_restart_loop(
         found=True,
         cli=broken,
         source="setting",
-        version="1.2.0",
-        version_tuple=(1, 2, 0),
+        version="1.3.0",
+        version_tuple=(1, 3, 0),
         support="supported",
     )
     h.state.forget_engine()
@@ -483,3 +483,52 @@ def test_three_quick_kills_fail_with_alert_and_notification(
     assert any(getattr(n, "kind", None) == "crash_loop" for n in notes), notes
     alerts = [d for e, d in published if e == "alert"]
     assert any(getattr(a, "condition", None) == "crash_loop" for a in alerts)
+
+
+def test_raw_status_passes_ane_ffn_and_weights_through(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """Splash 1.3.0's `ane_ffn` and `weights` blocks reach /api/admin/engine/status with
+    the engine's own key names; the Status page reads them by dotted path."""
+    h = harness_factory(installed=(MODEL_27B,))
+    h.load(MODEL_27B)
+    raw = h.client.get("/api/admin/engine/status").json()
+    assert raw["ane_ffn"] == {
+        "state": "split",
+        "share": 0.3235294118,
+        "minimum_rows": 524,
+        "reason": "at share 0.32 for chunks of 524 rows or more, 2.2% from the GPU alone "
+        "on the Neural Engine's part (set up as calibrated before in 2.0 s)",
+        "split_commands": 1,
+        "reruns": 0,
+        "ane_ms": 1258.4,
+        "evaluations": 64,
+    }
+    assert raw["weights"] == {"idle_release_seconds": 600.0, "released": False, "restores": 0}
+    assert raw["memory_plan"]["budget"]["ane_ffn_bytes"] == 229_703_680
+
+
+def test_disable_ane_reaches_the_engine_per_model(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    h = harness_factory(installed=(MODEL_27B,))
+    h.patch_settings({"models": {MODEL_27B: {"serve": {"disable_ane": True}}}})
+    view = h.load(MODEL_27B)
+    assert view["command"].endswith("--disable-ane")
+    raw = h.client.get("/api/admin/engine/status").json()
+    assert (raw["ane_ffn"]["state"], raw["ane_ffn"]["reason"]) == ("off", "as given")
+
+
+def test_idle_release_setting_and_the_weights_block_drive_idle_released(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """`serve.idle_release` becomes --idle-release; the state follows `weights.released`
+    in /status, not the manager's own 10-minute timer."""
+    h = harness_factory()
+    h.patch_settings({"global": {"serve": {"idle_release": "0.5s"}}})
+    h.sup.splash_idle_release_s = 3600.0  # the fallback timer must not be what fires
+    view = h.load()
+    assert "--idle-release 0.5s" in view["command"]
+    h.wait_state("idle_released", timeout=10)
+    raw = h.client.get("/api/admin/engine/status").json()
+    assert raw["weights"]["released"] is True and raw["weights"]["idle_release_seconds"] == 0.5

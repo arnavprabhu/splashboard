@@ -86,7 +86,10 @@ RUNNING_STATES = frozenset(
 SERVING_STATES = frozenset({"ready", "busy", "idle_released"})
 LOG_TAIL = 20
 NOTICE_LIMIT = 20
-SPLASH_IDLE_RELEASE_S = 600.0  # Splash frees weight memory after 10 idle minutes (§3.3)
+# Splash frees weight memory after 10 idle minutes by default (§3.3). Since 1.2.1
+# /status says so itself (`weights.released`); the timer only covers an engine
+# whose status has no `weights` block.
+SPLASH_IDLE_RELEASE_S = 600.0
 
 
 def now_iso() -> str:
@@ -1145,6 +1148,7 @@ class Supervisor:
                 )
         self._apply_transport(data)
         self._apply_busy(data)
+        self._apply_weights(data)
         for listener in list(self.status_listeners):
             try:
                 listener(data, restarted)
@@ -1190,6 +1194,15 @@ class Supervisor:
         elif self.state == "busy" and not st.busy(data) and self.in_flight == 0:
             self._set("ready")
 
+    def _apply_weights(self, data: dict[str, Any]) -> None:
+        """`weights.released` (Status.cpp appendWeights): the engine freed its weights
+        after --idle-release without requests; the next request restores them."""
+        released = st.boolean(data, "weights.released")
+        if released and self.state == "ready" and self.in_flight == 0:
+            self._set("idle_released")
+        elif released is False and self.state == "idle_released":
+            self._set("ready")
+
     # Requests from the proxy (busy, idle) ----------------------------------------------------
 
     def request_started(self) -> None:
@@ -1230,5 +1243,8 @@ class Supervisor:
             log.info("idle unload after %.0f s without requests", idle)
             await self.stop(reason="idle_unload")
             return
-        if self.state == "ready" and idle >= self.splash_idle_release_s:
+        reported = (
+            self.status is not None and st.boolean(self.status, "weights.released") is not None
+        )
+        if self.state == "ready" and not reported and idle >= self.splash_idle_release_s:
             self._set("idle_released")
