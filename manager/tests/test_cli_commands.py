@@ -245,7 +245,7 @@ def test_open_signs_the_browser_in_with_a_one_time_link(
 ) -> None:
     """D58: `splash open` opens /admin/login?code=… so the browser needs no key."""
     opened: list[str] = []
-    monkeypatch.setattr(cli_module.webbrowser, "open", opened.append)
+    monkeypatch.setattr("webbrowser.open", opened.append)
     code, _, _ = run(capsys, "open", "settings")
     assert code == 0 and len(opened) == 1
     url = opened[0]
