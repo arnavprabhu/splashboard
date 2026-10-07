@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import { modelIdError } from '../src/lib/model-id';
 import { parseMaxCacheDisk, parseMaxContext, parseMaxMemory, parseRequestSize } from '../src/lib/size';
+import { SPLASH_MESSAGES, durationSeconds, idleReleaseError } from '../src/routes/settings/validate';
 
 type SpawnSync = (
   cmd: string,
@@ -30,7 +31,7 @@ const SOURCE = [process.env.SPLASH_PKG, `${process.cwd()}/../splash`, BREW].find
 const available = existsSync(PYTHON) && SOURCE !== undefined;
 
 const SCRIPT = `
-import argparse, json, sys
+import argparse, json, math, sys
 sys.path.insert(0, ".")
 from server import serve_options as s
 from install import models as m
@@ -43,7 +44,8 @@ for name, values in cases.items():
             if name == "model_id":
                 m.split_model_id(v); results.append({"ok": None})
             else:
-                results.append({"ok": getattr(s, name)(v)})
+                ok = getattr(s, name)(v)
+                results.append({"ok": "inf" if isinstance(ok, float) and math.isinf(ok) else ok})
         except (argparse.ArgumentTypeError, m.ModelError) as e:
             results.append({"error": str(e)})
     out[name] = results
@@ -57,6 +59,9 @@ const CASES: Record<string, string[]> = {
   parse_max_memory: SIZES,
   parse_max_cache_disk: [...SIZES, ' 0 '],
   parse_request_size: SIZES,
+  // Durations (1.2.1+): --request-timeout and --idle-release.
+  parse_request_timeout: ['3600', '2.5', '30m', '2h', '90s', '1.5h', ' 30M ', '1_0m', '1e3', '0', '-1', '0m', 'm', '', 'off', 'inf', 'nan', '1e400', '10 m', '30d', '5mm'],
+  parse_idle_release: ['off', 'OFF', ' off ', '10m', '600', '90s', '2h', '0', '-5m', 'never', '', '1.5h', 'inf'],
   parse_max_context: ['auto', 'AUTO', '100K', '100k', '256K', '257K', '262144', '262145', '1', '0', '-1', '1.5K', 'K', '', ' 64 K', '1_0K'],
   model_id: [
     'mlx-community/Qwen3.8-27B-4bit',
@@ -81,12 +86,21 @@ const CASES: Record<string, string[]> = {
   ],
 };
 
-type PyResult = { ok: number | null } | { error: string };
+type PyResult = { ok: number | string | null } | { error: string };
 
 function ts(name: string, value: string): PyResult {
   if (name === 'model_id') {
     const error = modelIdError(value);
     return error ? { error } : { ok: null };
+  }
+  if (name === 'parse_request_timeout') {
+    const seconds = durationSeconds(value);
+    return seconds === null ? { error: SPLASH_MESSAGES.requestTimeout } : { ok: seconds };
+  }
+  if (name === 'parse_idle_release') {
+    const error = idleReleaseError(value);
+    if (error) return { error };
+    return value.trim().toLowerCase() === 'off' ? { ok: 'inf' } : { ok: durationSeconds(value) };
   }
   if (name === 'parse_max_context') {
     const r = parseMaxContext(value);

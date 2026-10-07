@@ -17,11 +17,12 @@ export interface FieldRule {
   label?: string;
 }
 
-// Splash's own messages (splash/server/serve_options.py, 1.2.0), shown verbatim.
+// Splash's own messages (splash/server/serve_options.py, 1.3.0), shown verbatim.
 export const SPLASH_MESSAGES = {
   decodeShare: 'must be a nonnegative number such as 0.5',
   imagePixels: (min: number, max: number) => `must be between ${min} and ${max} pixels`,
-  requestTimeout: 'must be a positive number of seconds such as 3600',
+  requestTimeout: 'must be a positive duration such as 30m, 2h or 3600',
+  idleRelease: 'must be off or a positive duration such as 30m, 2h or 600',
   queueSize: 'must be a positive number of requests such as 32',
   alias: 'model alias must be a non-empty name without whitespace or URL delimiters',
   originWildcard: (v: string) =>
@@ -32,6 +33,25 @@ export const SPLASH_MESSAGES = {
 } as const;
 
 const isBlank = (v: unknown) => v === null || v === undefined || (typeof v === 'string' && v.trim() === '');
+
+const DURATION_UNITS: Record<string, number> = { s: 1, m: 60, h: 3600 };
+
+/** `_duration_seconds` (serve_options.py, 1.2.1+): seconds, or a number with an s, m or h suffix; null unless positive and finite. */
+export function durationSeconds(value: string): number | null {
+  const text = value.trim().toLowerCase();
+  const unit = DURATION_UNITS[text.slice(-1)];
+  const body = unit ? text.slice(0, -1) : text;
+  // Python's float() for finite numbers: sign, digits (underscores between them), point, exponent.
+  if (!/^\s*[+-]?(\d+(_\d+)*(\.(\d+(_\d+)*)?)?|\.\d+(_\d+)*)([eE][+-]?\d+(_\d+)*)?\s*$/.test(body)) return null;
+  const seconds = Number(body.replace(/_/g, '')) * (unit ?? 1);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+}
+
+/** `parse_idle_release`: "off", or a duration. */
+export function idleReleaseError(value: string): string | null {
+  if (value.trim().toLowerCase() === 'off') return null;
+  return durationSeconds(value) === null ? SPLASH_MESSAGES.idleRelease : null;
+}
 
 /** `parse_served_model_name` (serve_options.py). */
 export function aliasError(value: string): string | null {
@@ -93,6 +113,8 @@ export function fieldError(rule: FieldRule, value: unknown): string | null {
     }
     case 'serve.request_timeout':
       return value === null || value === undefined || (typeof value === 'number' && value > 0) ? null : SPLASH_MESSAGES.requestTimeout;
+    case 'serve.idle_release':
+      return isBlank(value) ? null : idleReleaseError(s);
     case 'serve.queue_size':
       return typeof value === 'number' && Number.isInteger(value) && value >= 1 ? null : SPLASH_MESSAGES.queueSize;
     case 'serve.served_model_names':

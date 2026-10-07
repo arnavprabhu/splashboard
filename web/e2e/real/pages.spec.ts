@@ -60,6 +60,32 @@ test.describe('pages against the real manager', () => {
     expect(preview.body.argv.join(' ')).toContain('--max-context 128K');
   });
 
+  test('performance: GPU-only prefill maps to --disable-ane (Splash 1.3.0)', async ({ page, manager }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto('/admin/settings/performance');
+    const field = page.locator('[data-key="serve.disable_ane"]');
+    await expect(field.locator('.flag')).toHaveText('--disable-ane');
+    await expect(field.getByText('GPU-only prefill')).toBeVisible();
+    await expect(field.getByText(/the 35B MoE always prefills on the GPU/)).toBeVisible();
+    await expect(page.locator('[data-key="serve.allow_idle_sleep"] .flag')).toHaveText('--allow-idle-sleep');
+    await field.getByRole('switch').click();
+    await page.getByRole('region', { name: 'Unsaved changes' }).getByRole('button', { name: /^Save/ }).click();
+    await expect(page.getByText('Settings saved.')).toBeVisible();
+    const disk = JSON.parse(readFileSync(join(manager.home, 'settings.json'), 'utf8'));
+    expect(disk.global.serve.disable_ane).toBe(true);
+    const preview = await manager.api<{ argv: string[] }>('GET', `/settings/launch-preview?model=${encodeURIComponent('unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q2_K_XL')}`);
+    expect(preview.body.argv).toContain('--disable-ane');
+  });
+
+  test('memory: an invalid idle release shows Splash’s message', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto('/admin/settings/memory');
+    const field = page.locator('[data-key="serve.idle_release"]');
+    await expect(field.locator('.flag')).toHaveText('--idle-release');
+    await field.locator('input').fill('never');
+    await expect(field.getByText('must be off or a positive duration such as 30m, 2h or 600')).toBeVisible();
+  });
+
   test('integrations lists the five CLI agents and two desktop apps', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto('/admin/integrations');
