@@ -325,16 +325,6 @@ class Models:
 
         return self.state.jobs.start("verify", run, model=model)
 
-    def fit(self, size: int) -> str:
-        ram = self.state.memory_bytes()
-        return (
-            "fits"
-            if size <= ram - 8 * 1024**3
-            else "tight"
-            if size <= ram - 3 * 1024**3
-            else "wont_fit"
-        )
-
     def preset_pick(self) -> str | None:
         """The §8.6 primary pick for the wizard's use case (coding when unset) at
         this Mac's memory: the catalog's "Recommended for this Mac" (SPEC §9.1)."""
@@ -375,7 +365,7 @@ class Models:
         """D59: the same check as `inspect`, as SSE. `inspect.progress` (a partial
         InspectResult: unchecked variants have `loadable: null` and are listed in
         `pending`) first and after every verdict, then `inspect.result` (what
-        `GET /inspect` returns) or `inspect.error` ({"error": …})."""
+        `POST /inspect` returns) or `inspect.error` ({"error": …})."""
         begun, repo = await self._begin_inspect(model, refresh, None)
 
         async def events() -> AsyncIterator[tuple[str, Any]]:
@@ -474,17 +464,21 @@ class Models:
         known = table is not None or variant is not None
         pending = [n for n in names if n not in fresh] if known else names
         results = {n: fresh[n] for n in names if n in fresh}
+        memory = self.state.memory_bytes()
+        # D59 (b): the catalog's §9.1 estimate, so a variant's fit is the same here, in
+        # the catalog and in the recommendation (`cat.default_variant`).
+        repo_vision = cat.projector(repo.files) is not None
         variants = []
         for item in table or []:
             result = fresh.get(item["name"])
-            need = (item.get("size_bytes") or 0) + 4 * 1024**3
+            need = cat.memory_need(item.get("size_bytes") or 0, vision=repo_vision)
             variants.append(
                 VariantOut.model_validate(
                     {
                         **item,
                         "loadable": result["compatible"] if result else None,
                         "reason": result.get("reason") if result else None,
-                        "fit": self.fit(need),
+                        "fit": cat.fit_for(need, memory),
                     }
                 )
             )
@@ -503,8 +497,8 @@ class Models:
         pick = cat.default_variant(
             repo_id,
             [cat.Variant(v.name, v.size_bytes or 0, v.files) for v in variants],
-            self.state.memory_bytes(),
-            vision=cat.projector(repo.files) is not None,
+            memory,
+            vision=repo_vision,
             preset_model=self.preset_pick(),
             refused=refused,
         )
@@ -517,7 +511,16 @@ class Models:
             if selected or not done
             else next((r.get("reason") for r in results.values()), "Unsupported model")
         )
-        total = sum(repo.files.get(f) or 0 for f in selected["files"]) if selected else 0
+        # The same §9.1 estimate for the selection: its language files (the weights,
+        # without the projector) plus the catalog's draft, vision, KV and reserve terms.
+        target = (
+            sum(repo.files.get(f) or 0 for f in selected.get("language_files", selected["files"]))
+            if selected
+            else 0
+        )
+        selection_need = (
+            cat.memory_need(target, vision=bool(selected["vision"])) if selected else None
+        )
         if selected and done:
             self.file_sets[model] = selected["files"]
             self.language_file_sets[model] = selected.get("language_files", selected["files"])
@@ -548,8 +551,8 @@ class Models:
                 "draft": selected.get("draft") if selected else None,
                 "reason": reason,
                 "reason_detail": reason_detail,
-                "memory_need_bytes": total + 4 * 1024**3 if selected else None,
-                "fit": self.fit(total + 4 * 1024**3) if selected else None,
+                "memory_need_bytes": selection_need,
+                "fit": cat.fit_for(selection_need, memory) if selection_need is not None else None,
                 "cached": cached,
                 "checked_at": iso(
                     datetime.fromtimestamp(checked, UTC) if checked and done else None

@@ -2,7 +2,7 @@
 
 A run is one helper subprocess (`helpers/inspect_model.py`) for `model@sha`, shared
 by every caller that asks while it runs (`GET /inspect` waits for the end,
-`GET /inspect/stream` follows it). The helper prints the variant table at once,
+`POST /inspect/stream` follows it). The helper prints the variant table at once,
 then one verdict per variant as it finishes, the variant the GUI expects to
 recommend first; each verdict is stored here by `repo@sha` and kept a day, so a
 later check of the same repository (or of one variant of it) reuses them and only

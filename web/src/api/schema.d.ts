@@ -801,17 +801,19 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /**
          * Inspect Stream
-         * @description D59: `/inspect` as server-sent events. `inspect.progress` (a partial
-         *     InspectResult, `pending` lists the variants still being checked) first and on
-         *     every verdict, the likely recommended variant's first; then `inspect.result`
-         *     (the complete InspectResult) or `inspect.error`. Hub and engine errors answer
-         *     before the stream starts, with the same codes as `/inspect`.
+         * @description D59: `/inspect` as server-sent events, POST like `/inspect` (D58: it runs
+         *     Splash's helper, so a cross-site `<img>` or link must not trigger it).
+         *     `inspect.progress` (a partial InspectResult, `pending` lists the variants still
+         *     being checked) first and on every verdict, the likely recommended variant's
+         *     first; then `inspect.result` (the complete InspectResult) or `inspect.error`.
+         *     Hub and engine errors answer before the stream starts, with the same codes as
+         *     `/inspect`.
          */
-        get: operations["inspect_stream_api_admin_inspect_stream_get"];
-        put?: never;
-        post?: never;
+        post: operations["inspect_stream_api_admin_inspect_stream_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7090,7 +7092,7 @@ export interface operations {
             };
         };
     };
-    inspect_stream_api_admin_inspect_stream_get: {
+    inspect_stream_api_admin_inspect_stream_post: {
         parameters: {
             query: {
                 id: string;

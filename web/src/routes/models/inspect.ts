@@ -16,13 +16,15 @@ export interface StreamInspectOptions {
 }
 
 /**
- * GET /inspect/stream (D59): the likely recommended variant's verdict first, then the others as
- * Splash checks them. Resolves with the complete result (what GET /inspect returns). No client
+ * POST /inspect/stream (D59; POST since D58, like /inspect: it runs Splash's helper): the likely recommended variant's verdict first, then the others as
+ * Splash checks them. Resolves with the complete result (what POST /inspect returns). No client
  * timeout: the manager ends the stream with `inspect.error` when its own check times out.
  */
 export async function streamInspect(id: string, options: StreamInspectOptions = {}): Promise<InspectResult> {
   const { signal, refresh = false, onProgress } = options;
   const res = await request<Response>(`${ADMIN}/inspect/stream`, {
+    method: 'POST',
+    body: {},
     query: refresh ? { id, refresh: true } : { id },
     headers: { Accept: 'text/event-stream' },
     raw: true,

@@ -231,7 +231,7 @@ export async function mockManager(page: Page, opts: MockOptions = {}): Promise<s
     }
     const hit = opts.extra?.(req.method(), path, url, body);
     if (hit) return route.fulfill({ status: hit.status ?? 200, json: hit.json ?? {} });
-    // D59: a stub for GET /inspect also answers the stream, as one `inspect.result` event.
+    // D59: a stub for POST /inspect also answers the stream, as one `inspect.result` event.
     const inspect = path === '/inspect/stream' ? opts.extra?.(req.method(), '/inspect', url, body) : undefined;
     if (inspect) {
       if ((inspect.status ?? 200) >= 400) return route.fulfill({ status: inspect.status, json: inspect.json ?? {} });

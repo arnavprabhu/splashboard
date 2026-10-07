@@ -420,6 +420,7 @@ DOCUMENTED_READ_ONLY_POSTS = {
     "/integrations/{name}/print",
     "/benchmark/preflight",
     "/inspect",
+    "/inspect/stream",
 }
 
 
@@ -464,6 +465,38 @@ def test_every_admin_write_needs_a_credential_with_sign_in_off(
     assert checked > 60, "the walk found the admin routes"
     assert ("POST", "/api/admin/mcp/tools") in _admin_routes(app)
     assert ("GET", "/api/admin/mcp/tools") not in _admin_routes(app)
+
+
+def test_inspect_stream_follows_inspect(
+    app: FastAPI, client: TestClient, browser: TestClient
+) -> None:
+    """D59 under D58: the streamed check runs Splash's helper like `/inspect`, so it is a
+    read-only POST with the same rule. No credential: 401 with sign-in on; with it off, a
+    same-origin page may read (as `/inspect`) but a cross-site page is refused. GET is gone."""
+    bare = TestClient(app, base_url=ORIGIN, client=LOOPBACK_CLIENT)
+    cross = {"Origin": "http://evil.example", "Sec-Fetch-Site": "cross-site"}
+    url = "/api/admin/inspect/stream?id=owner/missing-repo"
+    for path in ("/api/admin/inspect?id=owner/missing-repo", url):
+        # Sign-in on: a page, a forged same-origin process and a bare client all get 401/403.
+        response = browser.post(path)
+        assert response.status_code == 401, (path, response.text)
+        assert response.json()["error"]["code"] == "auth_required"
+        assert bare.post(path).status_code == 403  # no Origin: csrf_refused before any work
+    assert browser.get(url).status_code == 401, "the guard answers before the router"
+    assert client.get(url).status_code == 405, "GET is gone even with the CLI token"
+    assert ("GET", "/api/admin/inspect/stream") not in _admin_routes(app)
+    assert ("POST", "/api/admin/inspect/stream") in _admin_routes(app)
+
+    _sign_in_off(client)
+    # An ID without an owner fails validation in the route, before any Hub call or helper.
+    for path in ("/api/admin/inspect?id=no-owner", "/api/admin/inspect/stream?id=no-owner"):
+        # Past the guard (a read, as /inspect): the route itself answers.
+        answered = browser.post(path)
+        assert answered.status_code == 400, (path, answered.text)
+        assert answered.json()["error"]["code"] == "invalid_model"
+        refused = bare.post(path, headers=cross)
+        assert refused.status_code == 403 and refused.json()["error"]["code"] == "csrf_refused"
+    assert browser.get(url).status_code == 405
 
 
 def test_read_only_posts_still_need_same_origin(app: FastAPI, client: TestClient) -> None:

@@ -89,15 +89,17 @@ async def inspect(
     return await cast(Models, state.models).inspect(id, refresh)
 
 
-@router.get("/inspect/stream", responses={**_ERR, **SSE_RESPONSES})
+@router.post("/inspect/stream", responses={**_ERR, **SSE_RESPONSES})
 async def inspect_stream(
     state: State, id: Annotated[str, Query()], refresh: bool = False
 ) -> StreamingResponse:
-    """D59: `/inspect` as server-sent events. `inspect.progress` (a partial
-    InspectResult, `pending` lists the variants still being checked) first and on
-    every verdict, the likely recommended variant's first; then `inspect.result`
-    (the complete InspectResult) or `inspect.error`. Hub and engine errors answer
-    before the stream starts, with the same codes as `/inspect`."""
+    """D59: `/inspect` as server-sent events, POST like `/inspect` (D58: it runs
+    Splash's helper, so a cross-site `<img>` or link must not trigger it).
+    `inspect.progress` (a partial InspectResult, `pending` lists the variants still
+    being checked) first and on every verdict, the likely recommended variant's
+    first; then `inspect.result` (the complete InspectResult) or `inspect.error`.
+    Hub and engine errors answer before the stream starts, with the same codes as
+    `/inspect`."""
     return sse_response(await cast(Models, state.models).inspect_stream(id, refresh))
 
 

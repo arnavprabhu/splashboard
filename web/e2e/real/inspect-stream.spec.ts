@@ -34,8 +34,11 @@ test('By ID: the recommended variant’s verdict shows first, the others fill in
     await manager.patchSettings((doc) => {
       doc.global.hf = { ...(doc.global.hf ?? {}), endpoint: hub.url };
     });
+    await manager.signIn(page.context()); // D58: sign-in is on; a one-time link for this manager
     await page.setViewportSize({ width: 1280, height: 900 });
+    const streamed = page.waitForRequest((r) => r.url().includes('/api/admin/inspect/stream'));
     await page.goto(`${manager.url}/admin/models/downloader?tab=id&id=${GGUF}`);
+    expect((await streamed).method()).toBe('POST'); // D58: a read-only POST, like /inspect
 
     const table = page.getByTestId('variant-table');
     const row = (name: string) => table.getByRole('row').filter({ has: page.getByText(name, { exact: true }) });
@@ -68,6 +71,7 @@ test('detail sheet: the variant table fills in, the likely pick first', async ({
     await manager.patchSettings((doc) => {
       doc.global.hf = { ...(doc.global.hf ?? {}), endpoint: hub.url };
     });
+    await manager.signIn(page.context()); // D58: sign-in is on; a one-time link for this manager
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(`${manager.url}/admin/models/downloader?model=${GGUF}`);
     const sheet = page.getByTestId('model-drawer');

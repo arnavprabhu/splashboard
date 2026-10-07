@@ -54,6 +54,8 @@ describe('streamInspect', () => {
     const seen: InspectResult[] = [];
     const result = await streamInspect(REPO, { onProgress: (r) => seen.push(r) });
     expect(String(fetchMock.mock.calls[0]![0])).toBe(`/api/admin/inspect/stream?id=${encodeURIComponent(REPO)}`);
+    // D58: it runs Splash's helper, so it is a read-only POST like /inspect, never a GET.
+    expect(fetchMock.mock.calls[0]![1]!.method).toBe('POST');
     expect(seen.map((r) => r.badge)).toEqual(['checking', 'compatible']);
     expect(seen[1]!.variants!.filter((v) => v.loadable !== null).map((v) => v.name)).toEqual(['UD-Q4_K_M']);
     expect(result.pending).toEqual([]);

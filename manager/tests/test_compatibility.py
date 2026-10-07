@@ -375,14 +375,14 @@ MANY = "unsloth/Qwen3.8-27B-GGUF"  # the fake Hub lists 8 root GGUFs for it
 def stream_inspect(
     harness, model: str, refresh: bool = True
 ) -> list[tuple[float, str, dict[str, Any]]]:
-    """`GET /inspect/stream` as `(seconds since the request, event, data)`."""
+    """`POST /inspect/stream` as `(seconds since the request, event, data)`."""
     import json
     import time
 
     start = time.monotonic()
     events: list[tuple[float, str, dict[str, Any]]] = []
     url = f"/api/admin/inspect/stream?id={model}&refresh={1 if refresh else 0}"
-    with harness.client.stream("GET", url) as response:
+    with harness.client.stream("POST", url) as response:
         assert response.status_code == 200, response.read()
         assert response.headers["content-type"].startswith("text/event-stream")
         name = None
@@ -509,7 +509,7 @@ def test_a_waiting_request_and_a_stream_share_one_check(hub_harness, monkeypatch
     out: dict[str, Any] = {}
 
     def wait() -> None:
-        out["get"] = harness.client.get(f"/api/admin/inspect?id={MANY}").json()
+        out["get"] = harness.client.post(f"/api/admin/inspect?id={MANY}").json()
 
     waiter = threading.Thread(target=wait)
     waiter.start()
@@ -530,6 +530,54 @@ def test_a_waiting_request_and_a_stream_share_one_check(hub_harness, monkeypatch
 
 def test_the_stream_reports_hub_errors_before_it_starts(client, fake_hub):
     point_at_hub(client, fake_hub)
-    response = client.get("/api/admin/inspect/stream?id=owner/missing-repo")
+    response = client.post("/api/admin/inspect/stream?id=owner/missing-repo")
     assert response.status_code == 404, response.text
     assert response.json()["error"]["code"] == "hub_unreachable"
+
+
+def test_inspect_fit_uses_the_catalog_estimate(hub_harness):
+    """D59 (b): `/inspect`'s per-variant and selection fit use the catalog's §9.1
+    estimate (`cat.memory_need`), not `size + 4 GiB`, so one rule decides fit
+    everywhere. Literal values: draft 0.7 GiB + vision 0.9 GiB + KV 0.5 GiB +
+    reserve 2 GiB = 4_402_341_477 bytes on top of the weights."""
+    from splash_gui.models import catalog as cat
+
+    assert cat.memory_need(16_464_440_224, vision=True) == 20_866_781_701
+    assert cat.memory_need(16_464_440_224, vision=False) == 19_900_414_060
+    assert cat.fit_for(20_866_781_701, 64 * 1024**3) == "fits"
+    assert cat.fit_for(20_866_781_701, 22 * 1024**3) == "wont_fit"  # > 20_401_094_656
+    assert cat.fit_for(20_866_781_701, 24 * 1024**3) == "tight"  # > 17_179_869_184
+    # Where the rules part: the old `size + 4 GiB` (20_759_407_520) fits at this memory,
+    # the catalog's estimate is Tight.
+    assert cat.fit_for(20_759_407_520, 29_456_716_292) == "fits"
+    assert cat.fit_for(20_866_781_701, 29_456_716_292) == "tight"
+
+    harness = hub_harness()
+    harness.state.memory_bytes = lambda: 64 * 1024**3
+    result = inspect(harness, MANY)
+    sizes = {v["name"]: v["size_bytes"] for v in result["variants"]}
+    q4 = sizes["UD-Q4_K_M"]
+    assert result["memory_need_bytes"] == q4 + 4_402_341_477, "weights + the catalog's terms"
+    # Memory where the two rules disagree: the old `q4 + 4 GiB` fits under
+    # `memsize − 8 GiB`, the catalog's estimate does not (it is 0.1 GiB larger).
+    harness.state.memory_bytes = lambda: q4 + 12 * 1024**3 + 1
+    again = inspect(harness, MANY, refresh=False)
+    assert again["cached"] is True
+    row = next(v for v in again["variants"] if v["name"] == "UD-Q4_K_M")
+    assert row["fit"] == "tight" and again["fit"] == "tight"
+    for v in again["variants"]:
+        need = v["size_bytes"] + 4_402_341_477
+        memory = q4 + 12 * 1024**3 + 1
+        expected = (
+            "fits"
+            if need <= memory - 8 * 1024**3
+            else "tight"
+            if need <= memory - 3 * 1024**3
+            else "wont_fit"
+        )
+        assert v["fit"] == expected, v
+    # The catalog says the same for the same repository at the same memory.
+    catalog = harness.client.get("/api/admin/catalog").json()
+    rows = [e for f in catalog["families"] for g in f["groups"] for e in g["entries"]]
+    listed = {v["name"]: v["fit"] for v in next(r for r in rows if r["id"] == MANY)["variants"]}
+    assert all(listed[v["name"]] == v["fit"] for v in again["variants"] if v["name"] in listed)

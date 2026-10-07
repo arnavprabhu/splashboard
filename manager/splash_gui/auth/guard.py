@@ -53,6 +53,7 @@ READ_ONLY_POSTS = frozenset(
         "integrations",
         "benchmark/preflight",
         "inspect",
+        "inspect/stream",
     )
 )
 SECRET_READS = (f"{ADMIN_API}/settings/secrets/",)
