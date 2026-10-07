@@ -23,6 +23,7 @@ from .. import SERVICE, __version__
 from ..engine.discovery import discover
 from ..paths import Paths
 from ..secrets import SecretName, SecretStore, backend_from_env
+from ..settings.effective import profile_reasoning_effort
 from ..settings.store import SettingsStore
 from . import doctor as doctor_checks
 from .output import (
@@ -1245,7 +1246,7 @@ def launch(ctx: Ctx, client: Client, passthrough_args: list[str]) -> int:
         client.start(note=not ctx.quiet)
         running = True
         model = choose_model(ctx, client, args.model)
-        ensure_loaded(ctx, client, model)
+        loaded = ensure_loaded(ctx, client, model).get("model")
     engine_info = discover(
         client.settings.current.global_.engine.path, shim_paths=(client.paths.shim,)
     )
@@ -1278,6 +1279,8 @@ def launch(ctx: Ctx, client: Client, passthrough_args: list[str]) -> int:
             "modalities": entry.get("input_modalities", ["text"]),
             "args": passthrough_args,
             "print": args.print_only,
+            # D60: the profile's effort becomes the client's own per-run option.
+            "reasoning_effort": profile_reasoning_effort(client.settings.current, model, loaded),
         }
     )
     helper = Path(__file__).parents[1] / "helpers" / "launch_client.py"

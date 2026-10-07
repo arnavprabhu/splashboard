@@ -216,6 +216,28 @@ def effective_profiles(doc: SettingsDocument, model_id: str) -> dict[str, Effect
     return out
 
 
+def profile_reasoning_effort(
+    doc: SettingsDocument, model: str | None, active: str | None = None
+) -> str | None:
+    """The `reasoning_effort` a `<id>:<profile>` model name asks for, or None
+    (no profile, or one without an effort). The overlay is the request-level one
+    the proxy would apply (the model's defaults, then the profile; §7.5). `active`
+    resolves a profile on an alias of the loaded model, as the proxy does. Used by
+    `splash launch` to set the client's own per-run option (D60)."""
+    if not model:
+        return None
+    base, sep, name = model.rpartition(":")
+    if not sep or not base:
+        return None
+    for candidate in dict.fromkeys(c for c in (base, active) if c):
+        profile = effective_profiles(doc, candidate).get(name)
+        if profile is not None:
+            overlay = {**sampling_defaults(doc, candidate), **profile.overlay}
+            effort = overlay.get("reasoning_effort")
+            return str(effort) if effort else None
+    return None
+
+
 def _overlay_dict(overlay: SamplingOverlay) -> dict[str, Any]:
     return overlay.model_dump(mode="json", exclude_unset=True, exclude_none=True)
 

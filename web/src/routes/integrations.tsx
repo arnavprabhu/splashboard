@@ -67,6 +67,8 @@ function withMono(text: string, tokens: ReadonlyArray<string | null | undefined>
   return text.split(re).map((part, i) => (i % 2 === 1 ? <span key={i} class="mono">{part}</span> : part));
 }
 
+const PROFILE_MONO = [":no-think", "--effort", "MAX_THINKING_TOKENS=0", "-c model_reasoning_effort", "--reasoning", "--thinking", "off"];
+
 const BIONIC_GUIDE = "https://lmstudio.ai/docs/app/api";
 
 type Global = Record<string, unknown> & {
@@ -355,7 +357,7 @@ function CliRow({
       </div>
       {profileNote && (
         <p class="meta" data-testid={`profiles-${cli.name}`}>
-          <span class="label">{t("integrations.cli.profiles")}</span> {withMono(t(`integrations.cli.profiles.${profileNote}`), [":no-think"])}
+          <span class="label">{t("integrations.cli.profiles")}</span> {withMono(t(`integrations.cli.profiles.${profileNote}`), PROFILE_MONO)}
         </p>
       )}
       {!engine.value?.model && pick && (

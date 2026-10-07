@@ -12,6 +12,7 @@ from splash_gui.settings.effective import (
     effective_profiles,
     effective_serve,
     effective_values,
+    profile_reasoning_effort,
     sampling_defaults,
 )
 from splash_gui.settings.model import SETTINGS_VERSION, SettingsDocument
@@ -113,6 +114,27 @@ def test_effective_serve() -> None:
     assert serve.offline and serve.persistent_cache and serve.max_cache_disk == "32G"
     assert serve.served_model_names == ("qwen27",) and serve.max_context == "128K"
     assert serve.legacy is False
+
+
+def test_profile_reasoning_effort_reads_the_request_overlay() -> None:
+    """D60: what `splash launch` hands the client for `<id>:<profile>`."""
+    d = doc(
+        {
+            "models": {
+                MLX: {
+                    "profiles": {"quick": {"reasoning_effort": "low"}, "cold": {"temperature": 0}},
+                    "sampling_defaults": {"reasoning_effort": "high"},
+                }
+            }
+        }
+    )
+    assert profile_reasoning_effort(d, f"{MLX}:no-think") == "none"
+    assert profile_reasoning_effort(d, f"{MLX}:quick") == "low"
+    assert profile_reasoning_effort(d, f"{MLX}:cold") == "high", "the model's default"
+    assert profile_reasoning_effort(d, MLX) is None, "no profile, nothing to pass"
+    assert profile_reasoning_effort(d, f"{MLX}:nope") is None
+    assert profile_reasoning_effort(d, "alias:no-think", active=MLX) == "none"
+    assert profile_reasoning_effort(d, None) is None
 
 
 def test_builtin_profiles_and_overrides() -> None:

@@ -130,6 +130,25 @@ def test_launch_hands_the_profile_to_splash_s_configurator_and_records_it(
     assert json.loads(calls[-1][2]["SPLASH_GUI_CLIENT_SPEC"])["print"] is True
 
 
+def test_launch_passes_the_profile_s_reasoning_effort(
+    h: EngineHarness, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D60 (Q33): the helper turns the profile's effort into the client's own flag."""
+    calls: list[dict[str, str]] = []
+    monkeypatch.setattr(os, "execve", lambda path, argv, env: calls.append(env))
+    monkeypatch.setattr(cli_module, "discover", lambda *a, **k: h.state.engine_cached())
+
+    def effort(*argv: str) -> object:
+        assert run(capsys, "launch", *argv)[0] == 0
+        return json.loads(calls[-1]["SPLASH_GUI_CLIENT_SPEC"])["reasoning_effort"]
+
+    assert effort("hermes", "--model", f"{MODEL}:no-think", "--", "-z", "hi") == "none"
+    assert effort("pi", "--model", f"{MODEL}:qwen-nonthinking") == "none"
+    assert effort("pi", "--model", f"{MODEL}:deterministic") is None
+    assert effort("pi", "--model", MODEL) is None
+    assert effort("hermes", "--model", f"{MODEL}:no-think", "--print") == "none"
+
+
 def test_launch_keeps_pythonpath_and_sends_the_key_only_when_required(
     h: EngineHarness, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

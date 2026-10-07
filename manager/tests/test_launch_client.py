@@ -38,6 +38,7 @@ def run(
     args: list[str] | None = None,
     path_dirs: list[Path] | None = None,
     extra_env: dict[str, str] | None = None,
+    effort: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
@@ -49,6 +50,7 @@ def run(
         "modalities": ["text", "image"],
         "args": args or [],
         "print": print_only,
+        "reasoning_effort": effort,
     }
     env = {
         "HOME": str(home),
@@ -264,3 +266,119 @@ def test_print_works_on_the_fake_engine(tmp_path: Path, client: str) -> None:
     assert result.returncode == 0, result.stderr
     assert MODEL in result.stdout
     assert files_under(home) == [], "--print writes nothing"
+
+
+# D60 (Q33): a profile's reasoning effort becomes the client's own per-run option.
+
+
+def _helper() -> Any:
+    sys.path.insert(0, str(HELPER.parent))
+    try:
+        import launch_client
+    finally:
+        sys.path.remove(str(HELPER.parent))
+    return launch_client
+
+
+@pytest.mark.parametrize(
+    ("client", "effort", "expected"),
+    [
+        ("hermes", "none", ["--reasoning", "none"]),
+        ("hermes", "max", ["--reasoning", "max"]),
+        ("pi", "none", ["--thinking", "off"]),
+        ("pi", "low", ["--thinking", "low"]),
+        ("codex", "none", ["-c", 'model_reasoning_effort="none"']),
+        ("claude", "high", ["--effort", "high"]),
+        ("claude", "none", []),  # an environment variable instead
+        ("claude", "minimal", []),  # Claude Code has no "minimal"
+        ("opencode", "none", []),  # sends no effort; the manager injects it
+        ("hermes", None, []),
+    ],
+)
+def test_reasoning_args_per_client(client: str, effort: str | None, expected: list[str]) -> None:
+    assert _helper().reasoning_args(client, effort, []) == expected
+
+
+def test_a_user_s_own_reasoning_flag_wins() -> None:
+    helper = _helper()
+    assert helper.reasoning_args("hermes", "none", ["--reasoning", "high", "-z", "x"]) == []
+    assert helper.reasoning_args("pi", "none", ["--thinking=high"]) == []
+    assert helper.reasoning_args("claude", "low", ["--effort", "max"]) == []
+    # Only the user's own options count, not a prompt after `--`.
+    assert helper.reasoning_args("hermes", "none", ["--", "--reasoning"]) == [
+        "--reasoning",
+        "none",
+    ]
+    assert helper.reasoning_env("claude", "none", {"MAX_THINKING_TOKENS": "4096"}) == {}
+    assert helper.reasoning_env("claude", "none", {}) == {"MAX_THINKING_TOKENS": "0"}
+    assert helper.reasoning_env("hermes", "none", {}) == {}
+
+
+@pytest.mark.parametrize(
+    ("client", "flag"), [("hermes", "--reasoning none -z hi"), ("pi", "--thinking off -z hi")]
+)
+def test_hermes_and_pi_previews_show_the_reasoning_flag(
+    tmp_path: Path, client: str, flag: str
+) -> None:
+    result = run(tmp_path, client, print_only=True, args=["-z", "hi"], effort="none")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines()[0].endswith(f"--model {MODEL} {flag}")
+    assert files_under(tmp_path / "home") == []
+
+
+def test_codex_effort_override_comes_before_the_user_s(tmp_path: Path) -> None:
+    args = ["-c", 'model_reasoning_effort="high"', "exec", "hi"]
+    result = run(tmp_path, "codex", print_only=True, args=args, effort="none")
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    assert out.index('model_reasoning_effort="none"') < out.index(
+        'model_reasoning_effort="high"'
+    ), "Codex takes the last -c, so the user's own still wins"
+    assert files_under(tmp_path / "home") == [], "a -c override, never config.toml (D18)"
+
+
+def test_claude_no_think_session_turns_thinking_off(tmp_path: Path) -> None:
+    """Claude Code sends `thinking: adaptive` unless MAX_THINKING_TOKENS=0, and Splash
+    reads a Messages request without `thinking` as off (server/api_shapes.py
+    _anthropic_thinking)."""
+    bin_dir = tmp_path / "bin"
+    record = tmp_path / "record.json"
+    write_script(
+        bin_dir / "claude",
+        f'"{sys.executable}" -c \'import json,os,sys; '
+        f'json.dump({{"argv": sys.argv[1:], "env": dict(os.environ)}}, '
+        f'open("{record}", "w"))\' "$@"\n',
+    )
+    result = run(
+        tmp_path, "claude", print_only=False, args=["-p", "hi"], path_dirs=[bin_dir], effort="none"
+    )
+    assert result.returncode == 0, result.stderr
+    seen = json.loads(record.read_text())
+    assert seen["env"]["MAX_THINKING_TOKENS"] == "0"
+    assert "--effort" not in seen["argv"]
+    assert files_under(tmp_path / "home") == []
+    printed = run(tmp_path, "claude", print_only=True, effort="low")
+    assert "--effort low" in printed.stdout and "MAX_THINKING_TOKENS" not in printed.stdout
+
+
+def test_pi_launch_passes_thinking_off_and_writes_no_thinking_setting(tmp_path: Path) -> None:
+    """Pi's `--thinking` is per run (it never calls setDefaultThinkingLevel), and
+    Splash's provider entry carries no effort: nothing about it reaches a file."""
+    bin_dir = tmp_path / "bin"
+    record = tmp_path / "record.json"
+    write_script(
+        bin_dir / "pi",
+        f'"{sys.executable}" -c \'import json,sys; '
+        f'json.dump(sys.argv[1:], open("{record}", "w"))\' "$@"\n',
+    )
+    result = run(
+        tmp_path, "pi", print_only=False, args=["-p", "hi"], path_dirs=[bin_dir], effort="none"
+    )
+    assert result.returncode == 0, result.stderr
+    argv = json.loads(record.read_text())
+    assert argv[argv.index("--thinking") + 1] == "off"
+    assert argv[-2:] == ["-p", "hi"]
+    written = files_under(tmp_path / "home")
+    assert written == [".pi", ".pi/agent", ".pi/agent/models.json"], "only Splash's provider"
+    models = (tmp_path / "home" / ".pi" / "agent" / "models.json").read_text()
+    assert "reasoning_effort" not in models and '"off": "none"' in models

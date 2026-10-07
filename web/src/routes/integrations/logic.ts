@@ -194,12 +194,12 @@ export function removableEntries(cli: Pick<CliIntegration, 'name' | 'entries'>):
   return cli.entries ?? [];
 }
 
-/** D47: profile fields are defaults only (D12), so a client that sends a field
- * itself overrides the profile's value. Verified in the real-engine pass for these
- * three clients; Hermes and Pi were not run, so they get no line. */
-export type ProfileNoteClient = 'claude' | 'codex' | 'opencode';
+/** D47/D60: profile fields are defaults only (D12), so a client that sends a field
+ * itself would override the profile's value. Each client's line says how
+ * `splash launch` passes a profile's reasoning effort for the session. */
+export type ProfileNoteClient = 'claude' | 'codex' | 'opencode' | 'hermes' | 'pi';
 export function profileNoteClient(name: string): ProfileNoteClient | null {
-  return name === 'claude' || name === 'codex' || name === 'opencode' ? name : null;
+  return ['claude', 'codex', 'opencode', 'hermes', 'pi'].includes(name) ? (name as ProfileNoteClient) : null;
 }
 
 /** Where the removable entry lives, for the confirmation sheet (docs/ui/09 §3.4). */

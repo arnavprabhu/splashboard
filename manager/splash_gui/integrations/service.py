@@ -23,6 +23,7 @@ import uvicorn
 from fastapi import FastAPI, Request, Response
 
 from ..errors import ApiError
+from ..helpers.launch_client import reasoning_args, reasoning_env
 from ..paths import write_atomic
 from ..schemas import (
     CliIntegration,
@@ -38,7 +39,7 @@ from ..schemas import (
     RestoreAllResult,
 )
 from ..secrets import SecretName, SecretsError
-from ..settings import parsers
+from ..settings import parsers, profile_reasoning_effort
 from ..usage.db import iso
 from .snapshots import encode_document, read_document, restore, snapshot
 
@@ -911,6 +912,12 @@ class IntegrationsService:
             static = IntegrationChanges.model_validate_json(
                 static.model_dump_json().replace("<model>", chosen)
             )
+        # D60: a profile's reasoning effort becomes the client's own per-run option.
+        effort = profile_reasoning_effort(
+            self.state.settings.current, chosen, self.state.active_model()
+        )
+        static.args = [*static.args, *reasoning_args(client, effort, [])]
+        static.env = {**static.env, **reasoning_env(client, effort, {})}
         entry: dict[str, Any] = next((m for m in listing if m.get("id") == chosen), {})
         context = entry.get("context_length")
         if not isinstance(context, int) or context <= 0:
@@ -945,6 +952,7 @@ class IntegrationsService:
             "args": [],
             "print": True,
             "format": "json",
+            "reasoning_effort": effort,
         }
         env = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),

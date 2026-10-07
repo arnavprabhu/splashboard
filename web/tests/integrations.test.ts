@@ -138,18 +138,18 @@ describe('gateway /v1/models preview', () => {
   });
 });
 
-describe('profile overrides per client (D47)', () => {
-  it('names the fields Claude Code and Codex send themselves, and that OpenCode honours profiles', () => {
-    expect(profileNoteClient('claude')).toBe('claude');
-    expect(profileNoteClient('codex')).toBe('codex');
-    expect(profileNoteClient('opencode')).toBe('opencode');
-    expect(integrationsStrings['integrations.cli.profiles.claude']).toMatch(/thinking.*:no-think has no effect/);
-    expect(integrationsStrings['integrations.cli.profiles.codex']).toMatch(/reasoning effort.*:no-think has no effect/);
+describe('profile reasoning per client (D47, D60)', () => {
+  it('says how each client gets a profile\'s reasoning effort for the session', () => {
+    for (const name of ['claude', 'codex', 'opencode', 'hermes', 'pi']) expect(profileNoteClient(name)).toBe(name);
+    expect(integrationsStrings['integrations.cli.profiles.claude']).toMatch(/--effort.*:no-think as MAX_THINKING_TOKENS=0/);
+    expect(integrationsStrings['integrations.cli.profiles.codex']).toMatch(/-c model_reasoning_effort/);
     expect(integrationsStrings['integrations.cli.profiles.opencode']).toMatch(/Honoured/);
+    expect(integrationsStrings['integrations.cli.profiles.hermes']).toMatch(/--reasoning/);
+    expect(integrationsStrings['integrations.cli.profiles.pi']).toMatch(/--thinking; :no-think as off/);
   });
 
-  it('claims nothing for clients the real-engine pass did not run', () => {
-    expect(profileNoteClient('hermes')).toBeNull();
-    expect(profileNoteClient('pi')).toBeNull();
+  it('has no line for the desktop apps', () => {
+    expect(profileNoteClient('claude-desktop')).toBeNull();
+    expect(profileNoteClient('codex-app')).toBeNull();
   });
 });

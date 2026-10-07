@@ -194,6 +194,13 @@ def test_print_runs_splash_s_configurator(
     assert "features.apps=false" not in claude["command"]
     opencode = client.post("/api/admin/integrations/opencode/print", params={"model": model}).json()
     assert f"splash/{model}" in opencode["env"]["OPENCODE_CONFIG_CONTENT"]
+    # D60: :no-think becomes each client's own per-run option.
+    assert claude["env"]["MAX_THINKING_TOKENS"] == "0"
+    assert 'model_reasoning_effort="none"' in codex["command"]
+    assert "MAX_THINKING_TOKENS" not in opencode["env"]
+    assert "reasoning" not in opencode["command"]
+    plain = client.post("/api/admin/integrations/claude/print", params={"model": MODEL}).json()
+    assert "MAX_THINKING_TOKENS" not in plain["env"], "no profile, nothing added"
 
 
 @needs_clients
@@ -228,6 +235,20 @@ def test_print_falls_back_to_a_description(svc: Any, client: TestClient, home: P
     assert codex["exact"] is False
     assert codex["args"][-2:] == ["-c", "features.apps=false"], "D46 in the static description"
     assert any("64 characters" in n for n in codex["notes"])
+
+
+def test_print_shows_the_profile_s_reasoning_flag(svc: Any, client: TestClient) -> None:
+    """D60 (Q33): Hermes and Pi send their own effort, so `:no-think` adds their
+    per-run flag; a profile without an effort adds nothing."""
+    model = f"{MODEL}:no-think"
+    hermes = client.post("/api/admin/integrations/hermes/print", params={"model": model}).json()
+    assert hermes["args"][-2:] == ["--reasoning", "none"]
+    pi = client.post("/api/admin/integrations/pi/print", params={"model": model}).json()
+    assert pi["args"][-2:] == ["--thinking", "off"]
+    plain = client.post(
+        "/api/admin/integrations/pi/print", params={"model": f"{MODEL}:deterministic"}
+    ).json()
+    assert "--thinking" not in plain["args"]
 
 
 # --- Settings: reset and secret meta ---------------------------------------------------
