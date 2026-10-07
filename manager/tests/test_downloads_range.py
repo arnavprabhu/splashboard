@@ -130,6 +130,7 @@ def test_pause_keeps_the_partial_and_resume_continues_from_its_byte_offset(setup
     partial = blobs(harness) / f"{sha}.splashgui.incomplete"
     at_pause = partial.stat().st_size
     assert 0 < at_pause < SHARD
+    assert weights(paused)["done_bytes"] == at_pause, "Pause reports the bytes on disk"
     assert (blobs(harness) / f"{sha}.splashgui.json").is_file(), "the sidecar stays too"
     time.sleep(1.0)
     assert partial.stat().st_size == at_pause, "nothing writes while paused"

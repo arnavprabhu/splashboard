@@ -478,6 +478,10 @@ class Downloads:
                 subject=item.id,
             )
         finally:
+            if item.state != "done":
+                # Paused or failed: show the bytes on disk now, not the last 500 ms sample
+                # (the Range partial's size is where Resume continues).
+                self.progress(item)
             self.publish(item)
 
     # SPEC §9.4 plain-language errors: each code carries the action the UI offers.
