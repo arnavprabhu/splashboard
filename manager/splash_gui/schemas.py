@@ -951,11 +951,16 @@ class InspectResult(ApiModel):
     repo_id: str
     commit: str | None = None
     compatible: bool
-    badge: Literal["compatible", "text_only", "incompatible", "not_clef_accurate"]
+    # "checking" only in `/inspect/stream` progress events, while no verdict decides it.
+    badge: Literal["compatible", "text_only", "incompatible", "not_clef_accurate", "checking"]
     family: Family | None = None
     format: ModelFormat | None = None
     variants: list[VariantOut] = Field(default_factory=list)
     recommended_variant: str | None = None
+    # D59: the variant checked first (the likely recommendation), and the variants
+    # whose verdict has not arrived yet (empty once the check is complete).
+    first_variant: str | None = None
+    pending: list[str] = Field(default_factory=list)
     vision: VisionInfo
     draft: str | None = None
     # A plain line; when Splash's own refusal is technical (an MLX checkpoint that

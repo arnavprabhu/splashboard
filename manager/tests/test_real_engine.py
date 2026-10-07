@@ -70,8 +70,13 @@ def inspect(repo_id: str, engine_python: Path, variant: str | None = None) -> di
         check=False,
     )
     assert proc.returncode == 0, proc.stderr.decode(errors="replace")[-2000:]
-    parsed: dict[str, Any] = json.loads(proc.stdout)
-    return parsed
+    # One JSON line for the table, then one per verdict (D59).
+    lines = [json.loads(line) for line in proc.stdout.decode().splitlines()]
+    return {
+        "variants": lines[0]["variants"],
+        "first": lines[0]["first"],
+        "results": [line["result"] for line in lines[1:]],
+    }
 
 
 def _listing(repo_id: str) -> dict[str, int | None]:

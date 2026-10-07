@@ -333,6 +333,37 @@ def test_recommended_variant_stops_at_ud_q4_k_m() -> None:
     assert not cat.within_ceiling("UD-IQ4_NL_XL", 19_500_506_080, 18_000_000_000)
 
 
+def test_one_rule_names_the_variant_to_recommend_and_check_first() -> None:
+    """D59: the catalog, `/inspect` and the variant checked first share
+    `cat.default_variant`: the §8.6 pick's variant for its repository, else the
+    §9.1 rule; a variant Splash refused passes the mark down."""
+    repo = "unsloth/Qwen3.6-35B-A3B-GGUF"
+    variants = cat.gguf_variants(repo, QWEN35_GGUF)
+    vision = cat.projector(QWEN35_GGUF) is not None
+    facts = cat.entry_facts(repo, "gguf", _Info(QWEN35_GGUF), 64 * GIB)
+    pick = cat.default_variant(repo, variants, 64 * GIB, vision=vision)
+    assert pick == facts["recommended_variant"] == "UD-Q4_K_M"
+    # 36-47 GB coding preset: the wizard's own variant of this repository wins.
+    preset = f"{repo}:UD-Q4_K_M"
+    assert cat.default_variant(repo, variants, 40 * GIB, vision=vision, preset_model=preset) == (
+        "UD-Q4_K_M"
+    )
+    assert (
+        cat.default_variant(repo, variants, 64 * GIB, vision=vision, preset_model="other/x:Q4")
+        == "UD-Q4_K_M"
+    )
+    # Refused by Splash: the next one down the same rule, never the refused one.
+    after = cat.default_variant(repo, variants, 64 * GIB, vision=vision, refused={"UD-Q4_K_M"})
+    assert after not in (None, "UD-Q4_K_M")
+    assert cat.within_ceiling(after, next(v.size for v in variants if v.name == after), None)
+    assert (
+        cat.default_variant(
+            repo, variants, 64 * GIB, vision=vision, preset_model=preset, refused={"UD-Q4_K_M"}
+        )
+        == after
+    )
+
+
 def test_projectors_are_named_as_splash_names_them() -> None:
     """QA row 14: Prism's `MODEL-mmproj-BF16.gguf` was a model variant and the row
     said text only; Splash matches `mmproj` anywhere in the stem (upstream.py:62)."""

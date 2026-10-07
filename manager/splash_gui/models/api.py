@@ -9,9 +9,10 @@ from __future__ import annotations
 from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 
 from ..downloads.service import Downloads
-from ..errors import ApiError, error_responses
+from ..errors import SSE_RESPONSES, ApiError, error_responses
 from ..schemas import (
     Catalog,
     DeleteModelResult,
@@ -28,6 +29,7 @@ from ..schemas import (
     TokenPiecesRequest,
     VerifyRequest,
 )
+from ..sse import sse_response
 from ..state import ManagerState, get_state
 from .hf import HubError
 from .service import Models
@@ -85,6 +87,18 @@ async def inspect(
     state: State, id: Annotated[str, Query()], refresh: bool = False
 ) -> InspectResult:
     return await cast(Models, state.models).inspect(id, refresh)
+
+
+@router.get("/inspect/stream", responses={**_ERR, **SSE_RESPONSES})
+async def inspect_stream(
+    state: State, id: Annotated[str, Query()], refresh: bool = False
+) -> StreamingResponse:
+    """D59: `/inspect` as server-sent events. `inspect.progress` (a partial
+    InspectResult, `pending` lists the variants still being checked) first and on
+    every verdict, the likely recommended variant's first; then `inspect.result`
+    (the complete InspectResult) or `inspect.error`. Hub and engine errors answer
+    before the stream starts, with the same codes as `/inspect`."""
+    return sse_response(await cast(Models, state.models).inspect_stream(id, refresh))
 
 
 @router.get("/card", response_model=ModelCard, responses=_ERR)

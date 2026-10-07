@@ -365,3 +365,171 @@ def test_variant_labels_resolve_with_splash_s_own_selector(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == ["Q4_0", "UD-Q4_K_M", "UD-Q4_K_XL", "imatrix_unsloth"]
+
+
+# --- D59 (Q16): the likely pick's verdict first, the rest as they come ------------
+
+MANY = "unsloth/Qwen3.8-27B-GGUF"  # the fake Hub lists 8 root GGUFs for it
+
+
+def stream_inspect(
+    harness, model: str, refresh: bool = True
+) -> list[tuple[float, str, dict[str, Any]]]:
+    """`GET /inspect/stream` as `(seconds since the request, event, data)`."""
+    import json
+    import time
+
+    start = time.monotonic()
+    events: list[tuple[float, str, dict[str, Any]]] = []
+    url = f"/api/admin/inspect/stream?id={model}&refresh={1 if refresh else 0}"
+    with harness.client.stream("GET", url) as response:
+        assert response.status_code == 200, response.read()
+        assert response.headers["content-type"].startswith("text/event-stream")
+        name = None
+        for line in response.iter_lines():
+            if line.startswith("event: "):
+                name = line[7:]
+            elif line.startswith("data: ") and name:
+                events.append((time.monotonic() - start, name, json.loads(line[6:])))
+    return events
+
+
+def checked(data: dict[str, Any]) -> dict[str, bool]:
+    return {v["name"]: v["loadable"] for v in data["variants"] if v["loadable"] is not None}
+
+
+def test_the_likely_recommended_variant_is_checked_and_shown_first(hub_harness, monkeypatch):
+    """Q16: the variant the GUI will recommend for this Mac (SPEC §9.1, here UD-Q4_K_M
+    at 64 GB) arrives first, even when its header is the slowest to read, and the
+    others fill in after it; the last event is the complete InspectResult."""
+    monkeypatch.setenv("FAKE_SPLASH_INSPECT_SECONDS", "0.3,UD-Q4_K_M=0.8")
+    harness = hub_harness()
+    harness.state.memory_bytes = lambda: 64 * 1024**3
+    events = stream_inspect(harness, MANY)
+
+    names = [e[1] for e in events]
+    assert names[0] == "inspect.progress" and names[-1] == "inspect.result", names
+    assert set(names[:-1]) == {"inspect.progress"}, names
+    # The snapshot: the whole table at once, nothing checked yet.
+    _, _, snapshot = events[0]
+    assert snapshot["badge"] == "checking" and snapshot["first_variant"] == "UD-Q4_K_M"
+    assert len(snapshot["variants"]) == 8 and checked(snapshot) == {}
+    assert sorted(snapshot["pending"]) == sorted(v["name"] for v in snapshot["variants"])
+
+    # The first verdict is the likely pick's, alone, and it already decides the badge.
+    progress = [e for e in events if e[1] == "inspect.progress" and checked(e[2])]
+    first = progress[0][2]
+    assert checked(first) == {"UD-Q4_K_M": True}, checked(first)
+    assert first["badge"] == "compatible" and first["recommended_variant"] == "UD-Q4_K_M"
+    assert len(first["pending"]) == 7 and "UD-Q4_K_M" not in first["pending"]
+
+    # The rest fill in afterwards, and the stream ends complete.
+    assert len(progress) >= 2, "the other variants must arrive as further events"
+    result = events[-1][2]
+    assert result["pending"] == [] and result["badge"] == "compatible"
+    assert result["recommended_variant"] == "UD-Q4_K_M"
+    verdicts = checked(result)
+    assert len(verdicts) == 8
+    assert verdicts["UD-Q8_K_XL"] is False and verdicts["imatrix_unsloth"] is False
+    assert all(verdicts[n] for n in verdicts if n not in ("UD-Q8_K_XL", "imatrix_unsloth"))
+    # The download plan is for the variant that was checked first.
+    assert result["download_plan"]["variant"] is None
+    assert any(f["name"].endswith("-UD-Q4_K_M.gguf") for f in result["download_plan"]["files"])
+
+    # GET /inspect now answers from the stored verdicts, with the same content.
+    again = inspect(harness, MANY, refresh=False)
+    assert again["cached"] is True
+    assert checked(again) == verdicts and again["recommended_variant"] == "UD-Q4_K_M"
+
+
+def test_the_first_verdict_is_delivered_before_the_others_finish(hub_harness, monkeypatch):
+    """Incremental delivery, timed where it is produced: the stream's events as the
+    manager yields them (TestClient buffers an HTTP stream, so it can't time it)."""
+    import time
+
+    monkeypatch.setenv("FAKE_SPLASH_INSPECT_SECONDS", "0.6,UD-Q4_K_M=0.3")
+    harness = hub_harness()
+    harness.state.memory_bytes = lambda: 64 * 1024**3
+
+    async def collect() -> list[tuple[float, str, Any]]:
+        start = time.monotonic()
+        events = await harness.state.models.inspect_stream(MANY, True)
+        return [(time.monotonic() - start, name, data) async for name, data in events]
+
+    events = harness.client.portal.call(collect)
+    timed = [(t, checked(d.model_dump())) for t, n, d in events if hasattr(d, "variants")]
+    at_first = next(t for t, verdicts in timed if verdicts)
+    assert next(v for _, v in timed if v) == {"UD-Q4_K_M": True}
+    at_end = events[-1][0]
+    assert events[-1][1] == "inspect.result"
+    # The others take 0.6 s each after the first: the first verdict did not wait.
+    assert at_end - at_first >= 0.5, (at_first, at_end)
+
+
+def test_a_stream_of_a_checked_repository_is_one_result_event(hub_harness):
+    harness = hub_harness()
+    harness.state.memory_bytes = lambda: 64 * 1024**3
+    inspect(harness, MANY)
+    events = stream_inspect(harness, MANY, refresh=False)
+    assert [e[1] for e in events] == ["inspect.result"]
+    assert events[0][2]["cached"] is True and events[0][2]["pending"] == []
+
+
+def test_verdicts_are_stored_per_variant_and_reused(hub_harness, monkeypatch):
+    """Checking `REPO:VARIANT` (as a download does) stores that variant's verdict;
+    a later check of the whole repository shows it at once and runs Splash only for
+    the others."""
+    monkeypatch.setenv("FAKE_SPLASH_INSPECT_SECONDS", "0.2")
+    harness = hub_harness()
+    harness.state.memory_bytes = lambda: 64 * 1024**3
+    one = inspect(harness, f"{MANY}:Q8_0", refresh=False)
+    assert one["compatible"] is True and checked(one) == {"Q8_0": True}
+
+    events = stream_inspect(harness, MANY, refresh=False)
+    assert checked(events[0][2]) == {"Q8_0": True}, "the stored verdict is in the snapshot"
+    result = events[-1][2]
+    assert result["cached"] is False and len(checked(result)) == 8
+    # The catalog shows Splash's own verdicts once they are stored.
+    catalog = harness.client.get("/api/admin/catalog").json()
+    rows = [e for f in catalog["families"] for g in f["groups"] for e in g["entries"]]
+    row = next(r for r in rows if r["id"] == MANY)
+    by_name = {v["name"]: v["loadable"] for v in row["variants"]}
+    assert by_name["Q8_0"] is True and by_name["UD-Q8_K_XL"] is False
+
+
+def test_a_waiting_request_and_a_stream_share_one_check(hub_harness, monkeypatch):
+    """Two callers of the same `model@sha` join one helper run."""
+    import threading
+
+    monkeypatch.setenv("FAKE_SPLASH_INSPECT_SECONDS", "0.3")
+    harness = hub_harness()
+    harness.state.memory_bytes = lambda: 64 * 1024**3
+    models = harness.state.models
+    seen: list[int] = []
+    out: dict[str, Any] = {}
+
+    def wait() -> None:
+        out["get"] = harness.client.get(f"/api/admin/inspect?id={MANY}").json()
+
+    waiter = threading.Thread(target=wait)
+    waiter.start()
+    events = []
+    for _ in range(50):
+        if models.runs:
+            seen.append(len(models.runs))
+            events = stream_inspect(harness, MANY, refresh=False)
+            break
+        import time
+
+        time.sleep(0.05)
+    waiter.join(30)
+    assert seen == [1], seen
+    assert events[0][1] == "inspect.progress"
+    assert checked(out["get"]) == checked(events[-1][2])
+
+
+def test_the_stream_reports_hub_errors_before_it_starts(client, fake_hub):
+    point_at_hub(client, fake_hub)
+    response = client.get("/api/admin/inspect/stream?id=owner/missing-repo")
+    assert response.status_code == 404, response.text
+    assert response.json()["error"]["code"] == "hub_unreachable"

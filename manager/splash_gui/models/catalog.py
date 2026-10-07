@@ -273,6 +273,27 @@ def pick_variant(variants: list[Variant], memory: int, vision: bool) -> Variant 
     return None
 
 
+def default_variant(
+    repo_id: str,
+    variants: list[Variant],
+    memory: int,
+    *,
+    vision: bool,
+    preset_model: str | None = None,
+    refused: frozenset[str] | set[str] = frozenset(),
+) -> str | None:
+    """The GGUF variant the GUI recommends for this Mac, wherever it is shown (the
+    catalog, `/inspect`, and the variant `/inspect` checks first, D59): the §8.6
+    pick's own variant when the pick is this repository, else `pick_variant`
+    (SPEC §9.1). `refused` are variants Splash's check turned down."""
+    if preset_model:
+        repo, _, name = preset_model.partition(":")
+        if repo == repo_id and name and name not in refused:
+            return name
+    picked = pick_variant([v for v in variants if v.name not in refused], memory, vision)
+    return picked.name if picked else None
+
+
 # The tokenizer files an MLX target may supply (splash/install/upstream.py:26-34).
 TOKENIZER_FILES = (
     "tokenizer.json",

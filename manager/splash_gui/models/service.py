@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
 import shutil
 import time
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -44,6 +47,7 @@ from ..settings.parsers import parse_model_id, split_model_id
 from ..usage.db import iso
 from . import catalog as cat
 from . import compat
+from . import inspection as ins
 from .hf import HfClient, HubError, strip_front_matter
 from .layout import directory_size, execute_delete, plan_delete, read_all
 from .local import LocalModels
@@ -82,15 +86,22 @@ def fingerprints(facts: dict[str, Any]) -> ModelFingerprints | None:
     )
 
 
-def inspect_timeout(files: dict[str, int | None], variant: str | None) -> float:
+def inspect_timeout(
+    files: dict[str, int | None], variant: str | None, count: int | None = None
+) -> float:
     """SPEC §9.2 gives the helper 20 s. Screening a GGUF variant reads its whole
     metadata block (several MB, the tokenizer included) over range requests, so
     a full variant table of a 27-file repository measured ~37 s on 2026-10-04;
-    allow 20 s plus 4 s per variant beyond the first, up to 150 s."""
+    allow 20 s plus 4 s per variant beyond the first, up to 150 s (D33). `count`
+    is how many variants this run checks when the others are stored (D59)."""
     if variant is not None:
         return 20.0
-    roots = [n for n in files if "/" not in n and n.endswith(".gguf") and not cat.is_projector(n)]
-    return min(150.0, 20.0 + 4.0 * max(0, len(roots) - 1))
+    if count is None:
+        roots = [
+            n for n in files if "/" not in n and n.endswith(".gguf") and not cat.is_projector(n)
+        ]
+        count = len(roots)
+    return min(150.0, 20.0 + 4.0 * max(0, count - 1))
 
 
 def valid_id(model: str) -> str:
@@ -104,7 +115,9 @@ class Models:
     def __init__(self, state: ManagerState) -> None:
         self.state = state
         self.hf = HfClient(state)
-        self.cache: dict[str, tuple[float, InspectResult]] = {}
+        # Splash's verdicts per variant, by repo@sha (a day), and the checks running.
+        self.verdicts: dict[str, ins.Verdicts] = {}
+        self.runs: dict[str, ins.Run] = {}
         self.file_sets: dict[str, list[str]] = {}
         self.language_file_sets: dict[str, list[str]] = {}
         self.catalog_cache: dict[str, tuple[float, Any]] = {}
@@ -115,6 +128,11 @@ class Models:
 
     async def shutdown(self) -> None:
         await self.local.shutdown()
+        for run in list(self.runs.values()):
+            if run.task is not None:
+                run.task.cancel()
+                with contextlib.suppress(BaseException):
+                    await run.task
 
     async def drop_selection(self, model: str) -> None:
         """Remove a model's Splash selections and assemblies (not its source file)."""
@@ -317,95 +335,194 @@ class Models:
             else "wont_fit"
         )
 
+    def preset_pick(self) -> str | None:
+        """The §8.6 primary pick for the wizard's use case (coding when unset) at
+        this Mac's memory: the catalog's "Recommended for this Mac" (SPEC §9.1)."""
+        from ..settings.presets import recommend
+
+        preset = self.state.settings.current.global_.wizard.preset or "coding"
+        pick = recommend(preset, self.state.memory_bytes()).primary
+        return pick.model if pick else None
+
+    def likely_variant(self, repo_id: str, files: dict[str, int | None]) -> cat.Variant | None:
+        """The variant the GUI will most likely recommend, from the Hub listing alone:
+        the catalog's rule (SPEC §9.1, `cat.default_variant`). Checked first (D59)."""
+        variants = cat.gguf_variants(repo_id, files)
+        name = cat.default_variant(
+            repo_id,
+            variants,
+            self.state.memory_bytes(),
+            vision=cat.projector(files) is not None,
+            preset_model=self.preset_pick(),
+        )
+        return next((v for v in variants if v.name == name), None)
+
     async def inspect(
         self, model: str, refresh: bool = False, revision: str | None = None
     ) -> InspectResult:
+        """SPEC §9.2: the whole verdict, once every variant has been checked."""
+        begun, repo = await self._begin_inspect(model, refresh, revision)
+        if isinstance(begun, InspectResult):
+            return await self.with_plans(model, begun, repo)
+        await begun.done.wait()
+        if begun.error is not None:
+            raise begun.error
+        return await self.with_plans(model, self._compose(begun), repo)
+
+    async def inspect_stream(
+        self, model: str, refresh: bool = False
+    ) -> AsyncIterator[tuple[str, Any]]:
+        """D59: the same check as `inspect`, as SSE. `inspect.progress` (a partial
+        InspectResult: unchecked variants have `loadable: null` and are listed in
+        `pending`) first and after every verdict, then `inspect.result` (what
+        `GET /inspect` returns) or `inspect.error` ({"error": …})."""
+        begun, repo = await self._begin_inspect(model, refresh, None)
+
+        async def events() -> AsyncIterator[tuple[str, Any]]:
+            if isinstance(begun, InspectResult):
+                yield "inspect.result", await self.with_plans(model, begun, repo)
+                return
+            queue = begun.subscribe()
+            try:
+                while True:
+                    if begun.done.is_set():
+                        break
+                    # The first event waits for the helper's table (a fraction of a
+                    # second), so it lists every variant.
+                    if begun.store.table is not None or begun.variant is not None:
+                        yield "inspect.progress", self._compose(begun)
+                    await queue.get()
+                    while not queue.empty():  # coalesce lines that arrived together
+                        queue.get_nowait()
+            finally:
+                begun.unsubscribe(queue)
+            if begun.error is not None:
+                yield "inspect.error", begun.error.body()
+            else:
+                yield "inspect.result", await self.with_plans(model, self._compose(begun), repo)
+
+        return events()
+
+    async def _begin_inspect(
+        self, model: str, refresh: bool, revision: str | None
+    ) -> tuple[InspectResult | ins.Run, Any]:
+        """A complete result from stored verdicts, or the run (joined or started)."""
         repo_id, variant = split_model_id(valid_id(model))
         try:
             repo = await self.hf.repo_info(repo_id, revision)
         except HubError as error:
             raise ApiError(error.status, error.message, "hub_unreachable") from None
         key = f"{model}@{repo.sha}"
-        if not refresh and key in self.cache and time.time() - self.cache[key][0] < 86400:
-            cached = self.cache[key][1].model_copy(update={"cached": True})
-            return await self.with_plans(model, cached, repo)
+        running = self.runs.get(key)
+        if running is not None:
+            return running, repo
+        store = self.verdicts.setdefault(f"{repo_id}@{repo.sha}", ins.Verdicts())
+        if refresh:
+            for name in ins.expected_names(store.table, variant):
+                store.results.pop(name, None)
+        fresh = store.fresh()
+        missing = (
+            [n for n in ins.expected_names(store.table, variant) if n not in fresh]
+            if store.table is not None or variant is not None
+            else None
+        )
+        likely = None if variant else self.likely_variant(repo_id, repo.files)
+        run = ins.Run(
+            key=key, model=model, repo_id=repo_id, variant=variant, repo=repo, store=store
+        )
+        run.first = likely.name if likely else None
+        if missing == []:
+            return self._compose(run, cached=True), repo
         engine = self.state.engine_cached()
         if not engine.python or not engine.pkg:
             raise ApiError(503, "Install Splash to check model compatibility", "engine_unavailable")
+        spec: dict[str, Any] = {
+            "repo": repo_id,
+            "sha": repo.sha,
+            "files": repo.files,
+            "variant": variant,
+            "first": {"name": likely.name, "files": likely.files} if likely else None,
+        }
+        if missing is not None and variant is None:
+            spec["only"] = missing
         env = self.env()
         env["PYTHONPATH"] = str(engine.pkg)
-        proc = await asyncio.create_subprocess_exec(
-            str(engine.python),
-            str(Path(__file__).parents[1] / "helpers" / "inspect_model.py"),
-            env=env,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            out, err = await asyncio.wait_for(
-                proc.communicate(
-                    json.dumps(
-                        {"repo": repo_id, "sha": repo.sha, "files": repo.files, "variant": variant}
-                    ).encode()
-                ),
-                inspect_timeout(repo.files, variant),
-            )
-        except asyncio.CancelledError:
-            proc.kill()
-            await proc.wait()
-            raise
-        except TimeoutError:
-            proc.kill()
-            await proc.wait()
-            raise ApiError(503, "Compatibility check timed out", "inspect_timeout") from None
-        if proc.returncode:
-            raise ApiError(
-                503,
-                "Splash compatibility helper failed: " + err.decode(errors="replace")[-1500:],
-                "inspect_failed",
-            )
-        raw = json.loads(out)
+        argv = [str(engine.python), str(Path(__file__).parents[1] / "helpers" / "inspect_model.py")]
+        timeout = inspect_timeout(repo.files, variant, len(missing) if missing else None)
+
+        async def go() -> None:
+            try:
+                await ins.run_helper(run, argv, env, spec, timeout)
+                if run.error is None:
+                    self._compose(run)  # records the selected file sets
+            finally:
+                self.runs.pop(key, None)
+                run.done.set()
+                run.notify()
+
+        self.runs[key] = run
+        run.task = asyncio.create_task(go())
+        return run, repo
+
+    def _compose(self, run: ins.Run, cached: bool = False) -> InspectResult:
+        """An InspectResult from what Splash has said so far: final once nothing is
+        pending (then it also records the download file set), else partial."""
+        model, repo_id, variant, repo = run.model, run.repo_id, run.variant, run.repo
+        table = run.store.table
+        fresh = run.store.fresh()
+        names = ins.expected_names(table, variant)
+        known = table is not None or variant is not None
+        pending = [n for n in names if n not in fresh] if known else names
+        results = {n: fresh[n] for n in names if n in fresh}
         variants = []
-        for item in raw["variants"]:
-            result = next((r for r in raw["results"] if r["name"] == item["name"]), None)
+        for item in table or []:
+            result = fresh.get(item["name"])
             need = (item.get("size_bytes") or 0) + 4 * 1024**3
             variants.append(
                 VariantOut.model_validate(
-                    dict(
-                        item,
-                        loadable=result["compatible"] if result else None,
-                        reason=result.get("reason") if result else None,
-                        fit=self.fit(need),
-                    )
+                    {
+                        **item,
+                        "loadable": result["compatible"] if result else None,
+                        "reason": result.get("reason") if result else None,
+                        "fit": self.fit(need),
+                    }
                 )
             )
-        supported = [r for r in raw["results"] if r["compatible"]]
-        selected = (
-            next((r for r in supported if r["name"] == variant), None)
-            if variant
-            else next(iter(supported), None)
+        supported = {n: r for n, r in results.items() if r["compatible"]}
+        if variant:
+            selected = supported.get(variant)
+        else:
+            # The variant checked first (the likely pick) when Splash took it, else
+            # the first the table lists.
+            selected = supported.get(run.first) or next(
+                (supported[n] for n in names if n in supported), None
+            )
+        # SPEC §9.1, the catalog's rule (`cat.default_variant`) over what Splash took:
+        # a variant it refused is never the pick, and one still pending is not yet.
+        refused = {str(n) for n, r in results.items() if not r["compatible"]}
+        pick = cat.default_variant(
+            repo_id,
+            [cat.Variant(v.name, v.size_bytes or 0, v.files) for v in variants],
+            self.state.memory_bytes(),
+            vision=cat.projector(repo.files) is not None,
+            preset_model=self.preset_pick(),
+            refused=refused,
         )
-        # SPEC §9.1: at or below UD-Q4_K_M-class, the same rule as the catalog.
-        ceiling = cat.q4_k_m_ceiling({v.name: v.size_bytes for v in variants})
-        candidates = [
-            v
-            for v in variants
-            if v.loadable and v.fit == "fits" and cat.within_ceiling(v.name, v.size_bytes, ceiling)
-        ]
-        recommended = max(candidates, key=lambda v: v.size_bytes or 0) if candidates else None
+        recommended = next((v for v in variants if v.name == pick and v.loadable), None)
         if recommended:
             recommended.recommended = True
+        done = not pending
         reason, reason_detail = compat.explain_refusal(
             None
-            if selected
-            else next((r.get("reason") for r in raw["results"]), "Unsupported model")
+            if selected or not done
+            else next((r.get("reason") for r in results.values()), "Unsupported model")
         )
         total = sum(repo.files.get(f) or 0 for f in selected["files"]) if selected else 0
-        if selected:
+        if selected and done:
             self.file_sets[model] = selected["files"]
             self.language_file_sets[model] = selected.get("language_files", selected["files"])
-        result = InspectResult.model_validate(
+        checked = run.store.checked_at(names)
+        return InspectResult.model_validate(
             {
                 "id": model,
                 "repo_id": repo_id,
@@ -415,11 +532,15 @@ class Models:
                 if selected and selected["vision"]
                 else "text_only"
                 if selected
-                else "incompatible",
+                else "incompatible"
+                if done
+                else "checking",
                 "family": selected.get("family") if selected else None,
                 "format": selected.get("format") if selected else ("gguf" if variants else None),
                 "variants": variants,
                 "recommended_variant": recommended.name if recommended else None,
+                "first_variant": run.first,
+                "pending": [n for n in pending if n is not None],
                 "vision": VisionInfo(
                     available=bool(selected and selected["vision"]),
                     reason=selected.get("vision_reason") if selected else reason,
@@ -429,11 +550,12 @@ class Models:
                 "reason_detail": reason_detail,
                 "memory_need_bytes": total + 4 * 1024**3 if selected else None,
                 "fit": self.fit(total + 4 * 1024**3) if selected else None,
-                "checked_at": iso(),
+                "cached": cached,
+                "checked_at": iso(
+                    datetime.fromtimestamp(checked, UTC) if checked and done else None
+                ),
             }
         )
-        self.cache[key] = (time.time(), result)
-        return await self.with_plans(model, result, repo)
 
     async def with_plans(self, model: str, result: InspectResult, repo: Any) -> InspectResult:
         """Attach SPEC §9.4's expected file set (target + draft) with what is already
@@ -564,12 +686,16 @@ class Models:
         return info
 
     def _checked_variants(self, repo: str, sha: str | None) -> dict[str, tuple[bool, str | None]]:
-        """Each variant's `loadable`/`reason` from a cached full `/inspect` of `repo`
-        at `sha` (SPEC §9.2, drift row 6), else {}."""
-        hit = self.cache.get(f"{repo}@{sha}") if sha else None
-        if hit is None or time.time() - hit[0] >= 86400:
+        """Each variant's `loadable`/`reason` from Splash's stored verdicts for `repo`
+        at `sha` (SPEC §9.2, drift row 6, D59), else {}."""
+        store = self.verdicts.get(f"{repo}@{sha}") if sha else None
+        if store is None:
             return {}
-        return {v.name: (v.loadable, v.reason) for v in hit[1].variants if v.loadable is not None}
+        return {
+            name: (bool(raw["compatible"]), raw.get("reason"))
+            for name, raw in store.fresh().items()
+            if name is not None
+        }
 
     async def catalog(self, refresh: bool = False) -> Catalog:
         """SPEC §9.1: the seed (Appendix C) plus Splash's official list, grouped by
@@ -577,7 +703,6 @@ class Models:
         GGUF variants) with a memory estimate, a fit badge and the "Recommended
         for this Mac" mark (the §8.6 pick for the wizard's use case, else coding)."""
         from ..paths import splash_data_dir
-        from ..settings.presets import recommend
 
         if refresh:
             self.catalog_cache.clear()
@@ -590,9 +715,8 @@ class Models:
             if family and repo not in {r[1] for r in rows}:
                 rows.append((family, repo, "legacy", "Official catalog.", None))
         g = self.state.settings.current.global_
-        preset = g.wizard.preset or "coding"
-        pick = recommend(preset, memory).primary
-        pick_repo, pick_variant = split_model_id(pick.model) if pick else (None, None)
+        pick_model = self.preset_pick()
+        pick_repo = split_model_id(pick_model)[0] if pick_model else None
         offline = g.hf.offline
         gate = asyncio.Semaphore(4)  # be gentle with the Hub
 
@@ -652,15 +776,23 @@ class Models:
                     if facts:
                         refreshed = iso()
                     variants = facts.pop("variants", None)
-                    recommended_variant = facts.pop("recommended_variant", None)
+                    facts.pop("recommended_variant", None)
                     if kind == "legacy":
                         facts.pop("vision", None)
-                    if variants is not None and pick_repo == repo and pick_variant:
-                        for variant in variants:
-                            variant["recommended"] = variant["name"] == pick_variant
+                    # SPEC §9.1: one rule, shared with /inspect (`cat.default_variant`).
                     default_variant = (
-                        pick_variant if pick_repo == repo and pick_variant else recommended_variant
+                        cat.default_variant(
+                            repo,
+                            cat.gguf_variants(repo, info.files) if info is not None else [],
+                            memory,
+                            vision=info is not None and cat.projector(info.files) is not None,
+                            preset_model=pick_model,
+                        )
+                        if kind == "gguf"
+                        else None
                     )
+                    for variant in variants or []:
+                        variant["recommended"] = variant["name"] == default_variant
                     if info is not None:
                         checked = self._checked_variants(repo, info.sha)
                         for variant in variants or []:

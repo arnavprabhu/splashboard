@@ -1,4 +1,13 @@
-"""Run under Splash's bundled Python, never imported by the manager."""
+"""Run under Splash's bundled Python, never imported by the manager.
+
+stdin: {"repo", "sha", "files": {name: size}, "variant", "first"?, "only"?}.
+stdout, one JSON object per line as soon as it is known (SPEC §9.2, D59):
+  {"variants": [{name, files, size_bytes}], "first": NAME|null}   the table, at once;
+  {"result": {name, compatible, ...}}                              one per variant checked.
+`first` (the variant the manager expects to recommend) is checked alone before the
+others, so its verdict arrives first; the rest are checked in parallel after it.
+`only` limits the check to those variant names (the rest are cached by the manager).
+"""
 
 import contextlib
 import io
@@ -7,7 +16,8 @@ import os
 import re
 import sys
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +51,57 @@ def variant_label(repo_id: str, name: str, names: list[str], upstream: Any) -> s
     return stem
 
 
+BUFFER = 256 << 10
+
+
+class SharedFile:
+    """One Hub file's leading bytes, fetched once and served to every reader.
+
+    Splash reads the vision projector headers again for every variant
+    (`upstream.select_vision`), 8 MB per projector per variant over range requests.
+    They are the same bytes at a pinned commit, so the first reader's reads go to
+    the Hub, in the order Splash's own reader asks for them, and later readers get
+    the same bytes from memory."""
+
+    def __init__(self, opener: Any) -> None:
+        self.opener = opener
+        self.lock = threading.Lock()
+        self.data = bytearray()
+        self.stream: Any = None
+        self.eof = False
+
+    def fill(self, end: int) -> None:
+        with self.lock:
+            if self.stream is None and not self.eof:
+                self.stream = self.opener()
+            while len(self.data) < end and not self.eof:
+                chunk = self.stream.read(end - len(self.data))
+                if not chunk:
+                    self.eof = True
+                    self.stream.close()
+                self.data += chunk
+
+    def reader(self) -> "SharedReader":
+        return SharedReader(self)
+
+
+class SharedReader(io.RawIOBase):
+    def __init__(self, shared: SharedFile) -> None:
+        self.shared = shared
+        self.pos = 0
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: Any) -> int:
+        view = memoryview(buffer).cast("B")
+        self.shared.fill(self.pos + len(view))
+        data = self.shared.data[self.pos : self.pos + len(view)]
+        view[: len(data)] = data
+        self.pos += len(data)
+        return len(data)
+
+
 def main() -> None:
     from install import families, hub, models, upstream  # type: ignore[import-not-found]
 
@@ -51,7 +112,32 @@ def main() -> None:
         return upstream.inspect_target(repo, choice, language_only, Path(scratch))
 
     spec = json.load(sys.stdin)
-    repo = hub.Repository(spec["repo"], spec["sha"], set(spec["files"]))
+    shared: dict[str, SharedFile] = {}
+    shared_lock = threading.Lock()
+
+    class Repository(hub.Repository):  # type: ignore[misc]
+        """Splash's repository, read through a buffer, with each vision projector's
+        header read once (see `SharedFile`).
+
+        Splash's GGUF reader makes one small `read` per value (two per token of a
+        250K-token vocabulary). Straight on the Hub stream each goes through
+        fsspec's cache in Python: 0.93 s of CPU per header, which the GIL
+        serialises across the pool, so a 25-variant check was bound by parsing.
+        A 256 KB buffer in front serves them in C (0.3 s); the stream underneath
+        is read in the same order and fetches the same blocks."""
+
+        def open(self, name: str) -> Any:
+            if "mmproj" not in Path(name).stem.lower():
+                return io.BufferedReader(super().open(name), BUFFER)
+            self._require(name)
+            with shared_lock:
+                if name not in shared:
+                    shared[name] = SharedFile(
+                        lambda: io.BufferedReader(hub.Repository.open(self, name), BUFFER)
+                    )
+            return io.BufferedReader(shared[name].reader(), BUFFER)
+
+    repo = Repository(spec["repo"], spec["sha"], set(spec["files"]))
     names = [
         n
         for n in spec["files"]
@@ -78,6 +164,28 @@ def main() -> None:
         choices = [(v["name"], v["name"]) for v in variants]
     else:
         choices = [(None, None)]
+    only = spec.get("only")
+    if only is not None:
+        choices = [c for c in choices if c[1] in only]
+    # The variant the manager expects to recommend, by its name or its file.
+    wanted = spec.get("first") or {}
+    first = next(
+        (
+            v["name"]
+            for v in variants
+            if v["name"] == wanted.get("name") or set(v["files"]) & set(wanted.get("files") or [])
+        ),
+        None,
+    )
+    stdout = sys.stdout
+    stdout_lock = threading.Lock()
+
+    def emit(message: dict[str, Any]) -> None:
+        with stdout_lock:
+            stdout.write(json.dumps(message) + "\n")
+            stdout.flush()
+
+    emit({"variants": variants, "first": first})
 
     def screen(choice: str | None, reported: str | None) -> dict[str, Any]:
         out: dict[str, Any] = {"name": reported, "compatible": False}
@@ -132,13 +240,38 @@ def main() -> None:
             language_files=language_files,
         )
 
-    # Variants are screened in parallel: each reads a GGUF header (several MB of
-    # metadata) over HTTP range requests, and a repository may have twenty.
-    # Splash's own prints are silenced once around the pool.
-    workers = min(12, max(1, len(choices)))
+    def prefetch(name: str) -> None:
+        """Read one projector's header with Splash's reader while the first variant
+        is checked, so `select_vision` finds it in memory instead of after the
+        target's own reads."""
+        with contextlib.suppress(Exception):
+            from install import gguf  # type: ignore[import-not-found,unused-ignore]
+
+            with repo.open(name) as stream:
+                gguf.Metadata(stream, tensors=True)
+
+    projectors = sorted(
+        n
+        for n in spec["files"]
+        if "/" not in n and n.endswith(".gguf") and "mmproj" in Path(n).stem.lower()
+    )
+    leading = [c for c in choices if first is not None and c[1] == first]
+    if not leading and len(choices) == 1:
+        leading = choices
+    rest = [c for c in choices if c not in leading]
+    # Each variant reads a GGUF header (several MB of metadata) over HTTP range
+    # requests, and a repository may have twenty-five. The likely pick goes first,
+    # alone, with the projector headers fetched beside it; the rest follow in
+    # parallel. Splash's own prints are silenced once around the pool.
+    workers = min(12, max(1, len(rest), len(projectors) + 1))
     with contextlib.redirect_stdout(io.StringIO()), ThreadPoolExecutor(workers) as pool:
-        results = list(pool.map(lambda pair: screen(*pair), choices))
-    print(json.dumps({"variants": variants, "results": results}))
+        if leading:
+            ahead = [pool.submit(prefetch, name) for name in projectors]
+            emit({"result": screen(*leading[0])})
+            for prefetched in ahead:
+                prefetched.result()
+        for done in as_completed([pool.submit(screen, *pair) for pair in rest]):
+            emit({"result": done.result()})
 
 
 if __name__ == "__main__":
