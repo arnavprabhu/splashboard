@@ -155,6 +155,16 @@ describe('bug 4: Load / Restart / Switch during an install ask first', () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it('installing with nothing to download (Splash verifying a local model) asks nothing', async () => {
+    // Acceptance 2026-10-07: every real start passes through `installing`; with no
+    // EngineView.install the manager answers no 409, so a Save & restart must not ask.
+    engine.value = installingEngine('local/OrcaSAQ-2-27B-Uncensored-GGUF', null);
+    const run = vi.fn(async (force: boolean) => force);
+    await expect(withInstallConfirm(run)).resolves.toBe(false);
+    expect(run).toHaveBeenCalledWith(false);
+    expect(installQuestion.value).toBeNull();
+  });
+
   it('Load of the model being installed: the manager answers 202, no question', async () => {
     engine.value = installingEngine();
     const run = vi.fn(async (force: boolean) => force);

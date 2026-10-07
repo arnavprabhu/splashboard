@@ -55,7 +55,7 @@ export function isSameModelInstall(err: unknown): boolean {
 }
 
 /**
- * Runs an engine call that would interrupt an install. While the engine is installing (and for a
+ * Runs an engine call that would interrupt an install. While the engine downloads (and for a
  * Load, of another model: loading the model being installed answers 202 and changes nothing), or
  * when the call answers 409 `install_in_progress`, it asks first and runs again with `force`.
  * A 409 with `details.same_model` (an older manager) is that same no-op: it resolves `undefined`
@@ -64,7 +64,10 @@ export function isSameModelInstall(err: unknown): boolean {
 export async function withInstallConfirm<T>(run: (force: boolean) => Promise<T>, model?: string): Promise<T | undefined> {
   const e = engine.value;
   let force = false;
-  if (e?.phase === 'installing' && (model === undefined || model !== e.model)) {
+  // Only a real download asks: Splash's startup also passes through `installing` for a model
+  // whose files are all present (it verifies them), and then there is nothing to interrupt
+  // and the manager answers no 409 (acceptance 2026-10-07).
+  if (installOf(e) && (model === undefined || model !== e?.model)) {
     if (!(await ask())) throw new Cancelled();
     force = true;
   }
