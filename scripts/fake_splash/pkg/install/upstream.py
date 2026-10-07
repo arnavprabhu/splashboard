@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -117,6 +118,10 @@ def _gguf_target(repo, variant, language_only, scratch):
     config, metadata = scratch / "config.json", scratch / "gguf-metadata.json"
     config.write_bytes(models.json_bytes(repo.json("config.json")))
     metadata.write_bytes(models.json_bytes({"unsigned": {}, "float": {}, "string": {}}))
+    time.sleep(_inspect_seconds(name))
+    if Path(name).stem.lower().startswith("imatrix"):
+        # An importance matrix has no model metadata (real Splash, install/gguf.py).
+        raise models.ModelError("missing or invalid GGUF metadata: general.architecture")
     family = check_model("gguf", "none", config, gguf_metadata=metadata)
     if any(part in name for part in ("BF16", "UD-Q8_K_XL")):
         raise models.ModelError("this GGUF stores tensors Splash cannot load")
@@ -127,6 +132,19 @@ def _gguf_target(repo, variant, language_only, scratch):
         files["vision/mmproj.gguf"] = projector
         vision_format = "gguf"
     return Target("gguf", vision_format, config, metadata, family, files)
+
+
+def _inspect_seconds(name):
+    """`FAKE_SPLASH_INSPECT_SECONDS`: how long reading one GGUF's header takes, e.g.
+    `0.2`, or `0.2,UD-Q4_K_M=1` to make one variant slower than the rest."""
+    seconds = 0.0
+    for part in filter(None, os.environ.get("FAKE_SPLASH_INSPECT_SECONDS", "").split(",")):
+        variant, _, value = part.rpartition("=")
+        if not variant:
+            seconds = float(value)
+        elif Path(name).stem.endswith("-" + variant):
+            return float(value)
+    return seconds
 
 
 def _mlx_target(repo, language_only, scratch):

@@ -79,6 +79,8 @@ def repository(repo_id: str, revision: str | None = None) -> tuple[models.Remote
             repo = models.draft_repo(selection, family)
         else:
             repo, _, _, _ = models.target_repo(selection, family)
+    if repo_id == ACCEPT_GGUF:
+        repo.files += more_variants(repo)
     files = {f.name: f for f in repo.files}
     config = {
         "text_config": signatures.text_config(family),
@@ -88,6 +90,38 @@ def repository(repo_id: str, revision: str | None = None) -> tuple[models.Remote
         # The rejection Splash reports for anything but affine 4-bit group 64.
         config["quantization"]["bits"] = 8
     return repo, files, config
+
+
+# The real unsloth/Qwen3.8-27B-GGUF lists 25 root GGUFs (2026-10-07). Its fixture
+# lists some of them, sized in proportion to UD-Q4_K_M (the installer's own file),
+# so the §9.1 pick, the refusals (UD-Q8_K_XL, the imatrix file) and the order the
+# compatibility check reports them in (D59) can be tested. Only UD-Q4_K_M downloads.
+MORE_VARIANTS = {
+    "UD-IQ2_XXS": 7_266_070_528,
+    "UD-Q2_K_XL": 9_828_981_664,
+    "Q4_0": 16_056_478_688,
+    "UD-Q4_K_XL": 17_559_178_144,
+    "Q8_0": 29_047_086_048,
+    "UD-Q8_K_XL": 31_457_991_680,
+}
+Q4_K_M_BYTES = 16_464_440_224
+
+
+def more_variants(repo: models.RemoteRepo) -> list[models.RemoteFile]:
+    base = next(f for f in repo.files if f.name.endswith("-UD-Q4_K_M.gguf"))
+    stem = base.name.removesuffix("-UD-Q4_K_M.gguf")
+    files = [
+        models.RemoteFile(
+            f"{stem}-{name}.gguf",
+            max(1, base.size * size // Q4_K_M_BYTES),
+            True,
+            base.header,
+            base.seed + name.encode(),
+        )
+        for name, size in MORE_VARIANTS.items()
+    ]
+    files.append(models.RemoteFile("imatrix_unsloth.gguf", 4096, True, b"GGUF", b"imatrix"))
+    return files
 
 
 def legacy_manifest() -> dict:
