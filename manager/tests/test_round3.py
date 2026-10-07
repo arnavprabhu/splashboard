@@ -62,7 +62,7 @@ def test_values_go_to_the_store_and_come_back_masked(
     assert secrets.get_text(secret_name("gh", "env", "GITHUB_TOKEN")) == TOKEN
     assert secrets.get_text(secret_name("web", "headers", "Authorization")) == HEADER
     assert client.get("/api/admin/mcp/servers").json()["servers"]["gh"]["env"] == saved["gh"]["env"]
-    assert TOKEN not in json.dumps(client.get("/api/admin/diagnostics").json())
+    assert TOKEN not in json.dumps(client.post("/api/admin/diagnostics").json())
 
 
 def test_unchanged_reference_keeps_new_string_replaces_removal_deletes(
@@ -193,6 +193,7 @@ def test_lan_bind_with_admin_sign_in_saves(client: TestClient) -> None:
     document = client.get("/api/admin/settings").json()["settings"]
     document["global"]["server"]["host"] = "0.0.0.0"  # noqa: S104
     document["global"]["security"]["api_key_required"] = True
+    document["global"]["security"]["admin_requires_key"] = False
     refused = client.put("/api/admin/settings", json=document)
     assert refused.json()["error"]["issues"][0]["code"] == "lan_requires_admin_key"
     assert client.get("/api/admin/settings").json()["settings"]["global"]["server"]["host"] == (
@@ -210,7 +211,7 @@ def test_no_row_warns_about_a_plaintext_key_from_splash_1_3(client: TestClient) 
     document = client.get("/api/admin/settings").json()["settings"]
     document["global"]["security"]["api_key_required"] = True
     assert client.put("/api/admin/settings", json=document).status_code == 200
-    rows = {r["name"]: r for r in client.get("/api/admin/integrations").json()["cli"]}
+    rows = {r["name"]: r for r in client.post("/api/admin/integrations").json()["cli"]}
     assert not any("plaintext_key_warning" in r for r in rows.values())
     assert rows["hermes"]["changes"]["notes"][1:] == [
         "The profile's api_key is `${SPLASH_API_KEY}`; the key itself is never saved.",
@@ -295,9 +296,9 @@ def test_print_and_changes_use_the_bound_port(
     service = IntegrationsService(state, home=tmp_path / "home")
     monkeypatch.setattr(state, "integrations", service)
     monkeypatch.setattr(state, "bound", ("127.0.0.1", 9123))
-    claude = client.get("/api/admin/integrations/claude/print", params={"model": MODEL}).json()
+    claude = client.post("/api/admin/integrations/claude/print", params={"model": MODEL}).json()
     assert claude["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:9123"
-    hermes = client.get("/api/admin/integrations/hermes/print", params={"model": MODEL}).json()
+    hermes = client.post("/api/admin/integrations/hermes/print", params={"model": MODEL}).json()
     assert hermes["files"][0]["path"].endswith("/profiles/splash-9123/config.yaml")
 
 
@@ -343,7 +344,7 @@ async def test_a_symlinked_config_is_edited_at_its_target(svc: Any) -> None:
     link.parent.mkdir(parents=True)
     link.symlink_to(real)
     await svc.connect("codex-app", confirm=False)
-    assert link.is_symlink() and b"/api/codex/v1" in real.read_bytes()
+    assert link.is_symlink() and b"/api/codex/t/" in real.read_bytes()
     await svc.disconnect("codex-app")
     assert link.is_symlink() and real.read_bytes() == original
 

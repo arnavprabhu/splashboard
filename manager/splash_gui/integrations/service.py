@@ -6,6 +6,7 @@ import asyncio
 import base64
 import contextlib
 import json
+import logging
 import os
 import re
 import shlex
@@ -36,9 +37,12 @@ from ..schemas import (
     PrintedFile,
     RestoreAllResult,
 )
+from ..secrets import SecretName, SecretsError
 from ..settings import parsers
 from ..usage.db import iso
 from .snapshots import encode_document, read_document, restore, snapshot
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..state import ManagerState
@@ -538,8 +542,16 @@ class IntegrationsService:
             desktop["enabled-reasoning-efforts"] = list(
                 dict.fromkeys([*desktop.get("enabled-reasoning-efforts", []), "none", "max"])
             )
+            # D58: a scoped, revocable router token in the base URL's path. The
+            # built-in `openai` provider keeps the user's own sign-in in
+            # Authorization (forwarded upstream), and Codex refuses header or
+            # bearer settings on it, so the path is where our credential can go.
+            try:
+                token = self.state.secrets.generate(SecretName.CODEX_ROUTER, prefix="")
+            except SecretsError as error:
+                raise ApiError(503, str(error), "keychain_unavailable") from None
             values: dict[str, Any] = {
-                "openai_base_url": f"http://127.0.0.1:{self.public_port()}/api/codex/v1",
+                "openai_base_url": f"http://127.0.0.1:{self.public_port()}/api/codex/t/{token}/v1",
                 "model_catalog_json": str(folder / "models.json"),
                 "desktop": desktop,
             }
@@ -598,7 +610,7 @@ class IntegrationsService:
                 config = read_document(self.home / ".codex" / "config.toml")
             except (OSError, ValueError):
                 config = {}
-            applied = "/api/codex/v1" in str(config.get("openai_base_url", ""))
+            applied = "/api/codex/" in str(config.get("openai_base_url", ""))
         if applied:
             backups = self.state.paths.integrations_backups / name
             raise ApiError(
@@ -695,6 +707,8 @@ class IntegrationsService:
         record = self.records.get(name)
         if not record:
             return self.desktop(name)
+        if name == "codex-app":
+            self.revoke_router_token()
         self.progress(name, "restoring", "quitting_app")
         running = await self.quit_app(name)
         self.progress(name, "restoring", "restoring_files", "Restoring the previous configuration…")
@@ -728,6 +742,13 @@ class IntegrationsService:
             self.open_app(name, app)
         self.progress(name, "not_connected", "done")
         return self.desktop(name)
+
+    def revoke_router_token(self) -> None:
+        """D58: the Codex app's router URL stops working the moment it is restored."""
+        try:
+            self.state.secrets.delete(SecretName.CODEX_ROUTER)
+        except SecretsError:
+            log.warning("could not delete the Codex router token", exc_info=True)
 
     async def disconnect(self, name: str) -> DesktopIntegration:
         async with self.lock:

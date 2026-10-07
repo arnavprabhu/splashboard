@@ -20,6 +20,7 @@ import pytest
 from splash_gui.errors import ApiError
 from splash_gui.integrations.service import IntegrationsService
 from splash_gui.integrations.snapshots import read_document
+from splash_gui.secrets import SecretName
 
 from .fakeengine import MODEL
 
@@ -128,9 +129,12 @@ async def test_disconnect_restores_every_file_byte_for_byte(service):
 
     await service.connect("codex-app", confirm=False)
     assert config.read_bytes() != original, "connecting must change the user's config"
+    token = service.state.secrets.get(SecretName.CODEX_ROUTER)
+    assert token and token.encode() in config.read_bytes()
 
     result = await service.disconnect("codex-app")
     assert result.state == "not_connected"
+    assert service.state.secrets.get(SecretName.CODEX_ROUTER) is None, "D58: token revoked"
     assert config.read_bytes() == original, "the user's config.toml must come back exactly"
     assert json.loads(auth.read_text())["OPENAI_API_KEY"] == "sk-user-token"
 
@@ -177,6 +181,7 @@ async def test_reconnecting_after_a_crash_is_recoverable(service, monkeypatch):
     result = await revived.restore_all()
     assert result.restored == ["codex-app"], [e.model_dump() for e in result.errors]
     assert not result.errors
+    assert service.state.secrets.get(SecretName.CODEX_ROUTER) is None
     assert not (service.home / ".codex" / "config.toml").exists()
 
 
@@ -368,14 +373,43 @@ def test_codex_only_serves_the_routed_endpoints(harness_factory):
     harness = harness_factory(installed=())
     _allow(harness, MODEL)
     _connected(harness)
+    key = {"Authorization": f"Bearer {harness.state.secrets.get(SecretName.API_KEY)}"}
     for allowed in ("responses", "chat/completions", "completions"):
-        response = harness.client.post(f"/api/codex/v1/{allowed}", json={"model": MODEL})
+        response = harness.client.post(
+            f"/api/codex/v1/{allowed}", json={"model": MODEL}, headers=key
+        )
         body = response.json()
         assert "error" in body, f"{allowed} must be answered locally, got {response.text}"
         assert "code" in body["error"], body
     # An endpoint outside the routed set is refused rather than passed on.
-    other = harness.client.post("/api/codex/v1/embeddings", json={"model": MODEL})
+    other = harness.client.post("/api/codex/v1/embeddings", json={"model": MODEL}, headers=key)
     assert other.status_code == 404
+
+
+def test_codex_router_needs_a_credential_for_splash_models(harness_factory):
+    """D58: the router used to serve Splash models to any local process."""
+    harness = harness_factory(installed=())
+    _allow(harness, MODEL)
+    _connected(harness)
+    secrets = harness.state.secrets
+    for headers in ({}, {"Authorization": "Bearer sk-openai-user"}, {"x-api-key": "wrong"}):
+        refused = harness.client.post(
+            "/api/codex/v1/responses", json={"model": MODEL}, headers=headers
+        )
+        assert refused.status_code == 401, headers
+        assert refused.json()["error"]["type"] == "authentication_error"
+    # The router token in the path (what Connect writes).
+    token = secrets.generate(SecretName.CODEX_ROUTER, prefix="")
+    ok = harness.client.post(f"/api/codex/t/{token}/v1/responses", json={"model": MODEL})
+    assert "error" not in ok.json() or ok.json()["error"]["code"] != "invalid_router_token"
+    assert ok.status_code != 401
+    wrong = harness.client.post("/api/codex/t/not-the-token/v1/responses", json={"model": MODEL})
+    assert wrong.status_code == 401
+    assert wrong.json()["error"]["code"] == "invalid_router_token"
+    # Revoked: the same URL stops working at once.
+    secrets.delete(SecretName.CODEX_ROUTER)
+    gone = harness.client.post(f"/api/codex/t/{token}/v1/responses", json={"model": MODEL})
+    assert gone.status_code == 401
 
 
 def test_a_model_outside_the_allow_list_goes_upstream_not_to_splash(harness_factory):
@@ -551,7 +585,9 @@ async def test_codex_catalog_lists_splash_first_then_native(service, monkeypatch
     assert efforts == ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
     assert catalog[-1] == {**native[0], "supported_in_api": False}
     config = read_document(service.home / ".codex" / "config.toml")
-    assert config["openai_base_url"] == "http://127.0.0.1:8000/api/codex/v1"
+    token = service.state.secrets.get(SecretName.CODEX_ROUTER)
+    assert token and len(token) >= 43
+    assert config["openai_base_url"] == f"http://127.0.0.1:8000/api/codex/t/{token}/v1"
     assert "model_provider" not in config and "profile" not in config and "model" not in config
     assert {"none", "max"} <= set(config["desktop"]["enabled-reasoning-efforts"])
 

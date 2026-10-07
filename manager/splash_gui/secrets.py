@@ -32,6 +32,7 @@ class SecretName(StrEnum):
     API_KEY = "ai.splashgui.apikey"
     HF_TOKEN = "ai.splashgui.hf"  # noqa: S105 (a Keychain service name)
     SESSION = "ai.splashgui.session"
+    CODEX_ROUTER = "ai.splashgui.codexrouter"  # D58: the Codex app's router token
 
 
 class SecretsError(RuntimeError):

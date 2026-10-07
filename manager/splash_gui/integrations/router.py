@@ -1,7 +1,15 @@
-"""Loopback-only Codex routing; upstream credentials never reach Splash."""
+"""Loopback-only Codex routing; upstream credentials never reach Splash.
+
+D58: requests for a Splash model need a credential. Connect writes
+`/api/codex/t/<router token>/v1` as the Codex app's `openai_base_url`; the token is in
+the Keychain (`ai.splashgui.codexrouter`) and Disconnect/Restore delete it. The plain
+`/api/codex/v1` path (configs written before D58) needs the API key for Splash models.
+Requests for the app's own models go upstream with the caller's own credentials.
+"""
 
 from __future__ import annotations
 
+import hmac
 import json
 from typing import Any, cast
 
@@ -11,6 +19,7 @@ from starlette.background import BackgroundTask
 from starlette.responses import StreamingResponse
 
 from ..auth.guard import is_loopback_client
+from ..secrets import SecretName, SecretsError
 from ..settings.parsers import parse_authority
 from ..state import get_state
 
@@ -40,10 +49,53 @@ def local_only(request: Request) -> bool:
     )
 
 
+def _unauthorized(message: str, code: str) -> Response:
+    return Response(
+        json.dumps({"error": {"message": message, "type": "authentication_error", "code": code}}),
+        status_code=401,
+        media_type="application/json",
+    )
+
+
+def _matches(value: str | None, secret: str | None) -> bool:
+    return bool(value and secret) and hmac.compare_digest(str(value).encode(), str(secret).encode())
+
+
+def _secret(request: Request, name: SecretName) -> str | None:
+    try:
+        return get_state(request).secrets.get(name)
+    except SecretsError:
+        return None
+
+
+def _api_key_given(request: Request) -> bool:
+    key = _secret(request, SecretName.API_KEY)
+    authorization = request.headers.getlist("authorization")
+    supplied = list(request.headers.getlist("x-api-key"))
+    for value in authorization:
+        scheme, _, token = value.partition(" ")
+        if scheme.lower() == "bearer":
+            supplied.append(token.strip())
+    return any(_matches(value, key) for value in supplied)
+
+
+@router.api_route("/api/codex/t/{token}/v1/{path:path}", methods=["GET", "POST", "DELETE"])
+async def codex_with_token(request: Request, token: str, path: str) -> Response:
+    if not local_only(request):
+        return Response(status_code=403)
+    if not _matches(token, _secret(request, SecretName.CODEX_ROUTER)):
+        return _unauthorized("invalid Codex router token", "invalid_router_token")
+    return await _route(request, path, authorized=True)
+
+
 @router.api_route("/api/codex/v1/{path:path}", methods=["GET", "POST", "DELETE"])
 async def codex(request: Request, path: str) -> Response:
     if not local_only(request):
         return Response(status_code=403)
+    return await _route(request, path, authorized=_api_key_given(request))
+
+
+async def _route(request: Request, path: str, *, authorized: bool) -> Response:
     if request.headers.get("upgrade", "").lower() == "websocket":
         return Response(status_code=426)
     state = get_state(request)
@@ -60,6 +112,8 @@ async def codex(request: Request, path: str) -> Response:
             return Response(status_code=400)
     allow = json.loads((state.paths.codex_app_dir / "routing.json").read_text())
     if body.get("model") in allow and request.method == "POST":
+        if not authorized:
+            return _unauthorized("invalid or missing API key", "authentication_error")
         if path not in ("responses", "chat/completions", "completions"):
             return Response(status_code=404)
         return cast(
