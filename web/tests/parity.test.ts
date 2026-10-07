@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import { modelIdError } from '../src/lib/model-id';
 import { parseMaxCacheDisk, parseMaxContext, parseMaxMemory, parseRequestSize } from '../src/lib/size';
-import { SPLASH_MESSAGES, durationSeconds, idleReleaseError } from '../src/routes/settings/validate';
+import { SPLASH_MESSAGES, durationSeconds, fieldError, idleReleaseError } from '../src/routes/settings/validate';
 
 type SpawnSync = (
   cmd: string,
@@ -136,4 +136,17 @@ describe.skipIf(!available)(`parity with Splash's parsers (${SOURCE ?? 'unavaila
       expect(rows.filter((r) => JSON.stringify(r.splash) !== JSON.stringify(r.web))).toEqual([]);
     });
   }
+});
+
+describe('Settings: Release weights when idle', () => {
+  const rule = { key: 'serve.idle_release', control: 'text' };
+
+  it('refuses a cleared field, which the manager would reject as null', () => {
+    expect(fieldError(rule, null)).toBe(SPLASH_MESSAGES.idleRelease);
+    expect(fieldError(rule, '  ')).toBe(SPLASH_MESSAGES.idleRelease);
+  });
+
+  it('accepts off and durations', () => {
+    expect([fieldError(rule, 'off'), fieldError(rule, '30m'), fieldError(rule, '600')]).toEqual([null, null, null]);
+  });
 });

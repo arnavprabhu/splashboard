@@ -114,7 +114,8 @@ export function fieldError(rule: FieldRule, value: unknown): string | null {
     case 'serve.request_timeout':
       return value === null || value === undefined || (typeof value === 'number' && value > 0) ? null : SPLASH_MESSAGES.requestTimeout;
     case 'serve.idle_release':
-      return isBlank(value) ? null : idleReleaseError(s);
+      // Blank is not a default here: the manager stores a string and refuses null.
+      return idleReleaseError(s);
     case 'serve.queue_size':
       return typeof value === 'number' && Number.isInteger(value) && value >= 1 ? null : SPLASH_MESSAGES.queueSize;
     case 'serve.served_model_names':
