@@ -886,7 +886,11 @@ class IntegrationsService:
         except BaseException:
             sock.close()
             raise
-        config = uvicorn.Config(app, log_level="warning", lifespan="off")
+        # Bounded like the manager's own drain: Disconnect and the shutdown restore
+        # wait for this server, and a kept-alive connection would hold them forever.
+        config = uvicorn.Config(
+            app, log_level="warning", lifespan="off", timeout_graceful_shutdown=5
+        )
         self.gateway = GatewayServer(config)
         self.gateway_task = asyncio.create_task(self.gateway.serve(sockets=[sock]))
         try:

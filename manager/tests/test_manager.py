@@ -4,16 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
+import signal
 import socket
+import subprocess
+import sys
 import threading
 import time
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
+from websockets.exceptions import ConnectionClosed
+from websockets.sync.client import connect as ws_connect
 
 from splash_gui import manager
 from splash_gui.app import AppConfig, create_app
@@ -21,6 +28,7 @@ from splash_gui.paths import Paths
 from splash_gui.secrets import SecretName, SecretStore
 
 from .conftest import mode
+from .fakeengine import FAKE_BIN
 
 
 def test_loopback_bind_needs_no_key(secrets: SecretStore) -> None:
@@ -297,3 +305,95 @@ def test_a_late_rebind_timer_does_nothing_once_the_target_is_cleared(
     runner._target = ("127.0.0.1", 1)
     runner._exit(server)
     assert server.should_exit is True
+
+
+# A manager process whose lifespan shutdown stands in for the integration restore
+# (SPEC §11.4): it takes a moment and leaves a marker when it has finished. argv: port,
+# marker path, and the signal to send itself during the restore ("" for none).
+_STOPPABLE = """
+import asyncio, contextlib, os, signal, sys
+from pathlib import Path
+from fastapi import FastAPI, WebSocket
+from splash_gui import manager
+from splash_gui.app import AppConfig, create_app
+from splash_gui.paths import Paths
+from splash_gui.secrets import MemoryBackend, SecretStore
+
+port, marker, late = int(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+app = create_app(AppConfig(paths=Paths.from_env().ensure(), secrets=SecretStore(MemoryBackend())))
+
+@contextlib.asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield {}
+    if late:
+        os.kill(os.getpid(), getattr(signal, late))
+    await asyncio.sleep(0.3)
+    marker.write_text("restored")
+
+app.router.lifespan_context = lifespan
+
+@app.websocket("/hold")
+async def hold(websocket: WebSocket) -> None:
+    await websocket.accept()
+    while True:
+        await websocket.receive_text()
+
+with contextlib.suppress(KeyboardInterrupt):
+    asyncio.run(manager.ManagerRunner(app, "127.0.0.1", port, log_level="warning").serve())
+"""
+
+
+def _start_stoppable(tmp_path: Path, late: str = "") -> tuple[subprocess.Popen[bytes], int, Path]:
+    port, marker = _free_port(), tmp_path / "restored"
+    # The fake engine, so discovery never reaches the venv's own `splash` entry point.
+    env = {
+        **os.environ,
+        "SPLASH_GUI_REAL_SPLASH": str(FAKE_BIN),
+        "FAKE_SPLASH_PYTHON": sys.executable,
+    }
+    process = subprocess.Popen(
+        [sys.executable, "-c", _STOPPABLE, str(port), str(marker), late], env=env
+    )
+    try:
+        _wait_for(f"http://127.0.0.1:{port}/health")
+    except BaseException:
+        process.kill()
+        raise
+    return process, port, marker
+
+
+@pytest.mark.parametrize("number", [signal.SIGTERM, signal.SIGINT])
+def test_a_signal_during_the_shutdown_restore_does_not_cut_it_short(
+    tmp_path: Path, number: signal.Signals
+) -> None:
+    """A second signal used to find uvicorn's handlers gone once its server returned:
+    SIGTERM killed the manager with 143 before the restore (launchd's KeepAlive then
+    started it again) and SIGINT cancelled the restore."""
+    process, _, marker = _start_stoppable(tmp_path, late=number.name)
+    try:
+        process.send_signal(number)
+        assert process.wait(timeout=10) == 0
+    finally:
+        process.kill()
+    assert marker.read_text() == "restored"
+
+
+def test_one_sigterm_stops_the_manager_with_a_websocket_open(tmp_path: Path) -> None:
+    """A SIGTERM sent to `uv run` and its child at once reaches the manager twice (uv
+    forwards its copy); the WebSocket is closed with 1012 and the restore still runs."""
+    process, port, marker = _start_stoppable(tmp_path)
+    try:
+        with ws_connect(f"ws://127.0.0.1:{port}/hold") as websocket:
+            started = time.monotonic()
+            process.send_signal(signal.SIGTERM)
+            process.send_signal(signal.SIGTERM)
+            with pytest.raises(ConnectionClosed) as closed:
+                websocket.recv(timeout=5)
+            assert closed.value.rcvd is not None and closed.value.rcvd.code == 1012
+            assert process.wait(timeout=5) == 0
+            assert time.monotonic() - started < 3
+    finally:
+        process.kill()
+    assert marker.read_text() == "restored"
+    with pytest.raises(httpx.TransportError):
+        httpx.get(f"http://127.0.0.1:{port}/health", timeout=1)

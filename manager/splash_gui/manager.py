@@ -19,7 +19,6 @@ import sys
 import threading
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
-from types import FrameType
 from typing import Any
 
 import uvicorn
@@ -87,26 +86,14 @@ GRACEFUL_SHUTDOWN_S = 5  # SSE streams never finish on their own
 
 
 class _Server(uvicorn.Server):
-    """A uvicorn server that records a stop signal instead of re-raising it on exit."""
-
-    stop_requested = False
+    """A uvicorn server that leaves the stop signals to `ManagerRunner`."""
 
     @contextlib.contextmanager
     def capture_signals(self) -> Iterator[None]:
-        if threading.current_thread() is not threading.main_thread():
-            yield
-            return
-        handled = (signal.SIGINT, signal.SIGTERM)
-        original = {sig: signal.signal(sig, self.handle_exit) for sig in handled}
-        try:
-            yield
-        finally:
-            for sig, handler in original.items():
-                signal.signal(sig, handler)
-
-    def handle_exit(self, sig: int, frame: FrameType | None) -> None:
-        self.stop_requested = True
-        super().handle_exit(sig, frame)
+        # uvicorn would hold SIGINT/SIGTERM only while this server runs and put the old
+        # handlers back when it returns, before the lifespan shutdown restores the
+        # integrations; the runner keeps them for the whole run instead.
+        yield
 
 
 def bound_addresses(server: uvicorn.Server) -> set[tuple[str, int]]:
@@ -174,6 +161,7 @@ class ManagerRunner:
         # The pending rebind (REBIND_DELAY_S after a save), cancelled by a later save
         # that puts the address back.
         self._timer: threading.Timer | None = None
+        self._signals = 0
 
     def on_settings_saved(self, changes: list[Change], restart_required: bool) -> None:
         if not any(c.key in ("server.host", "server.port") for c in changes):
@@ -219,21 +207,57 @@ class ManagerRunner:
         if current is not None:
             current.should_exit = True
 
+    def handle_signal(self, number: int) -> None:
+        """SIGINT/SIGTERM: stop. A repeat (`uv run` forwards the copy it gets, the menu
+        bar app follows SIGINT with SIGTERM) is only logged: the HTTP drain is bounded by
+        GRACEFUL_SHUTDOWN_S, and the lifespan shutdown after it restores the app
+        integrations (SPEC §11.4) and stops the engine, so it must not be cut short."""
+        self._signals += 1
+        name = signal.Signals(number).name
+        if self._signals == 1:
+            log.info("%s received; stopping", name)
+            self.stop()
+        else:
+            log.info("%s received again; still stopping", name)
+
+    @contextlib.contextmanager
+    def _signal_handlers(self) -> Iterator[None]:
+        """Hold SIGINT and SIGTERM from the lifespan startup to the end of its shutdown.
+        uvicorn alone put the default handlers back as its server returned, so a second
+        signal during the restore (`uv run` forwards its own copy, the menu bar app
+        escalates to SIGTERM) killed the manager with 143 before restoring anything;
+        under the LaunchAgent, whose KeepAlive restarts a failed exit, a new manager
+        then took the port. The loop's wakeup fd also wakes the loop at once, whichever
+        thread took the signal."""
+        if threading.current_thread() is not threading.main_thread():
+            yield  # tests run the runner on a thread; they stop it with stop()
+            return
+        loop = asyncio.get_running_loop()
+        handled = (signal.SIGINT, signal.SIGTERM)
+        for number in handled:
+            loop.add_signal_handler(number, self.handle_signal, number)
+        try:
+            yield
+        finally:
+            for number in handled:
+                loop.remove_signal_handler(number)
+
     async def serve(self) -> None:
         self.state.settings_listeners.append(self.on_settings_saved)
         try:
-            async with self.app.router.lifespan_context(self.app) as lifespan_state:
-                app = _WithLifespanState(self.app, dict(lifespan_state or {}))
-                await self._serve_loop(app)
+            with self._signal_handlers():
+                async with self.app.router.lifespan_context(self.app) as lifespan_state:
+                    app = _WithLifespanState(self.app, dict(lifespan_state or {}))
+                    await self._serve_loop(app)
         finally:
             self.state.settings_listeners.remove(self.on_settings_saved)
             self.state.bound = None
 
-    def _finish(self, server: _Server) -> tuple[str, int] | None:
-        """Where to listen next after `server` exited, or None to stop."""
+    def _finish(self) -> tuple[str, int] | None:
+        """Where to listen next after the server exited, or None to stop."""
         with self._lock:
             self._server = None
-            return None if (server.stop_requested or self._stopped) else self._target
+            return None if self._stopped else self._target
 
     async def _serve_loop(self, app: ASGIApp) -> None:
         while True:
@@ -259,7 +283,7 @@ class ManagerRunner:
             self.state.bound = (self.host, self.port)
             log.info("Splash GUI manager %s listening on %s:%s", __version__, self.host, self.port)
             await server.serve()
-            target = self._finish(server)
+            target = self._finish()
             if target is None:
                 return
             if not server.started:
