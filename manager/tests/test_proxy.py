@@ -859,3 +859,55 @@ def test_raw_to_engine_while_stopped(harness_factory: H) -> None:
     h = harness_factory()
     response = h.client.post("/api/admin/engine/raw/tokenize", json={"content": "x"})
     assert response.status_code == 503 and response.headers["retry-after"] == "5"
+
+
+# --- Splash 1.3.0: retryable overloads and each API's error format ------------------------
+
+SYSTEMONE = {"model": MODEL, "state": "s", "questions": {"q": {"type": "noul"}}}
+
+
+def test_engine_overload_keeps_its_retry_after_in_each_apis_format(h_ready: EngineHarness):
+    """1.3.0 answers an overload with a retryable 503 + Retry-After: 1 (529 on
+    /v1/systemone), in the requested API's format; the proxy passes all of it on."""
+    h = h_ready
+    h.fake("POST", "/_fake/mode", {"mode": "queue_full"})
+    chat = h.client.post("/v1/chat/completions", json={"model": MODEL, **CHAT})
+    assert (chat.status_code, chat.headers["retry-after"]) == (503, "1")
+    assert chat.json() == {
+        "error": {
+            "message": "frontend request capacity is exhausted",
+            "type": "server_error",
+            "code": "frontend_overloaded",
+        }
+    }
+    messages = h.client.post(
+        "/v1/messages",
+        json={"model": MODEL, "max_tokens": 4, "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert (messages.status_code, messages.headers["retry-after"]) == (503, "1")
+    assert messages.json() == {
+        "type": "error",
+        "error": {"type": "overloaded_error", "message": "frontend request capacity is exhausted"},
+    }
+    systemone = h.client.post("/v1/systemone", json=SYSTEMONE)
+    assert (systemone.status_code, systemone.headers["retry-after"]) == (529, "1")
+
+
+def test_the_managers_own_systemone_errors_answer_as_splash_does(harness_factory: H) -> None:
+    h = harness_factory()  # installed, not loaded, auto-load off: the engine is stopped
+    h.patch_settings({"global": {"routing": {"auto_load": False}}})
+    stopped = h.client.post("/v1/systemone", json=SYSTEMONE)
+    assert stopped.status_code == 529 and stopped.headers["retry-after"] == "5"
+    assert stopped.json()["error"]["code"] == "engine_unavailable"
+    invalid = h.client.post(
+        "/v1/systemone", content=b"{nope", headers={"content-type": "application/json"}
+    )
+    assert invalid.status_code == 422
+    assert invalid.json() == {
+        "detail": [{"loc": ["body"], "msg": "invalid JSON request body", "type": "value_error"}]
+    }
+    chat = h.client.post(
+        "/v1/chat/completions", content=b"[]", headers={"content-type": "application/json"}
+    )
+    assert chat.status_code == 400
+    assert chat.json()["error"]["message"] == "request body must be an object"

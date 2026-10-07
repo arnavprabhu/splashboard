@@ -104,6 +104,7 @@ class ProxyError(Exception):
         *,
         headers: dict[str, str] | None = None,
         details: dict[str, Any] | None = None,
+        validation: bool = False,
     ) -> None:
         super().__init__(message)
         self.status = status
@@ -111,13 +112,29 @@ class ProxyError(Exception):
         self.code = code
         self.headers = headers or {}
         self.details = details
+        # A body that is not a JSON object: Splash's RequestValidationError.
+        self.validation = validation
 
     def response(
-        self, anthropic: bool = False, extra: dict[str, str] | None = None
+        self,
+        anthropic: bool = False,
+        extra: dict[str, str] | None = None,
+        *,
+        systemone: bool = False,
     ) -> JSONResponse:
         headers = {**self.headers, **(extra or {})}
         if self.status == 401:
             headers.setdefault("WWW-Authenticate", "Bearer")
+        if systemone:
+            # server/errors.py SystemOneErrors (1.3.0): invalid fields are 422 with
+            # FastAPI's `detail`, an overload is TypeSafe's 529; the rest as OpenAI's.
+            if self.validation:
+                detail = [{"loc": ["body"], "msg": self.message, "type": "value_error"}]
+                return JSONResponse({"detail": detail}, status_code=422, headers=headers)
+            if self.status == 503:
+                return ProxyError(
+                    529, self.message, self.code, headers=headers, details=self.details
+                ).response()
         if anthropic:
             kind = {
                 400: "invalid_request_error",
@@ -519,6 +536,7 @@ class ProxyPipeline:
     ) -> Response:
         """One generation-shaped request (`POST /v1/...`, `/tokenize`, `/apply-template`)."""
         anthropic = path.startswith("/v1/messages")
+        systemone = path == "/v1/systemone"
         allow_origin: str | None = None
         cors: dict[str, str] = {}
         try:
@@ -530,7 +548,7 @@ class ProxyPipeline:
                 body = {**body, "model": rewrite_model}
             route = await self.route(request, body.get("model"))
         except ProxyError as error:
-            return error.response(anthropic, cors)
+            return error.response(anthropic, cors, systemone=systemone)
         if route.model is not None and self.sup.active_model() != route.model:
             # Another request switched the engine while this one waited for its
             # model (review R32): never forward to the wrong model.
@@ -541,7 +559,7 @@ class ProxyPipeline:
                 "model_switch_busy",
                 headers={"Retry-After": "10"},
                 details={"active": self.sup.active_model(), "requested": route.model},
-            ).response(anthropic, cors)
+            ).response(anthropic, cors, systemone=systemone)
         shape: Shape = SHAPES.get(path, "other")
         overlay = {**route.overlay, **(extra_overlay or {})}
         injected: dict[str, Any] = {}
@@ -570,9 +588,14 @@ class ProxyPipeline:
         try:
             data = json.loads(raw) if raw else {}
         except ValueError:
-            raise ProxyError(400, "request body must be JSON", "invalid_request_error") from None
+            # server/server.py _read_json_body (1.3.0) words both refusals so.
+            raise ProxyError(
+                400, "invalid JSON request body", "invalid_request_error", validation=True
+            ) from None
         if not isinstance(data, dict):
-            raise ProxyError(400, "request body must be a JSON object", "invalid_request_error")
+            raise ProxyError(
+                400, "request body must be an object", "invalid_request_error", validation=True
+            )
         return data
 
     async def _forward(
@@ -591,8 +614,9 @@ class ProxyPipeline:
         record: bool = True,
     ) -> Response:
         sup = self.sup
+        systemone = path == "/v1/systemone"
         if sup is None or not sup.accepting or sup.base_url is None:
-            return unavailable().response(anthropic, cors)
+            return unavailable().response(anthropic, cors, systemone=systemone)
         request_id = "req_" + uuid.uuid4().hex[:24]
         headers = self._engine_headers(request, sup.internal_key)
         content = None
@@ -641,7 +665,7 @@ class ProxyPipeline:
                     request_id,
                     client_label,
                 )
-            return failure.response(anthropic, cors)
+            return failure.response(anthropic, cors, systemone=systemone)
         out_headers = {
             k: v for k, v in upstream.headers.items() if k.lower() in FORWARD_RESPONSE_HEADERS
         }

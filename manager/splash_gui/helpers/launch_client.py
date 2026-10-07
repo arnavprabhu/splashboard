@@ -7,8 +7,8 @@ import shutil
 import sys
 
 # D46: Codex sends the user's ChatGPT Apps connectors as namespace tools, and
-# Splash 1.2.0 rejects any tool name over 64 characters ("invalid namespace tool
-# name", server/api_shapes.py:471). Turning the `apps` feature off is a `-c`
+# Splash 1.2.0 through 1.3.0 rejects any tool name over 64 characters ("invalid namespace tool
+# name", server/api_shapes.py:468-475 at 1.3.0). Turning the `apps` feature off is a `-c`
 # override, so it applies to this session only; plain `codex` keeps it (D18).
 CODEX_SESSION_ARGS = ("-c", "features.apps=false")
 
