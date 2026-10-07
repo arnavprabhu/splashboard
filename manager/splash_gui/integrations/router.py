@@ -24,7 +24,7 @@ from ..auth.guard import is_loopback_client
 from ..secrets import SecretName, SecretsError
 from ..settings.parsers import parse_authority
 from ..state import get_state
-from . import tool_names
+from . import tool_names, tool_search
 
 log = logging.getLogger(__name__)
 router = APIRouter(include_in_schema=False)
@@ -145,7 +145,12 @@ async def _route(request: Request, path: str, *, authorized: bool) -> Response:
             return Response(status_code=404)
         names = None
         if path == "responses":
-            body, names = tool_names.alias_request(_local_tools(body))
+            # Q37/D64: Codex's client-run tool search in shapes Splash takes, before
+            # the hosted-tool filter would drop its `tool_search` tool.
+            search = tool_search.has_search(body)
+            if search:
+                body = tool_search.to_splash(body)
+            body, names = tool_names.alias_request(_local_tools(body), search=search)
         answer = cast(
             Response,
             await state.proxy.handle(

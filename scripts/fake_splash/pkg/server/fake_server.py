@@ -1180,6 +1180,13 @@ class FakeHandler(BaseHTTPRequestHandler):
                 )
             elif kind == "function_call_output":
                 messages.append({"role": "tool", "content": fake_text.content_text(item.get("output"))})
+            elif kind != "reasoning":
+                # api_shapes.py `normalize_responses_input` (1.3.0, lines 449-454): Codex's
+                # tool_search_call / tool_search_output items are refused like this.
+                raise APIError(
+                    400,
+                    "only message, reasoning, function_call, and function_call_output input items are supported",
+                )
         if not messages:
             raise APIError(400, "input must be a non-empty string or array")
         return messages

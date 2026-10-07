@@ -162,3 +162,24 @@ def test_responses_namespace_tools_follow_splash_rules(engine):
     assert (status, error["error"]["message"]) == (400, "invalid namespace tool name")
     status, error = engine.json("POST", "/v1/responses", {"input": "x", "tools": [{**child, "name": "a.b"}]})
     assert (status, error["error"]["message"]) == (400, "tool name must match [A-Za-z0-9_-]{1,128}")
+
+
+def test_responses_refuse_codex_tool_search_shapes(engine):
+    """api_shapes.py (1.3.0): only function and namespace tools (lines 494-517) and
+    message, reasoning, function_call and function_call_output items (lines 449-454)."""
+    search = {"type": "tool_search", "execution": "client", "description": "", "parameters": {"type": "object"}}
+    status, error = engine.json("POST", "/v1/responses", {"input": "x", "tools": [search]})
+    assert (status, error["error"]["message"]) == (400, "only function tools are supported, not 'tool_search'")
+    for item in (
+        {"type": "tool_search_call", "call_id": "s1", "execution": "client", "arguments": {"query": "repl"}},
+        {"type": "tool_search_output", "call_id": "s1", "status": "completed", "execution": "client", "tools": []},
+    ):
+        history = [{"type": "message", "role": "user", "content": "x"}, item]
+        status, error = engine.json("POST", "/v1/responses", {"input": history, "store": False})
+        assert (status, error["error"]["message"]) == (
+            400,
+            "only message, reasoning, function_call, and function_call_output input items are supported",
+        )
+    reasoning = {"type": "reasoning", "summary": [], "content": [{"type": "reasoning_text", "text": "hm"}]}
+    history = [{"type": "message", "role": "user", "content": "x"}, reasoning]
+    assert engine.json("POST", "/v1/responses", {"input": history, "store": False})[0] == 200

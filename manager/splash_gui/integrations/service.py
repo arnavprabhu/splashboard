@@ -551,6 +551,10 @@ class IntegrationsService:
                         "support_verbosity": False,
                         "experimental_supported_tools": [],
                         "base_instructions": instructions,
+                        # Q37/D64: Codex defers MCP and connector tools behind its
+                        # client-run `tool_search` (codex-rs spec_plan.rs
+                        # `search_tool_enabled`); the router adapts it for Splash.
+                        "supports_search_tool": True,
                     }
                 )
             for entry in native:

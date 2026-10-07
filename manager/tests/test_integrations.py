@@ -912,6 +912,8 @@ async def test_codex_catalog_entry_has_the_fields_codex_requires(service, monkey
     }
     assert entry["experimental_supported_tools"] == []
     assert entry["base_instructions"] == "A"
+    # Q37/D64: Codex defers MCP and connector tools behind its tool search.
+    assert entry["supports_search_tool"] is True
 
 
 CHATGPT_CODEX = Path("/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex")
@@ -934,8 +936,9 @@ async def test_codex_app_parses_the_generated_catalog(service, tmp_path):
         timeout=60,
     )
     assert result.returncode == 0, result.stderr
-    slugs = [m["slug"] for m in json.loads(result.stdout)["models"]]
-    assert slugs[0] == "mlx-community/Qwen3.6-35B-A3B-4bit"
+    models = json.loads(result.stdout)["models"]
+    assert models[0]["slug"] == "mlx-community/Qwen3.6-35B-A3B-4bit"
+    assert models[0]["supports_search_tool"] is True  # Q37/D64
 
 
 async def test_codex_open_goes_to_a_new_thread(service, monkeypatch):
@@ -1435,3 +1438,371 @@ def test_codex_router_never_renames_tools_for_native_models(harness_factory, mon
     assert frames == events
     sent = json.loads(seen[0].content)
     assert sent["tools"] == APP_TOOLS and sent["tool_choice"] == CALL_LONG
+
+
+# --- Codex router: on-demand tool search for Splash models (Q37, D64) ----------------
+
+# What Codex 0.162 sends when the catalog entry has `supports_search_tool`
+# (codex-rs core/src/tools/handlers/tool_search_spec.rs): one client-run search tool in
+# place of every MCP and connector tool.
+SEARCH_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "query": {"type": "string", "description": "Search query for deferred tools."},
+        "limit": {
+            "type": "number",
+            "description": "Maximum number of tools to return. Defaults to 8.",
+        },
+    },
+    "required": ["query"],
+    "additionalProperties": False,
+}
+SEARCH_TOOL = {
+    "type": "tool_search",
+    "execution": "client",
+    "description": "# Tool discovery\n\nSearches over deferred tool metadata with BM25.",
+    "parameters": SEARCH_PARAMETERS,
+}
+SEARCH_TOOLS = [APP_TOOLS[0], SEARCH_TOOL, APP_TOOLS[-1]]
+SEARCH_FUNCTION = {
+    "type": "function",
+    "name": "tool_search",
+    "description": SEARCH_TOOL["description"],
+    "parameters": SEARCH_PARAMETERS,
+}
+# A tool_search_output as codex-rs builds it (core/src/tools/context.rs
+# `ToolSearchOutput::to_response_item`): found tools as namespaces, `defer_loading` set.
+FOUND: list[dict[str, Any]] = [
+    {
+        "type": "namespace",
+        "name": TABLEAU,
+        "description": "Tableau Pulse metrics.",
+        "tools": [
+            {
+                "type": "function",
+                "name": LONG,
+                "description": "List Pulse metrics for a metric definition.",
+                "strict": False,
+                "defer_loading": True,
+                "parameters": OBJECT,
+            }
+        ],
+    },
+    {
+        "type": "namespace",
+        "name": "mcp__node_repl",
+        "description": "Node REPL.",
+        "tools": [
+            {
+                "type": "function",
+                "name": "js",
+                "description": "Run JavaScript in a persistent Node REPL.",
+                "defer_loading": True,
+                "parameters": OBJECT,
+            }
+        ],
+    },
+]
+
+
+def _connector_tools(count: int) -> list[dict[str, Any]]:
+    """`count` connector tools inline, as Codex sends them without tool search."""
+    schema = {
+        "type": "object",
+        "properties": {
+            f"field_{i}": {"type": "string", "description": "x" * 120} for i in range(8)
+        },
+    }
+    return [
+        {
+            "type": "namespace",
+            "name": f"mcp__codex_apps__connector_{n // 30}",
+            "description": "A ChatGPT Apps connector.",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": f"action_{n}",
+                    "description": "Does one thing in a connected app. " * 10,
+                    "parameters": schema,
+                }
+            ],
+        }
+        for n in range(count)
+    ]
+
+
+def _search_call(frames: list[dict[str, Any]]) -> dict[str, Any]:
+    item: dict[str, Any]
+    (item,) = [
+        f["item"]
+        for f in frames
+        if f["type"] == "response.output_item.done" and f["item"]["type"] == "tool_search_call"
+    ]
+    return item
+
+
+def test_codex_tool_search_keeps_the_engine_request_small(harness_factory):
+    """Inline, 600 connector tools are what overflowed the owner's context; behind
+    tool_search the engine sees one function, and after a search only what was found."""
+    h, url = _ws_ready(harness_factory)
+    inline = _create("hi", tools=[APP_TOOLS[0], *_connector_tools(600)])
+    del inline["type"]
+    assert h.client.post(_http(url), json=inline).status_code == 200
+    deferred = _create("hi", tools=SEARCH_TOOLS)
+    del deferred["type"]
+    assert h.client.post(_http(url), json=deferred).status_code == 200
+    before, after = (len(json.dumps(b).encode()) for b in _engine_responses(h))
+    assert before > 900_000
+    assert after < 2_000
+    sent = _engine_responses(h)[1]
+    assert sent["tools"] == [APP_TOOLS[0], SEARCH_FUNCTION]
+
+
+def test_codex_tool_search_call_reaches_codex_as_a_tool_search_call(harness_factory):
+    h, url = _ws_ready(harness_factory)
+    body = _create("find the node repl with tool_search", tools=SEARCH_TOOLS)
+    del body["type"]
+    response = h.client.post(_http(url), json=body)
+    assert response.status_code == 200, response.text
+    (sent,) = _engine_responses(h)
+    assert sent["tools"] == [APP_TOOLS[0], SEARCH_FUNCTION]
+    frames = _sse_frames(response.text)
+    call = _search_call(frames)
+    assert call["execution"] == "client"
+    assert call["arguments"] == {"query": "find the node repl with tool_search"}
+    assert call["call_id"].startswith("call_")
+    added = [f["item"]["type"] for f in frames if f["type"] == "response.output_item.added"]
+    completed = [i["type"] for i in frames[-1]["response"]["output"]]
+    assert [k for k in added if k != "reasoning"] == ["tool_search_call"]
+    assert [k for k in completed if k != "reasoning"] == ["tool_search_call"]
+    assert _calls(frames) == []
+
+    # Non-streamed answers get the same item.
+    response = h.client.post(_http(url), json={**body, "stream": False})
+    (item,) = [i for i in response.json()["output"] if i["type"] != "reasoning"]
+    assert (item["type"], item["execution"]) == ("tool_search_call", "client")
+    assert item["arguments"] == {"query": "find the node repl with tool_search"}
+
+
+def test_codex_found_tools_are_callable_on_the_next_turn(harness_factory):
+    """The tool_search_output's tools reach Splash as tools (a 70-character name
+    aliased), the search items as function items, and the call comes back under the
+    names Codex knows."""
+    h, url = _ws_ready(harness_factory)
+    body = _create("find the tableau metrics tool with tool_search", tools=SEARCH_TOOLS)
+    del body["type"]
+    first = h.client.post(_http(url), json=body)
+    call = _search_call(_sse_frames(first.text))
+    output = {
+        "type": "tool_search_output",
+        "call_id": call["call_id"],
+        "status": "completed",
+        "execution": "client",
+        "tools": FOUND,
+    }
+    body["input"] = [*body["input"], call, output]
+    body["tool_choice"] = CALL_LONG
+    second = h.client.post(_http(url), json=body)
+    assert second.status_code == 200, second.text
+    sent = _engine_responses(h)[1]
+    assert sent["tools"] == [
+        APP_TOOLS[0],
+        SEARCH_FUNCTION,
+        {
+            "type": "namespace",
+            "name": TABLEAU,
+            "description": "Tableau Pulse metrics.",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": LONG_ALIAS,
+                    "description": "List Pulse metrics for a metric definition.",
+                    "strict": False,
+                    "parameters": OBJECT,
+                }
+            ],
+        },
+        {
+            "type": "namespace",
+            "name": "mcp__node_repl",
+            "description": "Node REPL.",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "js",
+                    "description": "Run JavaScript in a persistent Node REPL.",
+                    "parameters": OBJECT,
+                }
+            ],
+        },
+    ]
+    assert sent["input"][1] == {
+        "type": "function_call",
+        "call_id": call["call_id"],
+        "name": "tool_search",
+        "arguments": '{"query":"find the tableau metrics tool with…"}',
+    }
+    assert call["arguments"] == {"query": "find the tableau metrics tool with…"}
+    assert sent["input"][2] == {
+        "type": "function_call_output",
+        "call_id": call["call_id"],
+        "output": "These tools are now available; call them directly:\n"
+        "- mcp__codex_apps__tab__tableau_mcp_only_eol_soo__c8220a4d8a99177b: "
+        "List Pulse metrics for a metric definition.\n"
+        "- mcp__node_repl__js: Run JavaScript in a persistent Node REPL.",
+    }
+    frames = _sse_frames(second.text)
+    assert ("response.output_item.done", TABLEAU, LONG) in _calls(frames)
+    assert LONG_ALIAS not in second.text
+
+    # The call and its output go back; the found tools stay loaded from history.
+    found_call = next(
+        f["item"]
+        for f in frames
+        if f["type"] == "response.output_item.done" and f["item"]["type"] == "function_call"
+    )
+    result = {"type": "function_call_output", "call_id": found_call["call_id"], "output": "3"}
+    body["input"] = [*body["input"], found_call, result]
+    body["tool_choice"] = "auto"
+    third = h.client.post(_http(url), json=body)
+    assert third.status_code == 200, third.text
+    sent = _engine_responses(h)[2]
+    assert sent["input"][3] == {**found_call, "name": LONG_ALIAS}
+    assert sent["input"][4] == result
+    assert [t["name"] for t in sent["tools"]] == [
+        "exec_command",
+        "tool_search",
+        TABLEAU,
+        "mcp__node_repl",
+    ]
+
+
+def test_codex_tool_search_merges_repeated_finds(harness_factory):
+    """Two searches that find tools in one namespace give one namespace, once each."""
+    h, url = _ws_ready(harness_factory)
+    more = {
+        "type": "namespace",
+        "name": "mcp__node_repl",
+        "description": "Node REPL.",
+        "tools": [
+            {**FOUND[1]["tools"][0]},
+            {"type": "function", "name": "js_reset", "parameters": OBJECT, "defer_loading": True},
+            {"type": "custom", "name": "js_freeform", "format": {"type": "text"}},
+        ],
+    }
+    calls = [
+        {"type": "tool_search_call", "call_id": f"s{n}", "execution": "client", "arguments": {}}
+        for n in (1, 2)
+    ]
+    outputs = [
+        {"type": "tool_search_output", "call_id": "s1", "status": "completed",
+         "execution": "client", "tools": [FOUND[1]]},
+        {"type": "tool_search_output", "call_id": "s2", "status": "completed",
+         "execution": "client", "tools": [more]},
+    ]  # fmt: skip
+    body = _create("go", tools=SEARCH_TOOLS)
+    del body["type"]
+    body["input"] = [*body["input"], calls[0], outputs[0], calls[1], outputs[1]]
+    assert h.client.post(_http(url), json=body).status_code == 200
+    (sent,) = _engine_responses(h)
+    (repl,) = [t for t in sent["tools"] if t.get("name") == "mcp__node_repl"]
+    assert [c["name"] for c in repl["tools"]] == ["js", "js_reset"]
+    assert [i["type"] for i in sent["input"]] == [
+        "message",
+        "function_call",
+        "function_call_output",
+        "function_call",
+        "function_call_output",
+    ]
+    assert sent["input"][1]["arguments"] == "{}"
+
+
+def test_codex_websocket_tool_search_across_turns(harness_factory):
+    """Search, then call what was found, on one socket with only new items."""
+    h, url = _ws_ready(harness_factory)
+    with h.client.websocket_connect(url) as ws:
+        ws.send_text(json.dumps(_create("use tool_search for the repl", tools=SEARCH_TOOLS)))
+        first = _turn(ws)
+        assert first[-1]["type"] == "response.completed", first[-1]
+        call = _search_call(first)
+        output = {
+            "type": "tool_search_output",
+            "call_id": call["call_id"],
+            "status": "completed",
+            "execution": "client",
+            "tools": FOUND,
+        }
+        forced = {"type": "function", "namespace": "mcp__node_repl", "name": "js"}
+        ws.send_text(
+            json.dumps(
+                _create(
+                    "",
+                    tools=SEARCH_TOOLS,
+                    tool_choice=forced,
+                    previous_response_id=first[-1]["response"]["id"],
+                    input=[output],
+                )
+            )
+        )
+        second = _turn(ws)
+        assert second[-1]["type"] == "response.completed", second[-1]
+        assert ("response.output_item.done", "mcp__node_repl", "js") in _calls(second)
+    engine = _engine_responses(h)
+    assert [i["type"] for i in engine[1]["input"] if i["type"] != "reasoning"] == [
+        "message",
+        "function_call",
+        "function_call_output",
+    ]
+    (search,) = [i for i in engine[1]["input"] if i["type"] == "function_call"]
+    assert search["name"] == "tool_search"
+    assert [t["name"] for t in engine[1]["tools"]] == [
+        "exec_command",
+        "tool_search",
+        TABLEAU,
+        "mcp__node_repl",
+    ]
+
+
+def test_codex_router_leaves_tool_search_alone_for_native_models(harness_factory, monkeypatch):
+    h, url = _ws_ready(harness_factory)
+    seen: list[httpx.Request] = []
+    call = {
+        "type": "tool_search_call",
+        "call_id": "s1",
+        "execution": "client",
+        "arguments": {"query": "repl"},
+    }
+    events = [
+        {"type": "response.created", "response": {"id": "resp_up"}},
+        {"type": "response.output_item.done", "item": call},
+        {"type": "response.completed", "response": {"id": "resp_up", "output": [call]}},
+    ]
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        text = "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=httpx.ByteStream(text.encode()),
+        )
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(upstream), **kw)
+    )
+    output = {
+        "type": "tool_search_output",
+        "call_id": "s0",
+        "status": "completed",
+        "execution": "client",
+        "tools": FOUND,
+    }
+    body = {**_create("go", tools=SEARCH_TOOLS), "model": "gpt-5-codex"}
+    body["input"] = [*body["input"], {**call, "call_id": "s0"}, output]
+    with h.client.websocket_connect(url, headers={"ChatGPT-Account-ID": "acct-1"}) as ws:
+        ws.send_text(json.dumps(body))
+        frames = _turn(ws)
+    assert frames == events
+    sent = json.loads(seen[0].content)
+    assert sent["tools"] == SEARCH_TOOLS and sent["input"] == body["input"]
