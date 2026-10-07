@@ -19,7 +19,8 @@ export function ApiKeyField({ form }: { form: SettingsForm }) {
   const [shown, setShown] = useState<string | null>(null);
   const [once, setOnce] = useState(false);
   const [left, setLeft] = useState(0);
-  const [sheet, setSheet] = useState<'rotate' | 'delete' | null>(null);
+  // No Remove: the key is the sign-in credential, so the manager refuses to delete it (D58, 409 api_key_in_use).
+  const [sheet, setSheet] = useState<'rotate' | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -68,14 +69,6 @@ export function ApiKeyField({ form }: { form: SettingsForm }) {
       await form.load(true);
       toast(t('settings.secret.rotated'));
     });
-  const remove = () =>
-    run(async () => {
-      await settingsApi.deleteApiKey();
-      setShown(null);
-      setSheet(null);
-      await form.load(true);
-      toast(t('settings.secret.removed'));
-    });
 
   return (
     <div class="field secret-field" data-key="security.api_key">
@@ -109,9 +102,6 @@ export function ApiKeyField({ form }: { form: SettingsForm }) {
               <Button size="s" disabled={busy} onClick={() => setSheet('rotate')}>
                 {t('settings.secret.rotate')}
               </Button>
-              <Button size="s" variant="text" disabled={busy} onClick={() => setSheet('delete')}>
-                {t('settings.secret.remove')}
-              </Button>
             </>
           ) : (
             <Button size="s" variant="solid" loading={busy} onClick={() => void generate()}>
@@ -129,16 +119,6 @@ export function ApiKeyField({ form }: { form: SettingsForm }) {
         onConfirm={generate}
       >
         <p>{t('settings.secret.rotate_body')}</p>
-      </ConfirmSheet>
-      <ConfirmSheet
-        open={sheet === 'delete'}
-        title={t('settings.secret.delete_title')}
-        confirmLabel={t('settings.secret.remove')}
-        busy={busy}
-        onClose={() => setSheet(null)}
-        onConfirm={remove}
-      >
-        <p>{t('settings.secret.delete_body')}</p>
       </ConfirmSheet>
     </div>
   );

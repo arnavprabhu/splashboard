@@ -70,7 +70,7 @@ export default function Downloader() {
       },
       { replace: true },
     );
-  const system = useApi((s) => api.get<SystemInfo>("/system", undefined, s));
+  const system = useApi((s) => api.read<SystemInfo>("/system", undefined, s));
   const storage = useApi((s) => getStorage(s));
   const token = useApi<HfWhoami>((sig) => whoami(sig));
   const who = token.data;

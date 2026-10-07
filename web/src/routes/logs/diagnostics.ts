@@ -1,6 +1,6 @@
 /**
  * Pure helpers for Logs → Diagnostics (docs/ui/06 §5): the diagnostic bundle's text form
- * (rendered client-side from `GET /diagnostics`, docs/ui/README §3), its file name, the raw
+ * (rendered client-side from `POST /diagnostics`, D58, docs/ui/README §3), its file name, the raw
  * `/status` annotations, and the doctor report's text form.
  */
 

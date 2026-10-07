@@ -102,14 +102,14 @@ export function readInspect(v: unknown): InspectResult | null {
   return { id: v.id, badge: v.badge as InspectResult['badge'], variants: [], vision: { available: false }, compatible: v.badge !== 'incompatible', cached: false, checked_at: '', repo_id: v.id.split(':')[0]!, ...v } as InspectResult;
 }
 
-/** GET /inspect with the helper's 20 s timeout; `signal` aborts early. */
+/** POST /inspect (D58, was GET) with the helper's 20 s timeout; `signal` aborts early. */
 export async function inspectModel(id: string, signal?: AbortSignal, refresh = false): Promise<InspectResult> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(new DOMException('timeout', 'TimeoutError')), INSPECT_TIMEOUT_MS);
   const onAbort = () => ctrl.abort();
   signal?.addEventListener('abort', onAbort);
   try {
-    const body = await api.get<unknown>('/inspect', refresh ? { id, refresh: true } : { id }, ctrl.signal);
+    const body = await api.read<unknown>('/inspect', refresh ? { id, refresh: true } : { id }, ctrl.signal);
     const result = readInspect(body);
     if (!result) throw new ApiError(502, { message: 'Unexpected compatibility result', type: 'server_error', code: 'bad_response' });
     return result;

@@ -189,6 +189,12 @@ export const api = {
     request<T>(`${ADMIN}${path}`, { method: 'GET', ...(query ? { query } : {}), ...(signal ? { signal } : {}) }),
   post: <T>(path: string, body?: unknown, signal?: AbortSignal) =>
     request<T>(`${ADMIN}${path}`, { method: 'POST', body: body ?? {}, ...(signal ? { signal } : {}) }),
+  /**
+   * A read that runs programs on the Mac (D58: `/doctor`, `/system`, `/inspect`, …): POST so a
+   * cross-site link or image cannot trigger it; same query parameters and response as the old GET.
+   */
+  read: <T>(path: string, query?: Query, signal?: AbortSignal) =>
+    request<T>(`${ADMIN}${path}`, { method: 'POST', body: {}, ...(query ? { query } : {}), ...(signal ? { signal } : {}) }),
   put: <T>(path: string, body: unknown) => request<T>(`${ADMIN}${path}`, { method: 'PUT', body }),
   del: <T>(path: string, query?: Query) => request<T>(`${ADMIN}${path}`, { method: 'DELETE', ...(query ? { query } : {}) }),
 };

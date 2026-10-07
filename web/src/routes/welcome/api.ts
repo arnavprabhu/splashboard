@@ -46,9 +46,9 @@ async function orNull<T>(p: Promise<T>): Promise<T | null> {
 
 // ---------- system / engine ----------
 
-export const getBrew = (signal?: AbortSignal) => api.get<BrewInfo>('/system/brew', undefined, signal);
+export const getBrew = (signal?: AbortSignal) => api.read<BrewInfo>('/system/brew', undefined, signal);
 /** null = the doctor is a stub. */
-export const getDoctor = (signal?: AbortSignal) => orNull(api.get<DoctorReport>('/doctor', undefined, signal));
+export const getDoctor = (signal?: AbortSignal) => orNull(api.read<DoctorReport>('/doctor', undefined, signal));
 export const installEngine = () => api.post<JobAccepted>('/engine/install');
 export const upgradeEngine = () => api.post<JobAccepted>('/engine/upgrade');
 export const getEngine = () => api.get<EngineView>('/engine');

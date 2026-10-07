@@ -63,7 +63,7 @@ function clockTime(d: Date): string {
 
 export default function Diagnostics() {
   useTitle(t("logs.diag.page_title"));
-  const bundle = useApi((s) => api.get<DiagnosticsBundle>("/diagnostics", undefined, s));
+  const bundle = useApi((s) => api.read<DiagnosticsBundle>("/diagnostics", undefined, s));
   const traces = useApi((s) => api.get<TraceList>("/traces", undefined, s));
   const v = bundle.data?.versions;
   const sys = bundle.data?.system;
@@ -452,7 +452,7 @@ function DoctorBand() {
     setBusy(true);
     setError(null);
     try {
-      setReport(await api.get<DoctorReport>("/doctor"));
+      setReport(await api.read<DoctorReport>("/doctor"));
     } catch (e) {
       setError(e);
     } finally {
@@ -490,7 +490,7 @@ function DoctorBand() {
 function PathsBand() {
   const storage = useApi((s) => api.get<StorageInfo>("/storage", undefined, s));
   // Permission modes come from the doctor's `permissions` check (~/.splash 0700, settings.json 0600).
-  const doctor = useApi((s) => api.get<DoctorReport>("/doctor", undefined, s));
+  const doctor = useApi((s) => api.read<DoctorReport>("/doctor", undefined, s));
   const perm = doctor.data?.checks.find((c) => c.id === "permissions") ?? null;
   const reveal = (target: string) =>
     void api.post("/system/reveal", { target }).catch((e) => toastError(t("logs.diag.reveal_failed"), e));

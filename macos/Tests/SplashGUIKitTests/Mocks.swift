@@ -35,7 +35,9 @@ final class MockAPI: AdminAPI, @unchecked Sendable {
         }
     }
 
-    var mutating: [Call] { calls.value.filter { $0.method != "GET" } }
+    /// Read-only POSTs (D58: they run programs, so they are not GETs) do not change anything.
+    static let readOnlyPosts: Set<String> = ["/api/admin/integrations"]
+    var mutating: [Call] { calls.value.filter { $0.method != "GET" && !Self.readOnlyPosts.contains($0.path) } }
     func posted(_ path: String) -> Bool { calls.value.contains { $0.method == "POST" && $0.path == path } }
 }
 

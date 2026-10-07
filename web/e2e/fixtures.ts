@@ -246,7 +246,7 @@ export async function mockManager(page: Page, opts: MockOptions = {}): Promise<s
     if (auth.admin_requires_key && !auth.authenticated) {
       return route.fulfill({
         status: 401,
-        json: { error: { message: 'Sign in required', type: 'authentication_error', code: 'unauthorized' } },
+        json: { error: { message: 'Sign in required', type: 'authentication_error', code: 'auth_required' } },
       });
     }
     if (path === '/engine') return route.fulfill({ json: opts.engine ?? ENGINE });

@@ -69,13 +69,12 @@ export function useLiveMetrics(onSample?: SampleListener, enabled = true): void 
 
 // ---------- cached lookups ----------
 
-function cached<T>(path: string): { value: ReturnType<typeof signal<T | null>>; load: (force?: boolean) => Promise<T | null> } {
+function cached<T>(path: string, method: 'GET' | 'POST' = 'GET'): { value: ReturnType<typeof signal<T | null>>; load: (force?: boolean) => Promise<T | null> } {
   const value = signal<T | null>(null);
   let pending: Promise<T | null> | null = null;
   const load = (force = false) => {
     if (value.value && !force) return Promise.resolve(value.value);
-    pending ??= api
-      .get<T>(path)
+    pending ??= (method === 'POST' ? api.read<T>(path) : api.get<T>(path))
       .then((v) => (value.value = v))
       .catch(() => value.value)
       .finally(() => {
@@ -86,10 +85,10 @@ function cached<T>(path: string): { value: ReturnType<typeof signal<T | null>>; 
   return { value, load };
 }
 
-const systemCache = cached<SystemInfo>('/system');
+const systemCache = cached<SystemInfo>('/system', 'POST');
 const versionsCache = cached<Versions>('/versions');
 
-/** GET /system (chip, RAM, disks, power), fetched once per page load. */
+/** POST /system (D58, was GET; chip, RAM, disks, power), fetched once per page load. */
 export const systemInfo = systemCache.value;
 export const loadSystem = systemCache.load;
 /** GET /versions (gui, manager, engine discovery, engine update). */

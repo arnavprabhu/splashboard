@@ -97,6 +97,30 @@ describe('request', () => {
     await expect(request('/x')).rejects.toMatchObject({ status: 0, code: 'network' });
   });
 
+  it('api.read sends a read-only POST with the query (D58: /doctor, /system, /inspect, …)', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonResponse(200, { ok: true }));
+    await expect(api.read('/inspect', { id: 'a/b:Q4', refresh: true })).resolves.toEqual({ ok: true });
+    const [url, init] = spy.mock.calls[0]!;
+    expect(url).toBe('/api/admin/inspect?id=a%2Fb%3AQ4&refresh=true');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe('{}');
+  });
+
+  it('only auth_required (or an uncoded 401) signs the user in again', async () => {
+    const handler = vi.fn();
+    setUnauthorizedHandler(handler);
+    const body = (code: string) => ({ error: { message: 'x', type: 'authentication_error', code } });
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse(401, body('invalid_code')))
+      .mockResolvedValueOnce(jsonResponse(401, body('invalid_key')))
+      .mockResolvedValueOnce(jsonResponse(401, body('auth_required')));
+    await expect(api.post('/auth/exchange', { code: 'c' })).rejects.toMatchObject({ code: 'invalid_code' });
+    await expect(api.post('/auth/login', { key: 'k' })).rejects.toMatchObject({ code: 'invalid_key' });
+    await expect(api.put('/settings', {})).rejects.toMatchObject({ code: 'auth_required' });
+    expect(handler).toHaveBeenCalledTimes(1);
+    setUnauthorizedHandler(null);
+  });
+
   it('calls the unauthorized handler for admin 401s only', async () => {
     const handler = vi.fn();
     setUnauthorizedHandler(handler);

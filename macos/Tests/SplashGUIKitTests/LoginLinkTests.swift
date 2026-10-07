@@ -106,6 +106,22 @@ struct OpenAdminSignedInTests {
     }
 }
 
+@MainActor
+@Suite("Read-only POSTs (D58)")
+struct ReadOnlyPostTests {
+    @Test func integrationsAreFetchedWithPost() async {
+        let api = MockAPI()
+        api.set("POST", "/api/admin/integrations", .success(["cli": [], "desktop": [["name": "claude-desktop", "label": "Claude Desktop", "connected": true]]]))
+        let vm = MenuBarViewModel(api: api, settings: AppSettings(), paths: HomePaths(base: URL(fileURLWithPath: "/tmp/sg")),
+                                  notifier: MockNotifier(), gpu: StubGPU(value: nil))
+        await vm.refreshEngine()
+        await vm.refreshInventory()
+        #expect(api.posted("/api/admin/integrations"))
+        #expect(!api.calls.value.contains { $0.method == "GET" && $0.path == "/api/admin/integrations" })
+        #expect(vm.integrations?.desktop.first?.name == "claude-desktop")
+    }
+}
+
 /// The real HTTP client against a URLProtocol stub: the link request carries the CLI token from
 /// the token file, as every other admin call does.
 @Suite("HTTPAdminAPI sends the CLI token (D58)", .serialized)

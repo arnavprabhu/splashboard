@@ -12,7 +12,7 @@ import { getStorage } from './api';
 
 /**
  * Disk usage band (03 §1.6, SPEC §9.5): models and cache on the models volume. Uses
- * `GET /models` → `disk` when it answers, else `GET /system` volumes and `GET /storage`.
+ * `GET /models` → `disk` when it answers, else `POST /system` volumes and `GET /storage`.
  */
 export function DiskBand({ disk, loading }: { disk: DiskUsage | null; loading?: boolean }) {
   const storage = useApi((signal) => getStorage(signal), []);

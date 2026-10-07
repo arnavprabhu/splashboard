@@ -84,7 +84,7 @@ function globalSettings(): Global {
 
 export default function IntegrationsPage() {
   useTitle(t("integrations.page_title"));
-  const data = useApi((s) => api.get<Integrations>("/integrations", undefined, s));
+  const data = useApi((s) => api.read<Integrations>("/integrations", undefined, s));
   const models = useApi((s) => request<{ data: ModelEntry[] }>("/v1/models", { signal: s }));
   useEvent("integration.state", (d) => {
     const app = d as DesktopIntegration | null;
@@ -390,11 +390,11 @@ function CliRow({
   );
 }
 
-/** "What this changes" (docs/ui/09 §3.3) from `GET /integrations/{client}/print?model=`, fetched when opened. */
+/** "What this changes" (docs/ui/09 §3.3) from `POST /integrations/{client}/print?model=` (D58), fetched when opened. */
 function ChangesPanel({ cli, pick, active, isProfile, local }: { cli: CliIntegration; pick: string; active: string | null; isProfile: boolean; local: boolean }) {
   const [open, setOpen] = useState(false);
   const model = pick || active || undefined;
-  const print = useApi((s) => api.get<LaunchPrint>(`/integrations/${cli.name}/print`, model ? { model } : undefined, s), [cli.name, model], open);
+  const print = useApi((s) => api.read<LaunchPrint>(`/integrations/${cli.name}/print`, model ? { model } : undefined, s), [cli.name, model], open);
   const kind = cli.name === "hermes" || cli.name === "pi";
   const p = print.data;
   const env = Object.entries(p?.env ?? {});

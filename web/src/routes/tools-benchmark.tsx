@@ -65,7 +65,7 @@ export default function Benchmark() {
   const ctx = engine.value?.maximum_context_tokens ?? null;
   const ready = engineReady();
   const runs = useApi((s) => api.get<BenchmarkRuns>("/benchmark/runs", undefined, s));
-  const preflight = useApi((s) => api.get<BenchmarkPreflight>("/benchmark/preflight", undefined, s), [engine.value?.model]);
+  const preflight = useApi((s) => api.read<BenchmarkPreflight>("/benchmark/preflight", undefined, s), [engine.value?.model]);
   const [enabled, setEnabled] = useState<Record<Scenario, boolean>>({ decode_short: true, cold_prefill: true, cached_ttft: true, concurrency: true });
   const [samples, setSamples] = useState<number | null>(3);
   const [progress, setProgress] = useState<Progress | null>(null);

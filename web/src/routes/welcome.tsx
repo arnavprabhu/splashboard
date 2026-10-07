@@ -17,7 +17,7 @@ import { isHosted } from "./welcome/host";
 export default function Welcome() {
   useTitle(t("welcome.page_title"));
   const [step, setStep] = useState<Step>(() => initialStep(parseStep(location.search), progress.value));
-  const system = useApi((s) => api.get<SystemInfo>("/system", undefined, s));
+  const system = useApi((s) => api.read<SystemInfo>("/system", undefined, s));
   const hosted = isHosted();
   function goTo(next: Step) {
     setStep(next);

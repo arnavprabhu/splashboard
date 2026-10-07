@@ -102,8 +102,9 @@ public extension AdminAPI {
         InstalledModel.list(json: try await get("/api/admin/models"))
     }
 
+    /// `POST /api/admin/integrations` (D58, was GET: it runs the clients' `--version`).
     func integrations() async throws -> IntegrationsView {
-        IntegrationsView(json: try await get("/api/admin/integrations"))
+        IntegrationsView(json: try await post("/api/admin/integrations"))
     }
 
     func versions() async throws -> VersionsInfo {
