@@ -17,7 +17,9 @@ its own, so the manager measures it from the Hub cache, as the Downloader does
 created, plus blobs completed since the line.
 
 A run that is stopped mid-file loses that file: huggingface_hub 1.28 cannot continue
-a partial (Q24). `remove_stale_partials` deletes what killed runs left behind.
+a partial (Q24). `remove_stale_partials` deletes what killed runs left behind, and the
+Downloader's resumable `<etag>.splashgui.incomplete` partials (D61) once no unfinished
+download claims them.
 """
 
 from __future__ import annotations
@@ -31,11 +33,15 @@ from pathlib import Path
 
 from ..hubcache import (
     BLOB,
+    RANGE_PARTIAL,
+    RANGE_SIDECAR,
+    RANGE_SUFFIX,
     UUID_PARTIAL,
     FileFact,
     blobs_dir,
     open_paths,
     partial_digest,
+    remove_partial,
     scan_blobs,
 )
 from ..schemas import EngineInstall
@@ -188,17 +194,28 @@ def remove_stale_partials(
     now: Callable[[], float] = time.time,
     lsof: Callable[[list[Path]], set[str] | None] = open_paths,
 ) -> list[Removed]:
-    """Delete the per-process `<etag>.<uuid8>.incomplete` partials in `repos`' blobs
-    that nothing can continue. Kept: the legacy `<etag>.incomplete` (an older hub
-    resumes it), any file a process has open, and any blob an unfinished download
-    in the Downloader needs (`protected_digests`). When `lsof` cannot tell, a partial
-    written in the last two minutes is kept too."""
+    """Delete the partials in `repos`' blobs that nothing will continue: the
+    per-process `<etag>.<uuid8>.incomplete` files, and the Downloader's resumable
+    `<etag>.splashgui.incomplete` (with its sidecar, D61) once no unfinished download
+    claims it. Kept: the legacy `<etag>.incomplete` (an older hub resumes it), any
+    file a process has open, and any blob an unfinished download in the Downloader
+    needs (`protected_digests`). When `lsof` cannot tell, a partial written in the
+    last two minutes is kept too. A sidecar left without its partial goes as well."""
     candidates: list[tuple[Path, FileFact]] = []
     for repo in dict.fromkeys(repos):
         directory = blobs_dir(models_dir, repo)
-        for name, fact in scan_blobs(directory).items():
-            match = UUID_PARTIAL.match(name)  # never the legacy `<etag>.incomplete`
+        files = scan_blobs(directory)
+        for name, fact in files.items():
+            # Never the legacy `<etag>.incomplete`.
+            match = UUID_PARTIAL.match(name) or RANGE_PARTIAL.match(name)
             if match is None:
+                sidecar = RANGE_SIDECAR.match(name)
+                if (
+                    sidecar
+                    and sidecar.group("digest") not in protected_digests
+                    and sidecar.group("digest") + RANGE_SUFFIX not in files
+                ):
+                    (directory / name).unlink(missing_ok=True)
                 continue
             if match.group("digest") in protected_digests:
                 continue
@@ -213,10 +230,10 @@ def remove_stale_partials(
                 continue  # cannot tell whether it is open: a recent write may be live
         elif str(path) in busy:
             continue
-        try:
-            path.unlink()
-        except FileNotFoundError:
+        if not path.exists():
             continue
+        try:
+            remove_partial(path)
         except OSError as error:
             log.warning("could not remove stale partial %s: %s", path, error)
             continue

@@ -7,6 +7,12 @@ with Splash 1.2.0) writes a per-process `<etag>.<uuid8>.incomplete`, opened `"wb
 renamed to the blob when complete and deleted on a handled error
 (`huggingface_hub/file_download.py` `_download_to_tmp_and_move`, PR #4228) **[code]**.
 A killed run leaves its uuid partial behind, and no later run can reuse it.
+
+The manager's own byte-resumable downloads of large LFS/Xet files (D61,
+`downloads/ranged.py`) write `<etag>.splashgui.incomplete` next to a sidecar
+`<etag>.splashgui.json` that records which remote file the bytes belong to. The next
+run continues that partial with `Range: bytes=N-`, so it is kept across pause and
+restart, counted as progress, and deleted on cancel or once nothing claims it.
 """
 
 from __future__ import annotations
@@ -22,6 +28,10 @@ from pathlib import Path
 _DIGEST = r"(?:[0-9a-f]{40}|[0-9a-f]{64})"
 UUID_PARTIAL = re.compile(rf"^(?P<digest>{_DIGEST})\.(?P<uuid>[0-9a-f]{{8}})\.incomplete$")
 LEGACY_PARTIAL = re.compile(rf"^(?P<digest>{_DIGEST})\.incomplete$")
+RANGE_SUFFIX = ".splashgui.incomplete"
+RANGE_SIDECAR_SUFFIX = ".splashgui.json"
+RANGE_PARTIAL = re.compile(rf"^(?P<digest>{_DIGEST})\.splashgui\.incomplete$")
+RANGE_SIDECAR = re.compile(rf"^(?P<digest>{_DIGEST})\.splashgui\.json$")
 BLOB = re.compile(rf"^{_DIGEST}$")
 
 
@@ -33,18 +43,37 @@ def blobs_dir(models_dir: Path, repo_id: str) -> Path:
     return repo_folder(models_dir, repo_id) / "blobs"
 
 
+def range_partial(blob: Path) -> Path:
+    """The manager's resumable partial for a blob (D61)."""
+    return blob.with_name(blob.name + RANGE_SUFFIX)
+
+
+def range_sidecar(blob: Path) -> Path:
+    """What the resumable partial's bytes belong to (D61, `downloads/ranged.py`)."""
+    return blob.with_name(blob.name + RANGE_SIDECAR_SUFFIX)
+
+
 def blob_partials(blob: Path) -> list[Path]:
     """A blob's partial files: the legacy `<etag>.incomplete` first, then every
-    per-process `<etag>.<uuid8>.incomplete`."""
+    per-process `<etag>.<uuid8>.incomplete` and the manager's resumable
+    `<etag>.splashgui.incomplete` (D61)."""
     legacy = blob.with_name(blob.name + ".incomplete")
     found = [legacy] if legacy.is_file() else []
     found += sorted(blob.parent.glob(glob.escape(blob.name) + ".*.incomplete"))
     return found
 
 
+def remove_partial(path: Path) -> None:
+    """Delete a partial file, and with the manager's resumable one its sidecar too."""
+    path.unlink(missing_ok=True)
+    match = RANGE_PARTIAL.match(path.name)
+    if match:
+        path.with_name(match.group("digest") + RANGE_SIDECAR_SUFFIX).unlink(missing_ok=True)
+
+
 def partial_digest(name: str) -> str | None:
-    """The blob digest a partial file belongs to (either naming), else None."""
-    match = UUID_PARTIAL.match(name) or LEGACY_PARTIAL.match(name)
+    """The blob digest a partial file belongs to (any naming), else None."""
+    match = UUID_PARTIAL.match(name) or LEGACY_PARTIAL.match(name) or RANGE_PARTIAL.match(name)
     return match.group("digest") if match else None
 
 
