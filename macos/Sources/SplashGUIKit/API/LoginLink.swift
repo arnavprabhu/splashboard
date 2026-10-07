@@ -26,16 +26,25 @@ public struct LoginLink: Sendable, Equatable {
             && !s.contains(where: { $0.isWhitespace || $0.isNewline })
     }
 
-    /// `http://<host>:<port>/admin/login?code=…&next=<admin path>`. `next` is the page to land
-    /// on; the login page keeps only same-app paths (web `safeNext`).
+    /// `http://<host>:<port>/admin/login?code=…&next=<admin path>[&theme=light|dark]`. `next` is
+    /// the page to land on; the login page keeps only same-app paths (web `safeNext`). A
+    /// `theme` in `next` (the Welcome window's appearance) is repeated on the login URL itself,
+    /// because index.html applies `?theme=` before first paint and the login page paints first.
     public func url(base: URL, next: String?) -> URL? {
         var s = base.absoluteString
         while s.hasSuffix("/") { s.removeLast() }
         s += path
         if let next, !next.isEmpty {
             s += (path.contains("?") ? "&" : "?") + "next=" + Self.encodeQueryValue(next)
+            if let theme = Self.theme(in: next) { s += "&theme=" + theme }
         }
         return URL(string: s)
+    }
+
+    /// `light` or `dark` from a path's `theme` query item; anything else is ignored.
+    static func theme(in path: String) -> String? {
+        let value = URLComponents(string: path)?.queryItems?.first { $0.name == "theme" }?.value
+        return value == "light" || value == "dark" ? value : nil
     }
 
     static func encodeQueryValue(_ v: String) -> String {

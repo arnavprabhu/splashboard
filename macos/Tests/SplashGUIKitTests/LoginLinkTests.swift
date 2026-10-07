@@ -36,6 +36,22 @@ struct LoginLinkTests {
             == "http://127.0.0.1:8140/admin/login?next=%2Fadmin%2Fstatus")
     }
 
+    /// D58 follow-up c: the Welcome window's `theme` reaches the login page, which paints first.
+    @Test func themeInNextIsRepeatedOnTheLoginURL() throws {
+        let link = LoginLink(path: "/admin/login?code=abc123")
+        let base = URL(string: "http://127.0.0.1:8140")!
+        let url = try #require(link.url(base: base, next: WelcomeBridge.welcomePath(theme: "dark")))
+        #expect(url.absoluteString
+            == "http://127.0.0.1:8140/admin/login?code=abc123&next=%2Fadmin%2Fwelcome%3Fhost%3Dapp%26theme%3Ddark&theme=dark")
+        let light = try #require(link.url(base: base, next: WelcomeBridge.welcomePath(theme: "light")))
+        #expect(light.absoluteString.hasSuffix("&theme=light"))
+        // No theme, or one the page would not accept: nothing added.
+        let none = try #require(link.url(base: base, next: WelcomeBridge.welcomePath(theme: nil)))
+        #expect(!none.absoluteString.contains("&theme="))
+        let odd = try #require(link.url(base: base, next: "/admin/welcome?theme=%22%3E%3Cscript%3E"))
+        #expect(!odd.absoluteString.contains("&theme="))
+    }
+
     @Test func welcomePathMatchesWelcomeURL() {
         let base = URL(string: "http://127.0.0.1:8000")!
         #expect(WelcomeBridge.welcomePath(theme: nil) == "/admin/welcome?host=app")
