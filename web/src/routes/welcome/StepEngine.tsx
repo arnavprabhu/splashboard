@@ -15,7 +15,7 @@ import { t } from '../../strings/welcome';
 import { getBrew, getDoctor, installEngine, notBuilt, upgradeEngine } from './api';
 import { Glyph, StepLayout, useWizard } from './frame';
 import { HOMEBREW_INSTALL_COMMAND, openHomebrewInstaller, openTerminal, SPLASH_INSTALL_COMMAND, SPLASH_UPGRADE_COMMAND } from './host';
-import { brewStatus, doctorCheck, engineStepReady, macStatus, shellStatus, splashStatus, type CheckStatus } from './logic';
+import { brewStatus, doctorCheck, engineStepReady, macStatus, minimumEngine, shellStatus, splashStatus, type CheckStatus } from './logic';
 import { nextStep } from './steps';
 
 export const BREW_POLL_MS = 2000;
@@ -247,7 +247,7 @@ export function StepEngine() {
           {engine?.found && engine.support === 'untested' && <p class="body">{t('welcome.engine.untested', { version: engine.version ?? '?' })}</p>}
           {engine?.found && engine.support === 'too_old' && (
             <>
-              <p class="body">{t('welcome.engine.too_old', { version: engine.version ?? '?' })}</p>
+              <p class="body">{t('welcome.engine.too_old', { version: engine.version ?? '?', min: minimumEngine(engine.supported_range) })}</p>
               {install.phase !== 'running' && (
                 <div class="cluster">
                   <Button variant="accent" onClick={() => void startInstall('engine_upgrade')}>

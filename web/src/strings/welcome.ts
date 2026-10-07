@@ -146,7 +146,7 @@ export const welcomeStrings = {
   "welcome.engine.splash_log": "Installation output",
   "welcome.engine.splash_missing": "Splash is not installed.",
   "welcome.engine.terminal_failed": "Could not open Terminal.",
-  "welcome.engine.too_old": "Splash {version} is too old. Update to 1.2.0 or newer.",
+  "welcome.engine.too_old": "Splash {version} is too old. Update to {min} or newer.",
   "welcome.engine.untested": "Splash {version} has not been tested with this GUI.",
   "welcome.engine.upgrade": "Upgrade Splash",
   "welcome.foot.label": "Wizard navigation",
