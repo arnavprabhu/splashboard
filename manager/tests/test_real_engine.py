@@ -175,7 +175,8 @@ def test_a_real_8bit_checkpoint_is_refused_with_the_engine_s_reason(engine_pytho
     result = inspect(MLX_8BIT, engine_python)
     assert not any(r["compatible"] for r in result["results"]), result
     reasons = [r.get("reason") or "" for r in result["results"]]
-    assert any("4-bit" in reason or "affine" in reason for reason in reasons), reasons
+    # Splash 1.3.0's engine model-check names the first tensor whose bits differ.
+    assert any(reason.endswith("bits mismatch: MLX 8, runtime 4") for reason in reasons), reasons
 
 
 @needs_engine
@@ -319,7 +320,7 @@ def test_acceptance_search_verdicts_on_the_live_hub(
         assert eight.status_code == 200, eight.text
         body = eight.json()
         assert body["compatible"] is False and body["badge"] == "incompatible"
-        assert body["reason"] and ("4-bit" in body["reason"] or "affine" in body["reason"])
+        assert body["reason"].endswith("bits mismatch: MLX 8, runtime 4"), body["reason"]
         response = client.get(
             "/api/admin/inspect", params={"id": "unsloth/Qwen3.8-27B-GGUF"}, headers=headers
         )
