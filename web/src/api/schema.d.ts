@@ -28,10 +28,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get System */
-        get: operations["get_system_api_admin_system_get"];
+        get?: never;
         put?: never;
-        post?: never;
+        /** Get System */
+        post: operations["get_system_api_admin_system_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -62,10 +62,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Brew */
-        get: operations["get_brew_api_admin_system_brew_get"];
+        get?: never;
         put?: never;
-        post?: never;
+        /** Get Brew */
+        post: operations["get_brew_api_admin_system_brew_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -84,7 +84,7 @@ export interface paths {
         /**
          * Install Brew
          * @description Homebrew needs the user's password, so its official
-         *     installer runs in Terminal; the wizard then polls `GET /system/brew`.
+         *     installer runs in Terminal; the wizard then polls `POST /system/brew`.
          */
         post: operations["install_brew_api_admin_system_brew_install_post"];
         delete?: never;
@@ -160,10 +160,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Doctor */
-        get: operations["doctor_api_admin_doctor_get"];
+        get?: never;
         put?: never;
-        post?: never;
+        /** Doctor */
+        post: operations["doctor_api_admin_doctor_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -784,10 +784,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Inspect */
-        get: operations["inspect_api_admin_inspect_get"];
+        get?: never;
         put?: never;
-        post?: never;
+        /** Inspect */
+        post: operations["inspect_api_admin_inspect_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1321,10 +1321,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Preflight */
-        get: operations["preflight_api_admin_benchmark_preflight_get"];
+        get?: never;
         put?: never;
-        post?: never;
+        /** Preflight */
+        post: operations["preflight_api_admin_benchmark_preflight_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1390,10 +1390,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Integrations */
-        get: operations["list_integrations_api_admin_integrations_get"];
+        get?: never;
         put?: never;
-        post?: never;
+        /** List Integrations */
+        post: operations["list_integrations_api_admin_integrations_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1532,13 +1532,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /**
          * Print Launch
          * @description `splash launch <name> --print` as data (G13), for "What this changes".
          */
-        get: operations["print_launch_api_admin_integrations__name__print_get"];
-        put?: never;
-        post?: never;
+        post: operations["print_launch_api_admin_integrations__name__print_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1720,13 +1720,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /**
          * Diagnostics
          * @description Everything a Splash issue report asks for.
          */
-        get: operations["diagnostics_api_admin_diagnostics_get"];
-        put?: never;
-        post?: never;
+        post: operations["diagnostics_api_admin_diagnostics_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1886,6 +1886,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/auth/link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Link
+         * @description A one-time login link for the menu bar app and `splash open` (CLI token only).
+         */
+        post: operations["link_api_admin_auth_link_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/auth/exchange": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Exchange
+         * @description Turn a one-time code into a session. Only a same-origin browser page may do
+         *     it (the CLI token does not stand in for that), so a code is only ever spent by
+         *     the browser it was opened in.
+         */
+        post: operations["exchange_api_admin_auth_exchange_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1962,7 +2004,22 @@ export interface components {
              */
             kind: "image" | "pdf";
         };
-        /** AuthState */
+        /**
+         * AuthLink
+         * @description A one-time login link (D58): `url` is relative to the manager's base URL.
+         */
+        AuthLink: {
+            /** Url */
+            url: string;
+            /** Expires In */
+            expires_in: number;
+        };
+        /**
+         * AuthState
+         * @description D58: `authenticated` only with a session or the CLI token. `method: "open"`
+         *     means sign-in is off and this Mac may read without one (writes and secret
+         *     reads still need a credential); null means sign-in is on and there is none.
+         */
         AuthState: {
             /** Admin Requires Key */
             admin_requires_key: boolean;
@@ -3061,6 +3118,11 @@ export interface components {
         /** ErrorResponse */
         ErrorResponse: {
             error: components["schemas"]["ErrorBody"];
+        };
+        /** ExchangeRequest */
+        ExchangeRequest: {
+            /** Code */
+            code: string;
         };
         /**
          * ExtraFlag
@@ -4477,7 +4539,7 @@ export interface components {
             api_key_required: boolean;
             /**
              * Admin Requires Key
-             * @default false
+             * @default true
              */
             admin_requires_key: boolean;
         };
@@ -4514,7 +4576,7 @@ export interface components {
         SettingsDocument: {
             /**
              * Version
-             * @default 1
+             * @default 2
              */
             version: number;
             global?: components["schemas"]["GlobalSettings"];
@@ -5317,7 +5379,7 @@ export interface operations {
             };
         };
     };
-    get_system_api_admin_system_get: {
+    get_system_api_admin_system_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -5357,7 +5419,7 @@ export interface operations {
             };
         };
     };
-    get_brew_api_admin_system_brew_get: {
+    get_brew_api_admin_system_brew_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -5493,7 +5555,7 @@ export interface operations {
             };
         };
     };
-    doctor_api_admin_doctor_get: {
+    doctor_api_admin_doctor_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -6937,7 +6999,7 @@ export interface operations {
             };
         };
     };
-    inspect_api_admin_inspect_get: {
+    inspect_api_admin_inspect_post: {
         parameters: {
             query: {
                 id: string;
@@ -8543,7 +8605,7 @@ export interface operations {
             };
         };
     };
-    preflight_api_admin_benchmark_preflight_get: {
+    preflight_api_admin_benchmark_preflight_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -8708,7 +8770,7 @@ export interface operations {
             };
         };
     };
-    list_integrations_api_admin_integrations_get: {
+    list_integrations_api_admin_integrations_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -9086,7 +9148,7 @@ export interface operations {
             };
         };
     };
-    print_launch_api_admin_integrations__name__print_get: {
+    print_launch_api_admin_integrations__name__print_post: {
         parameters: {
             query?: {
                 /** @description ID or ID:profile; default active */
@@ -9491,7 +9553,7 @@ export interface operations {
             };
         };
     };
-    diagnostics_api_admin_diagnostics_get: {
+    diagnostics_api_admin_diagnostics_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -9748,6 +9810,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     logout_api_admin_auth_logout_post: {
@@ -9765,6 +9836,113 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    link_api_admin_auth_link_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthLink"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    exchange_api_admin_auth_exchange_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExchangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthState"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
