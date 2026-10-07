@@ -68,7 +68,7 @@ describe('App shell', () => {
       .mockResolvedValue(json(200, { admin_requires_key: true, authenticated: true, method: 'session' }));
     go('/admin/login?next=%2Fmodels%2Fdownloader');
     render(<App base="/admin" />);
-    const input = await screen.findByLabelText('Admin key');
+    const input = await screen.findByLabelText('API key');
     fireEvent.input(input, { target: { value: 'wrong' } });
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     expect(await screen.findByText('That key didn’t match.')).toBeTruthy();

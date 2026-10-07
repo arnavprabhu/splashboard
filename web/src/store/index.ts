@@ -157,7 +157,22 @@ export async function logout(): Promise<void> {
     await api.post('/auth/logout');
   } finally {
     auth.value = { ...auth.value, authenticated: false, method: null };
+    // With sign-in off, reads stay open after logout; let the manager say which it is.
+    await refreshAuth();
   }
+}
+
+/** After a login or a one-time link exchange: take the new state, refetch, reconnect events. */
+export async function signedIn(state: unknown): Promise<void> {
+  if (readAuthState(state)) setAuth(state);
+  else await refreshAuth();
+  refreshAll();
+  connectEvents();
+}
+
+/** `POST /auth/exchange {code}` (D58): trades a one-time link code for the session cookie. */
+export async function exchangeLoginCode(code: string): Promise<void> {
+  await signedIn(await api.post<unknown>('/auth/exchange', { code }));
 }
 
 /** A post-login target from `?next=`: only same-app paths, never another origin. */

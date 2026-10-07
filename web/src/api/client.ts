@@ -109,7 +109,7 @@ export interface RequestOptions {
 type UnauthorizedHandler = (error: ApiError) => void;
 let onUnauthorized: UnauthorizedHandler | null = null;
 
-/** Registers a handler for 401s from /api/admin (used to route to /admin/login). */
+/** Registers a handler for 401 `auth_required` from /api/admin (used to route to /admin/login). */
 export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): void {
   onUnauthorized = handler;
 }
@@ -163,7 +163,11 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   }
   if (!res.ok) {
     const error = await errorFromResponse(res);
-    if (res.status === 401 && path.startsWith('/api/admin') && onUnauthorized) onUnauthorized(error);
+    // Only a missing session (`auth_required`, D58) signs the user in; a wrong key at login
+    // (`invalid_key`) or a spent one-time code is the caller's to show.
+    if (res.status === 401 && path.startsWith('/api/admin') && onUnauthorized && (error.code === 'auth_required' || error.code === null)) {
+      onUnauthorized(error);
+    }
     throw error;
   }
   if (raw) return res as unknown as T;

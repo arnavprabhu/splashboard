@@ -122,22 +122,6 @@ export const en = {
   'state.stopping': 'Stopping',
   'state.restarting': 'Restarting',
 
-  // login
-  'login.title': 'Sign in.',
-  'login.lead': 'Enter the admin key to open Splash GUI.',
-  'login.key': 'Admin key',
-  'login.submit': 'Sign in',
-  'login.checking': 'Checking…',
-  'login.help': 'The key is in Settings → Security on the Mac that runs Splash GUI, or from {cmd}.',
-  'login.wrong': 'That key didn’t match.',
-  'login.throttled': 'Too many attempts. Try again in {s} s.',
-  'login.throttled_soon': 'Too many attempts. Try again in a moment.',
-  'login.unreachable': 'Splash GUI is not answering. Is it running?',
-  'login.failed': 'Could not sign in.',
-  'login.expired': 'Your session expired. Sign in again.',
-  'login.expired_settings': 'Your session expired. Sign in again; unsaved settings changes are kept while this tab stays open.',
-  'login.page_title': 'Sign in',
-
   // not found
   'notfound.title': 'Not found.',
   'notfound.body': 'There is nothing at {path}.',

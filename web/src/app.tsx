@@ -45,10 +45,10 @@ export const BASE = import.meta.env.BASE_URL.replace(/\/$/, '');
 export const keepBodyWhenOffline = signal(false);
 
 /** Sends the browser to the login page, remembering where it was (`?next=`). */
-export function loginRedirect(expired = false): void {
-  const login = `${BASE}/login`;
+export function loginRedirect(expired = false, base = BASE): void {
+  const login = `${base}/login`;
   if (location.pathname === login) return;
-  const here = location.pathname.startsWith(BASE) ? location.pathname.slice(BASE.length) || '/' : '/';
+  const here = location.pathname.startsWith(base) ? location.pathname.slice(base.length) || '/' : '/';
   history.pushState(null, '', `${login}?next=${encodeURIComponent(here + location.search)}${expired ? '&expired=1' : ''}`);
   dispatchEvent(new PopStateEvent('popstate'));
 }
@@ -242,7 +242,7 @@ export function Shell() {
           engineVersion={e?.engine_version ?? null}
           model={e?.model ?? null}
           state={offline ? null : (e?.state ?? null)}
-          authEnabled={a.admin_requires_key && a.authenticated && a.method !== 'cli_token' && a.method !== 'open'}
+          authEnabled={a.authenticated && a.method === 'session'}
           onLogout={() => {
             void logout().finally(() => navigate('/login'));
           }}

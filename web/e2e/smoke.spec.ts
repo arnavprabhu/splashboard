@@ -171,10 +171,10 @@ test.describe('shell', () => {
     await mockManager(page, { auth: { admin_requires_key: true, authenticated: false, method: null } });
     await page.goto('/admin/models/downloader');
     await expect(page).toHaveURL(/\/admin\/login\?next=%2Fmodels%2Fdownloader$/);
-    await page.getByLabel('Admin key', { exact: true }).fill('nope');
+    await page.getByLabel('API key', { exact: true }).fill('nope');
     await page.getByRole('button', { name: 'Sign in' }).click();
     await expect(page.getByText('That key didn’t match.')).toBeVisible();
-    await page.getByLabel('Admin key', { exact: true }).fill('secret');
+    await page.getByLabel('API key', { exact: true }).fill('secret');
     await page.getByRole('button', { name: 'Sign in' }).click();
     await expect(page).toHaveURL(/\/admin\/models\/downloader$/);
     await expect(page.getByRole('button', { name: 'Log out' })).toBeVisible();
