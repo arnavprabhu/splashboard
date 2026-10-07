@@ -9,6 +9,7 @@ import sys
 from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -197,17 +198,24 @@ def fake_hub_module() -> ModuleType:
 
 
 @pytest.fixture
-def fake_hub() -> Iterator[str]:
-    """A running fake Hugging Face API; yields its base URL.
+def fake_hub_server() -> Iterator[Any]:
+    """A running fake Hugging Face API and its CDN (`FakeHub`): `.url`, `.cdn_url`,
+    `.requests` (every request either received), `.cdn_bps` (the CDN's rate)."""
+    hub = fake_hub_module().FakeHub().start()
+    try:
+        yield hub
+    finally:
+        hub.stop()
+
+
+@pytest.fixture
+def fake_hub(fake_hub_server: Any) -> str:
+    """A running fake Hugging Face API; its base URL.
 
     The manager reaches it through the `hf.endpoint` setting and the
     engine-side compatibility helper through `HF_ENDPOINT`.
     """
-    hub = fake_hub_module().FakeHub().start()
-    try:
-        yield hub.url
-    finally:
-        hub.stop()
+    return str(fake_hub_server.url)
 
 
 from .fakeengine import harness_factory  # noqa: E402, F401  (fixture)
