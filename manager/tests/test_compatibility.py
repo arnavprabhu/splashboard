@@ -95,7 +95,23 @@ def test_8bit_mlx_is_rejected_with_the_reason(hub_harness):
     result = inspect(harness, MLX_8BIT)
     assert result["compatible"] is False
     assert result["badge"] == "incompatible"
-    assert "4-bit" in result["reason"]
+    # D53: a plain line first; the engine's model-check wording stays as the detail.
+    assert result["reason"] == "Splash runs MLX models only at 4-bit, group size 64."
+    assert result["reason_detail"].endswith("bits mismatch: MLX 8, runtime 4")
+
+
+def test_a_refused_mlx_download_leads_with_the_plain_line(hub_harness):
+    """POST /downloads refuses the 8-bit checkpoint with the plain line, then
+    Splash's own words, so the CLI and web toasts show both (D53)."""
+    harness = hub_harness()
+    response = harness.client.post("/api/admin/downloads", json={"id": MLX_8BIT})
+    assert response.status_code == 422, response.text
+    error = response.json()["error"]
+    assert error["code"] == "incompatible"
+    assert error["message"].startswith(
+        "Splash runs MLX models only at 4-bit, group size 64. Splash's check: quantization "
+    )
+    assert error["details"]["reason_detail"].endswith("bits mismatch: MLX 8, runtime 4")
 
 
 def test_the_dense_family_is_distinguished_from_the_moe(hub_harness):
@@ -299,7 +315,8 @@ def test_acceptance_search_verdicts(hub_harness):
     eight = inspect(harness, "mlx-community/Qwen3.8-27B-8bit")
     assert eight["compatible"] is False and eight["badge"] == "incompatible"
     assert eight["family"] in (None, "Qwen3.8-27B")
-    assert "4-bit" in eight["reason"], eight["reason"]
+    assert eight["reason"] == "Splash runs MLX models only at 4-bit, group size 64."
+    assert "bits mismatch: MLX 8" in eight["reason_detail"], eight["reason_detail"]
 
     gguf = inspect(harness, "unsloth/Qwen3.8-27B-GGUF")
     assert gguf["compatible"] is True and gguf["family"] == "Qwen3.8-27B"

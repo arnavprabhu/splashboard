@@ -225,9 +225,10 @@ export function ModelDrawer({ id, installed, activeId, onClose, onDelete, onVeri
           ) : inspect.error ? (
             <LoadError thing={t('models.drawer.compat_thing')} error={inspect.error} onRetry={() => void inspect.reload()} />
           ) : ins && ins.badge === 'incompatible' ? (
-            <p class="body">
-              <span class="mono">{ins.reason ?? DASH}</span>
-            </p>
+            <>
+              <p class="body" data-testid="compat-reason">{ins.reason ?? DASH}</p>
+              {ins.reason_detail && <p class="meta mono" data-testid="compat-detail">{ins.reason_detail}</p>}
+            </>
           ) : local ? (
             <p class="body tnum">{t('models.local.drawer_line', { size: formatBytes(det?.size_bytes ?? model?.size_bytes ?? null) })}</p>
           ) : isGguf ? (

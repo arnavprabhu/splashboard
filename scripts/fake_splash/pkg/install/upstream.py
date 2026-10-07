@@ -133,13 +133,22 @@ def _mlx_target(repo, language_only, scratch):
     config = scratch / "config.json"
     config.write_bytes(models.json_bytes(repo.json("config.json")))
     family = check_model("mlx-affine", "none", config)
-    quant = repo.json("config.json").get("quantization") or {}
-    if quant.get("mode", "affine") != "affine" or quant.get("bits") != 4:
+    # The engine model-check's wording (ModelDescriptor.mm validateQuantization and
+    # requireNumber, 1.3.0), naming the first module it checks.
+    quant = repo.json("config.json").get("quantization")
+    if not isinstance(quant, dict):
         raise models.ModelError(
-            f"Splash needs an MLX affine 4-bit checkpoint, not {quant.get('mode', 'affine')} {quant.get('bits', 4)}-bit"
+            "this model requires an MLX affine 4-bit/group-64 checkpoint or a supported GGUF"
         )
+    label = "quantization language_model.model.embed_tokens"
+    if quant.get("bits") != 4:
+        raise models.ModelError(f"{label} bits mismatch: MLX {quant.get('bits')}, runtime 4")
     if quant.get("group_size") != 64:
-        raise models.ModelError(f"Splash needs MLX group size 64, not {quant.get('group_size')}")
+        raise models.ModelError(
+            f"{label} group_size mismatch: MLX {quant.get('group_size')}, runtime 64"
+        )
+    if quant.get("mode", "affine") != "affine":
+        raise models.ModelError(f"{label} mode must be affine")
     files = {name: name for name in sorted(repo.files)}
     files.setdefault("config.json", "config.json")
     if language_only:

@@ -103,7 +103,18 @@ class Downloads:
         # Inspection also resolves the exact file set, before any weight is downloaded.
         inspection = await self.state.models.inspect(body.id, revision=body.revision)
         if not inspection.compatible:
-            raise ApiError(422, inspection.reason or "Model is incompatible", "incompatible")
+            message = inspection.reason or "Model is incompatible"
+            if inspection.reason_detail:
+                # D53: the plain line first, Splash's own words after it.
+                message += f" Splash's check: {inspection.reason_detail}"
+            raise ApiError(
+                422,
+                message,
+                "incompatible",
+                details={"reason_detail": inspection.reason_detail}
+                if inspection.reason_detail
+                else None,
+            )
         if (
             not body.language_only
             and not inspection.vision.available

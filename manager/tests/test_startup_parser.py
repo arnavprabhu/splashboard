@@ -135,6 +135,16 @@ def test_errors_are_classified() -> None:
         events = StartupParser().feed(line)
         assert len(events) == 1 and isinstance(events[0], ErrorEvent), line
         assert events[0].error.kind == kind, (line, events[0].error)
+    eight_bit = (
+        "error: cannot install a/b: quantization language_model.model.embed_tokens "
+        "bits mismatch: MLX 8, runtime 4"
+    )
+    refused = StartupParser().feed(eight_bit)[0]
+    assert isinstance(refused, ErrorEvent)
+    # D53: the plain line leads; the engine's words stay in `raw`.
+    assert refused.error.kind == "incompatible"
+    assert refused.error.message == "Splash runs MLX models only at 4-bit, group size 64."
+    assert refused.error.raw == [eight_bit]
     gated_error = StartupParser().feed(gated)[0]
     assert isinstance(gated_error, ErrorEvent)
     assert gated_error.error.message == "This model requires a Hugging Face token"

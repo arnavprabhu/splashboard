@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Literal
 
+from ..models.compat import explain_refusal
 from ..schemas import EngineError, EngineSuggestion, MemoryBudgetRow
 
 _STAMP = re.compile(r"^\d\d:\d\d:\d\d ")
@@ -196,6 +197,7 @@ def classify_error(text: str) -> EngineError | None:
     if (
         "no supported model has this architecture" in lowered
         or "requires an mlx affine 4-bit" in lowered
+        or explain_refusal(text)[1] is not None
         or "stores tensors splash cannot load" in lowered
         or "unsupported gguf" in lowered
         or "input rotation is not one splash runs" in lowered
@@ -218,7 +220,8 @@ def classify_error(text: str) -> EngineError | None:
         return EngineError(
             kind="incompatible",
             code="incompatible",
-            message=message,
+            # D53: the plain line; `raw` keeps the engine's words.
+            message=explain_refusal(message)[0] or message,
             raw=[text],
             suggestions=suggestions,
         )

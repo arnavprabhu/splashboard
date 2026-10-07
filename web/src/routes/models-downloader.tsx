@@ -368,7 +368,8 @@ function ById({ initial, free, memory, installedIds }: { initial: string; free: 
               </span>
               <FitTag fit={result.fit ?? null} needBytes={result.memory_need_bytes} memoryBytes={memory} />
             </div>
-            {result.badge === "incompatible" && result.reason && <p class="body mono">{result.reason}</p>}
+            {result.badge === "incompatible" && result.reason && <p class="body" data-testid="compat-reason">{result.reason}</p>}
+            {result.badge === "incompatible" && result.reason_detail && <p class="meta mono" data-testid="compat-detail">{result.reason_detail}</p>}
             {result.badge === "text_only" && <p class="meta">{t("downloader.no_vision", { reason: result.vision.reason ?? DASH })}</p>}
             {(result.badge === "not_clef_accurate" || isClefId(result.id)) && (
               <Banner tone="info" title={t("models.clef.title")}>

@@ -958,7 +958,10 @@ class InspectResult(ApiModel):
     recommended_variant: str | None = None
     vision: VisionInfo
     draft: str | None = None
+    # A plain line; when Splash's own refusal is technical (an MLX checkpoint that
+    # is not 4-bit group 64), `reason_detail` keeps the engine's exact words (D53).
     reason: str | None = None
+    reason_detail: str | None = None
     memory_need_bytes: int | None = None
     fit: Fit | None = None
     cached: bool = False

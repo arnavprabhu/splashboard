@@ -43,6 +43,7 @@ from ..schemas import (
 from ..settings.parsers import parse_model_id, split_model_id
 from ..usage.db import iso
 from . import catalog as cat
+from . import compat
 from .hf import HfClient, HubError, strip_front_matter
 from .layout import directory_size, execute_delete, plan_delete, read_all
 from .local import LocalModels
@@ -395,7 +396,7 @@ class Models:
         recommended = max(candidates, key=lambda v: v.size_bytes or 0) if candidates else None
         if recommended:
             recommended.recommended = True
-        reason = (
+        reason, reason_detail = compat.explain_refusal(
             None
             if selected
             else next((r.get("reason") for r in raw["results"]), "Unsupported model")
@@ -425,6 +426,7 @@ class Models:
                 ),
                 "draft": selected.get("draft") if selected else None,
                 "reason": reason,
+                "reason_detail": reason_detail,
                 "memory_need_bytes": total + 4 * 1024**3 if selected else None,
                 "fit": self.fit(total + 4 * 1024**3) if selected else None,
                 "checked_at": iso(),

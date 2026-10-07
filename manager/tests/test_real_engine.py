@@ -320,7 +320,8 @@ def test_acceptance_search_verdicts_on_the_live_hub(
         assert eight.status_code == 200, eight.text
         body = eight.json()
         assert body["compatible"] is False and body["badge"] == "incompatible"
-        assert body["reason"].endswith("bits mismatch: MLX 8, runtime 4"), body["reason"]
+        assert body["reason"] == "Splash runs MLX models only at 4-bit, group size 64.", body
+        assert body["reason_detail"].endswith("bits mismatch: MLX 8, runtime 4"), body
         response = client.get(
             "/api/admin/inspect", params={"id": "unsloth/Qwen3.8-27B-GGUF"}, headers=headers
         )

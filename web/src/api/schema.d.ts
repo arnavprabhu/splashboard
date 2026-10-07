@@ -2829,7 +2829,7 @@ export interface components {
             support: "supported" | "untested" | "too_old" | "unknown";
             /**
              * Supported Range
-             * @default >=1.2.0 <1.3.0
+             * @default >=1.3.0 <1.4.0
              */
             supported_range: string;
             /** Banner */
@@ -3132,6 +3132,21 @@ export interface components {
             queue_size: number;
             /** Default Reasoning Effort */
             default_reasoning_effort?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") | null;
+            /**
+             * Idle Release
+             * @default 10m
+             */
+            idle_release: string;
+            /**
+             * Disable Ane
+             * @default false
+             */
+            disable_ane: boolean;
+            /**
+             * Allow Idle Sleep
+             * @default false
+             */
+            allow_idle_sleep: boolean;
         };
         /** GlobalSettings */
         GlobalSettings: {
@@ -3276,6 +3291,8 @@ export interface components {
             draft?: string | null;
             /** Reason */
             reason?: string | null;
+            /** Reason Detail */
+            reason_detail?: string | null;
             /** Memory Need Bytes */
             memory_need_bytes?: number | null;
             /** Fit */
@@ -3980,6 +3997,8 @@ export interface components {
             decode_share?: number;
             /** Max Image Pixels */
             max_image_pixels?: number;
+            /** Disable Ane */
+            disable_ane?: boolean;
         };
         /** ModelSettings */
         ModelSettings: {
