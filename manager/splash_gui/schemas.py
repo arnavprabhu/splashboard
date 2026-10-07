@@ -1662,9 +1662,24 @@ class LoginRequest(ApiModel):
 
 
 class AuthState(ApiModel):
+    """D58: `authenticated` only with a session or the CLI token. `method: "open"`
+    means sign-in is off and this Mac may read without one (writes and secret
+    reads still need a credential); null means sign-in is on and there is none."""
+
     admin_requires_key: bool
     authenticated: bool
     method: Literal["session", "cli_token", "open"] | None = None
+
+
+class AuthLink(ApiModel):
+    """A one-time login link (D58): `url` is relative to the manager's base URL."""
+
+    url: str  # "/admin/login?code=<code>"
+    expires_in: int  # seconds (60)
+
+
+class ExchangeRequest(ApiModel):
+    code: str
 
 
 class HelloEvent(ApiModel):
