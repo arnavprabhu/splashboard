@@ -155,6 +155,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarHost {
         alert.runModal()
     }
 
+    /// The Remove Splash GUI Data… sheet (SPEC §19, docs/ui/10 §8; PKG-12): the steps, two unticked
+    /// boxes with sizes, and a typed DELETE when either is ticked. Nil when the user cancels.
+    func chooseRemoval(_ plan: UninstallSummary) async -> RemovalChoice? {
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.messageText = "Remove Splash GUI data?"
+        var info = plan.steps.map { "· \($0)" }.joined(separator: "\n")
+        info += "\n\nData folder \(plan.home): \(Format.bytes(plan.dataBytes))."
+        for path in plan.kept { info += "\nKept: \(path) is outside the data folder." }
+        alert.informativeText = info
+        alert.alertStyle = .critical
+        let models = NSButton(checkboxWithTitle: "Delete models (\(Format.bytes(plan.modelsBytes)))", target: nil, action: nil)
+        let cache = NSButton(checkboxWithTitle: "Delete cache (\(Format.bytes(plan.cacheBytes)))", target: nil, action: nil)
+        let typed = NSTextField(string: "")
+        typed.placeholderString = "Type DELETE to delete models or the cache"
+        let stack = NSStackView(views: [models, cache, typed])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.frame = NSRect(x: 0, y: 0, width: 340, height: 78)
+        alert.accessoryView = stack
+        alert.addButton(withTitle: "Remove")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let choice = RemovalChoice(deleteModels: models.state == .on, deleteCache: cache.state == .on)
+        if (choice.deleteModels || choice.deleteCache) && typed.stringValue != "DELETE" {
+            showError(title: "Nothing was removed", message: "Type DELETE to delete models or the cache.")
+            return nil
+        }
+        return choice
+    }
+
     func showAbout() {
         if about == nil { about = AboutWindowController(model: model, host: self) }
         about?.show()

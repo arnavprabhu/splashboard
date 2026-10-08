@@ -108,6 +108,12 @@ final class MockHost: MenuBarHost {
     func showAbout() { aboutShown += 1 }
     func showWelcome() { welcomeShown += 1 }
     func terminate() { terminated = true }
+    var removalChoice: RemovalChoice?
+    var removalPlans: [UninstallSummary] = []
+    func chooseRemoval(_ plan: UninstallSummary) async -> RemovalChoice? {
+        removalPlans.append(plan)
+        return removalChoice
+    }
 }
 
 struct StubGPU: GPUSampling {

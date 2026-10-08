@@ -68,6 +68,7 @@ def test_the_plan_lists_each_folder_with_its_size_and_models_and_cache_apart(
     assert plan["shim_installed"] is True
     assert plan["path_block_files"] == [str(seeded["rc"])]
     assert plan["steps"][0].startswith("Restore") and plan["steps"][-1] == "Stop the manager"
+    assert plan["app_connected"] is False
 
 
 def test_the_default_removes_the_data_and_keeps_models_and_cache(
@@ -90,6 +91,8 @@ def test_the_default_removes_the_data_and_keeps_models_and_cache(
     assert (seeded["cache"] / "kv").exists()
     assert app.state.manager.secrets.get(SecretName.HF_TOKEN) is None
     assert result["stopping"] is False
+    app.state.manager.downloads.save()  # the queue saves itself on shutdown
+    assert not app.state.manager.paths.downloads_file.exists()
 
 
 def test_models_and_cache_go_only_when_ticked(

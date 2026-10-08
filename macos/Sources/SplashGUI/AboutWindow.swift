@@ -73,6 +73,7 @@ struct AboutView: View {
             .padding(.top, 20)
             HStack(spacing: 12) {
                 SquareButton("Re-run Welcome Wizard", action: rerunWizard).disabled(!running)
+                SquareButton("Remove Splash GUI Data…") { Task { await model.removeData() } }.disabled(!running)
                 SquareButton("Licenses", action: showLicenses)
             }
             .padding(.top, 10)

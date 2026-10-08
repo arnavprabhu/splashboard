@@ -117,6 +117,8 @@ class Downloads:
         self.schedule()
 
     def save(self) -> None:
+        if self.state.data_removed:  # `POST /uninstall` deleted the data folder (PKG-12)
+            return
         write_atomic(
             self.state.paths.downloads_file,
             json.dumps(

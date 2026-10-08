@@ -188,6 +188,16 @@ public final class ManagerController {
         ownership = nil
     }
 
+    /// Remove Splash GUI data (PKG-12): unregisters the manager's LaunchAgent whatever started the
+    /// manager, so launchd forgets it; that also stops a running agent (SIGTERM). True when one was registered.
+    @discardableResult
+    public func unregisterAgentForRemoval() -> Bool {
+        guard let agent, agent.status == .enabled || agent.status == .requiresApproval else { return false }
+        try? agent.unregister()
+        ownership = nil
+        return true
+    }
+
     /// `launchctl kickstart gui/<uid>/ai.splashgui.manager` for a registered but stopped agent.
     nonisolated static func kickstartAgent() {
         let p = Process()

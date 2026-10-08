@@ -12,6 +12,8 @@ public protocol MenuBarHost: AnyObject {
     func showAbout()
     func showWelcome()
     func terminate()
+    /// The Remove Splash GUI Data… sheet (PKG-12): nil when the user cancels.
+    func chooseRemoval(_ plan: UninstallSummary) async -> RemovalChoice?
 }
 
 /// The menu bar app's state and behaviour. Everything UI-free lives here so it can be tested.
@@ -496,6 +498,42 @@ public final class MenuBarViewModel {
             return
         }
         if manager == .running { await openAdminSignedIn("/admin/settings/about") } else { host?.showAbout() }
+    }
+
+    /// About → Remove Splash GUI Data… (SPEC §19, PKG-12). The manager restores the integrations and
+    /// removes the PATH block, the shim and the chosen folders (`stop: false`); a failed restore stops
+    /// here with nothing removed (D36). Then the app unregisters its login item and the manager's
+    /// LaunchAgent, which only it can do (unregistering the agent stops a running manager), stops a
+    /// manager it did not start through `POST /shutdown`, and quits.
+    public func removeData() async {
+        let plan: UninstallSummary
+        do {
+            plan = UninstallSummary(json: try await api.post("/api/admin/uninstall/plan"))
+        } catch {
+            host?.showError(title: "Couldn’t read what would be removed", message: error.localizedDescription)
+            return
+        }
+        guard let choice = await host?.chooseRemoval(plan) else { return }
+        let body: JSONValue = [
+            "delete_data": true, "delete_models": .bool(choice.deleteModels),
+            "delete_cache": .bool(choice.deleteCache), "stop": false,
+        ]
+        do {
+            _ = try await api.post("/api/admin/uninstall", body: body)
+        } catch {
+            host?.showError(title: "Couldn’t remove Splash GUI data", message: error.localizedDescription)
+            return
+        }
+        loginItems?.unregisterForRemoval()
+        let stoppedByAgent = managerController?.unregisterAgentForRemoval() ?? false
+        if !stoppedByAgent {
+            if managerController?.ownership == .child {
+                await managerController?.stopOwned()
+            } else {
+                _ = try? await api.post("/api/admin/shutdown")
+            }
+        }
+        host?.terminate()
     }
 
     public func perform(_ command: MenuCommand) async {

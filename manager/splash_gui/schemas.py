@@ -1760,6 +1760,9 @@ class UninstallPlan(ApiModel):
     connected_integrations: list[str]
     path_block_files: list[str]
     shim_installed: bool
+    # The menu bar app is connected: it must run the removal itself (it alone can unregister its
+    # login item and LaunchAgent, and it would otherwise start the manager again).
+    app_connected: bool = False
     steps: list[str]
 
 

@@ -26,6 +26,7 @@ from fastapi import APIRouter, Depends
 from .cli import install as shim
 from .cli.api import home_of
 from .errors import ApiError, error_responses
+from .events.alerts import MENUBAR_CLIENT
 from .mcp.secrets import _current_values, secret_name
 from .models.layout import directory_size
 from .schemas import UninstallItem, UninstallPlan, UninstallRequest, UninstallResult
@@ -124,6 +125,7 @@ def build_plan(state: ManagerState) -> UninstallPlan:
         connected_integrations=connected,
         path_block_files=[str(e["file"]) for e in shim.rc_report(home) if e["managed"]],
         shim_installed=state.paths.shim.exists(),
+        app_connected=state.events.subscriber_count(MENUBAR_CLIENT) > 0,
         steps=STEPS,
     )
 
@@ -184,6 +186,8 @@ async def uninstall(state: State, body: UninstallRequest | None = None) -> Unins
                 secrets_deleted += 1
             except Exception:
                 log.debug("no secret %s to delete", name)
+    if request.delete_data:
+        state.data_removed = True
     for item in _items(state):
         path = Path(item.path)
         wanted = {
