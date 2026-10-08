@@ -53,5 +53,9 @@ agents ── /v1/* ─────────┘        settings · downloads 
 - `scripts/fake_splash/` — a stdlib stand-in for the Splash engine used by tests and development.
 - [`SPEC.md`](SPEC.md) is the product and technical spec; [`docs/ui/`](docs/ui/) holds the page-by-page UI specs; [`docs/spec-drift.md`](docs/spec-drift.md) records deviations.
 
+## Releases
+
+Packaging (the signed app, DMG, Sparkle updates, the Homebrew cask and the release workflow) is described in [`docs/plans/packaging.md`](docs/plans/packaging.md). To ship or roll back a release, follow [`docs/release.md`](docs/release.md).
+
 ## License
 [Apache-2.0](LICENSE). See [NOTICE](NOTICE). The Archivo font is under the SIL Open Font License (`web/src/assets/fonts/OFL.txt`). Splash is a separate project by its authors and is installed from its own Homebrew tap.
