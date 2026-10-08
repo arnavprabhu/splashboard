@@ -53,6 +53,7 @@ from .settings.store import SettingsStore
 from .state import ManagerState
 from .storage.api import router as storage_router
 from .system.api import router as system_router
+from .uninstall import router as uninstall_router
 from .usage.api import router as usage_router
 
 log = logging.getLogger(__name__)
@@ -81,6 +82,7 @@ ADMIN_ROUTERS: tuple[tuple[str, APIRouter], ...] = (
     ("Data", data_router),
     ("Storage", storage_router),
     ("Auth", auth_router),
+    ("Uninstall", uninstall_router),
 )
 
 

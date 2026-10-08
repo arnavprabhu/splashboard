@@ -1735,3 +1735,49 @@ SSE_MODELS: tuple[type[BaseModel], ...] = (
     LogBackfill,
     ProcessExit,
 )
+
+
+# Uninstall (SPEC §19, D72; PKG-12) ---------------------------------------------
+
+
+class UninstallItem(ApiModel):
+    """One entry of the data folder, or the models or cache folder, with its size."""
+
+    path: str
+    kind: Literal["data", "models", "cache"]
+    bytes: int
+    # A models or cache folder moved outside the data folder (storage.models_dir / cache_dir)
+    # is shown but never deleted: it may be the user's own Hugging Face cache (SPEC §5, Q21).
+    deletable: bool = True
+
+
+class UninstallPlan(ApiModel):
+    home: str
+    items: list[UninstallItem]
+    models_bytes: int
+    cache_bytes: int
+    data_bytes: int
+    connected_integrations: list[str]
+    path_block_files: list[str]
+    shim_installed: bool
+    steps: list[str]
+
+
+class UninstallRequest(ApiModel):
+    delete_data: bool = True
+    delete_models: bool = False
+    delete_cache: bool = False
+    # The CLI asks the manager to stop itself; the menu bar app passes false and stops it by
+    # unregistering the LaunchAgent, which would otherwise start it again (KeepAlive).
+    stop: bool = True
+
+
+class UninstallResult(ApiModel):
+    restored: list[str]
+    path_block_removed: list[str]
+    shim_removed: bool
+    secrets_deleted: int
+    deleted: list[str]
+    kept: list[str]
+    freed_bytes: int
+    stopping: bool
