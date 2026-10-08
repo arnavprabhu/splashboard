@@ -1,8 +1,8 @@
 /**
  * Typed calls the wizard makes (docs/api.md §2, §3, §6, §7, §12.4). Routes that may still be
  * stubs (501 `not_implemented`) are wrapped so the steps can show their designed fallback.
- * Missing routes are listed in the page report as API requests (POST /system/open-terminal,
- * POST /cli/install-path, `wizard.step` in settings).
+ * Missing routes are listed in the page report as API requests (POST /cli/install-path,
+ * `wizard.step` in settings). The Homebrew installer is `POST /system/brew/install`.
  */
 
 import { api, ApiError } from '../../api/client';
@@ -18,6 +18,7 @@ import type {
   ImportCandidates,
   InstalledModels,
   JobAccepted,
+  OpenTerminalResult,
   PresetList,
   SettingsDocument,
   SettingsResponse,
@@ -49,6 +50,20 @@ async function orNull<T>(p: Promise<T>): Promise<T | null> {
 export const getBrew = (signal?: AbortSignal) => api.read<BrewInfo>('/system/brew', undefined, signal);
 /** null = the doctor is a stub. */
 export const getDoctor = (signal?: AbortSignal) => orNull(api.read<DoctorReport>('/doctor', undefined, signal));
+
+/**
+ * Opens Terminal with the official Homebrew installer (SPEC §10.2; system/api.py `POST /system/brew/install`).
+ * A 409 means Homebrew is already there, which the poll shows, so it is not an error.
+ */
+export async function openBrewInstaller(): Promise<void> {
+  try {
+    await api.post<OpenTerminalResult>('/system/brew/install');
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 409) return;
+    throw err;
+  }
+}
+
 export const installEngine = () => api.post<JobAccepted>('/engine/install');
 export const upgradeEngine = () => api.post<JobAccepted>('/engine/upgrade');
 export const getEngine = () => api.get<EngineView>('/engine');

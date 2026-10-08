@@ -158,6 +158,8 @@ class Supervisor:
     idle_check_s = 15.0
     install_sample_s = 1.0
     splash_idle_release_s = SPLASH_IDLE_RELEASE_S
+    # How long a crash restart waits before it tries again while a hold is active (§6.5).
+    hold_retry_s = 5.0
 
     def __init__(self, state: ManagerState) -> None:
         self.app = state
@@ -1067,15 +1069,26 @@ class Supervisor:
 
     async def _restart_after(self, model: str, delay: float) -> None:
         await asyncio.sleep(delay)
-        async with self._op:
-            if self.state != "crashed" or self._run is not None or self._holds:
-                return
-            self._next_retry_at = None
-            self._backoff = None
-            try:
-                await self._spawn(model, auto_restart=True)
-            except ApiError as error:
-                log.error("auto-restart failed: %s", error.message)
+        while True:
+            async with self._op:
+                if self.state != "crashed" or self._run is not None:
+                    return
+                if not self._holds:
+                    self._next_retry_at = None
+                    self._backoff = None
+                    try:
+                        await self._spawn(model, auto_restart=True)
+                    except ApiError as error:
+                        log.error("auto-restart failed: %s", error.message)
+                    return
+                # A model delete, KV-cache clear or GGUF registration holds the engine:
+                # starting now would race it. Nothing else re-arms this timer, so the
+                # restart tries again every hold_retry_s (the Retry-After of a refused
+                # start, SPEC §6.5) until the hold ends.
+                self._next_retry_at = datetime.fromtimestamp(
+                    time.time() + self.hold_retry_s, UTC
+                ).isoformat()
+            await asyncio.sleep(self.hold_retry_s)
 
     # /status polling -----------------------------------------------------------------------
 

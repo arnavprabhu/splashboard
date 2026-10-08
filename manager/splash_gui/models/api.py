@@ -123,7 +123,10 @@ async def rescan_local(state: State, restore_ignored: bool = False) -> dict[str,
 
 
 @router.post(
-    "/models/{model_id:path}/verify", response_model=JobAccepted, status_code=202, responses=_ERR
+    "/models/{model_id:path}/verify",
+    response_model=JobAccepted,
+    status_code=202,
+    responses={**_ERR, **error_responses(409)},
 )
 async def verify(state: State, model_id: str, body: VerifyRequest | None = None) -> JobAccepted:
     return cast(Models, state.models).verify(model_id, body.full if body else False)

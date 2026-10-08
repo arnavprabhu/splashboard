@@ -345,11 +345,13 @@ test('row 17: on desktop the thread is the scrolling region and follows a new re
 
 test('row 19: judgment facts leave no dangling separator', async ({ page }) => {
   await mockManager(page, { engine: READY });
-  await page.route('**/v1/systemone', (r) => r.fulfill({ json: { answers: { intent: { type: 'choice', choice: 'billing', probabilities: { billing: 0.8, other: 0.2 }, confidence: 0.28 } }, usage: { input_tokens: 120 } } }));
+  await page.route('**/v1/systemone', (r) => r.fulfill({ json: { answers: { intent: { type: 'choice', choice: 'billing', probabilities: { billing: 0.8, other: 0.2 }, confidence: 0.28 } }, usage: { input_tokens: 120 } }, headers: { 'x-splash-request-id': 'req_jd_row19' } }));
   await page.goto('/admin/tools/judgments');
   await page.getByRole('button', { name: 'Run', exact: true }).click();
   const facts = page.getByTestId('jd-answer-facts').first();
   await expect(facts).toContainText('Answer billing');
+  // SPEC §10.6: the results show the request ID the manager stamped on the response.
+  await expect(page.getByText('Request req_jd_row19')).toBeVisible();
   expect((await facts.innerText()).trim()).not.toMatch(/·\s*$/);
   expect(await facts.innerText()).not.toContain('·');
 });

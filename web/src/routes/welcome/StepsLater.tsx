@@ -29,7 +29,7 @@ import { DownloadsPanel } from '../models/DownloadsPanel';
 import { applyPreset, getCatalog, getEffective, getPresets, getSchema, loadEngine, markCompleted, queueDownload } from './api';
 import { StepLayout, progress, resetProgress, updateProgress, useWizard } from './frame';
 import { closeWelcome, openURL } from './host';
-import { activeDownloadFor, defaultInstalled, servingModel, installedChoices, savedPreset, curlSample, endpoints, movedOrigin, presetDiff, recommendation, tierSentence } from './logic';
+import { activeDownloadFor, defaultInstalled, servingModel, installedChoices, savedPreset, curlSample, endpoints, movedOrigin, presetDiff, recommendation, startSettings, tierSentence } from './logic';
 import { probeOrigin } from '../settings/api';
 import { type PresetId } from './steps';
 
@@ -46,17 +46,23 @@ export function StepUseCase() {
   const schema = useApi(getSchema);
   // This run's pick, else the preset saved by an earlier run (settings `wizard.preset`), else Chat.
   const saved = savedPreset(settings.value?.settings?.global);
-  const [picked, setSelected] = useState<PresetId | null>(progress.value.preset);
+  // The unapplied pick (settings `wizard.use_case`) first, then the applied one, then the saved preset.
+  const [picked, setSelected] = useState<PresetId | null>(progress.value.useCase ?? progress.value.preset);
   const selected = picked ?? saved ?? 'chat';
   const [busy, setBusy] = useState(false);
   const list = presets.data?.presets ?? [];
   const sorted = ORDER.map((id) => list.find((p) => p.id === id)).filter((p): p is NonNullable<typeof p> => !!p);
   const rows = presets.data ? presetDiff(list, selected, effective.data, schema.data, settings.value?.settings?.global) : [];
+  // Saved at once (SPEC §10.2): another browser or a reload resumes with this pick, not yet applied.
+  function pick(id: PresetId) {
+    setSelected(id);
+    updateProgress({ useCase: id });
+  }
   async function apply() {
     setBusy(true);
     try {
       await applyPreset(selected);
-      updateProgress({ preset: selected });
+      updateProgress({ preset: selected, useCase: null });
       goTo(4);
     } catch (err) {
       toastError(t('welcome.usecase.apply_failed'), err);
@@ -75,7 +81,7 @@ export function StepUseCase() {
           <div class="wz-presets" role="radiogroup" aria-label={t('welcome.usecase.label')}>
             {sorted.map((p) => (
               <label key={p.id} class="wz-preset" data-selected={selected === p.id ? 'true' : undefined}>
-                <input type="radio" name="wz-preset" class="visually-hidden" checked={selected === p.id} onChange={() => setSelected(p.id)} />
+                <input type="radio" name="wz-preset" class="visually-hidden" checked={selected === p.id} onChange={() => pick(p.id)} />
                 <span class="wz-preset-mark" aria-hidden="true">
                   {selected === p.id ? '●' : '○'}
                 </span>
@@ -376,10 +382,7 @@ export function StepStart() {
     if (!ready || completed) return;
     setCompleted(true);
     const port = progress.value.pendingPort;
-    void markCompleted((doc) => {
-      doc.global.routing = { ...((doc.global.routing ?? {}) as object), default_model: model } as never;
-      if (port) doc.global.server = { ...((doc.global.server ?? { host: '127.0.0.1', port: 8000 }) as object), port } as never;
-    })
+    void markCompleted((doc) => startSettings(doc, model, port))
       .then(async () => {
         // The port is applied and the pending copy is gone, here and in settings. The signal is
         // reset too, or a later step change would write the old step and port back.

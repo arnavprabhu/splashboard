@@ -91,7 +91,7 @@ function SystemOne({ model }: { model: string }) {
   const [questions, setQuestions] = useState<Question[]>(() => questionsFromBody(SYSTEMONE_EXAMPLE) ?? []);
   const [jsonOpen, setJsonOpen] = useState(false);
   const [jsonText, setJsonText] = useState("");
-  const [result, setResult] = useState<{ answers: Record<string, Record<string, unknown>>; tokens: number | null; secs: number } | null>(null);
+  const [result, setResult] = useState<{ answers: Record<string, Record<string, unknown>>; tokens: number | null; secs: number; requestId: string | null } | null>(null);
   const [serverErrors, setServerErrors] = useState<Record<string, string>>({});
   const [errorDetail, setErrorDetail] = useState<unknown>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -119,8 +119,11 @@ function SystemOne({ model }: { model: string }) {
     setErrorDetail(null);
     const started = performance.now();
     try {
-      const res = await request<{ answers: Record<string, Record<string, unknown>>; usage?: { input_tokens?: number } }>("/v1/systemone", { body });
-      setResult({ answers: res.answers ?? {}, tokens: res.usage?.input_tokens ?? null, secs: (performance.now() - started) / 1000 });
+      // The manager stamps `x-splash-request-id` on the relayed response (proxy/pipeline.py); the body alone lacks it.
+      const res = await request<Response>("/v1/systemone", { body, raw: true });
+      const requestId = res.headers.get("x-splash-request-id");
+      const json = (await res.json()) as { answers?: Record<string, Record<string, unknown>>; usage?: { input_tokens?: number } };
+      setResult({ answers: json.answers ?? {}, tokens: json.usage?.input_tokens ?? null, secs: (performance.now() - started) / 1000, requestId });
     } catch (e) {
       setResult(null);
       if (e instanceof ApiError && e.status === 422) {
@@ -335,6 +338,7 @@ function SystemOne({ model }: { model: string }) {
                 </div>
               );
             })}
+            {result.requestId && <p class="meta mono">{t("tools.jd.request_id", { id: result.requestId })}</p>}
           </div>
         </Section>
       )}

@@ -929,7 +929,10 @@ class VariantOut(ApiModel):
 class VisionInfo(ApiModel):
     available: bool
     reason: str | None = None
+    # SPEC §9.1: the repository's vision projector (`mmproj-*`), labelled in the variant table,
+    # never a variant. Its file size, when the Hub listed it.
     projector: str | None = None
+    projector_bytes: int | None = None
 
 
 class PlannedFile(ApiModel):

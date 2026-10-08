@@ -115,7 +115,7 @@ def valid_id(model: str) -> str:
     try:
         return parse_model_id(model)
     except ValueError as error:
-        raise ApiError(400, str(error), "invalid_model") from None
+        raise ApiError(400, str(error), "invalid_model_id") from None
 
 
 class Models:
@@ -647,7 +647,8 @@ class Models:
         memory = self.state.memory_bytes()
         # D59 (b): the catalog's §9.1 estimate, so a variant's fit is the same here, in
         # the catalog and in the recommendation (`cat.default_variant`).
-        repo_vision = cat.projector(repo.files) is not None
+        projector = cat.projector(repo.files)
+        repo_vision = projector is not None
         variants = []
         for item in table or []:
             result = fresh.get(item["name"])
@@ -656,6 +657,7 @@ class Models:
                 VariantOut.model_validate(
                     {
                         **item,
+                        "quality": cat.quality_tier(item["name"], item.get("files")),
                         "loadable": result["compatible"] if result else None,
                         "reason": result.get("reason") if result else None,
                         "fit": cat.fit_for(need, memory),
@@ -727,6 +729,8 @@ class Models:
                 "vision": VisionInfo(
                     available=bool(selected and selected["vision"]),
                     reason=selected.get("vision_reason") if selected else reason,
+                    projector=projector,
+                    projector_bytes=repo.files.get(projector) if projector else None,
                 ),
                 "draft": selected.get("draft") if selected else None,
                 "reason": reason,

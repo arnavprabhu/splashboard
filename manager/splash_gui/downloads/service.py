@@ -94,6 +94,8 @@ class Downloads:
         self.stopping = False
         self.queue_lock = asyncio.Lock()
         self.preexisting: dict[str, list[str]] = {}
+        # The state each item last went out with on /events (see `publish`).
+        self.announced: dict[str, str] = {}
 
     async def start(self) -> None:
         try:
@@ -127,7 +129,13 @@ class Downloads:
         )
 
     def publish(self, item: DownloadItem) -> None:
-        self.state.events.publish("download.progress", item)
+        """Sends the item on `/events` (docs/api.md §4): a state change as `download.state`,
+        any other sample (bytes, speed) as `download.progress`."""
+        event = (
+            "download.progress" if self.announced.get(item.id) == item.state else "download.state"
+        )
+        self.announced[item.id] = item.state
+        self.state.events.publish(event, item)
         self.save()
 
     def active_model(self, model: str) -> bool:
@@ -156,7 +164,7 @@ class Downloads:
             raise ApiError(409, "Wait for the storage operation to finish", "storage_busy")
         valid_id(body.id)
         if self.active_model(body.id):
-            raise ApiError(409, "This model is already in the queue", "download_exists")
+            raise ApiError(409, "This model is already in the queue", "already_queued")
         item = DownloadItem(
             id=uuid.uuid4().hex,
             model=body.id,

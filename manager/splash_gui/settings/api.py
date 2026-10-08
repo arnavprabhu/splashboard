@@ -36,6 +36,7 @@ from ..schemas import (
     SecretMeta,
     SecretsState,
     SettingChange,
+    SettingsChangedEvent,
     SettingsResetRequest,
     SettingsResetResult,
     SettingsResponse,
@@ -203,18 +204,31 @@ def save_settings(state: ManagerState, raw: Any) -> SettingsSaveResult:
             "invalid_settings",
             issues=[i.model_dump() for i in _issues(result.errors)],
         )
-    active = state.active_model()
-    restart = _restart_required(old, result.document, active)
+    event = settings_changed(state, old, result.document, changes)
     for listener in list(state.settings_listeners):
         try:
-            listener(changes, restart)
+            listener(changes, event.restart_required)
         except Exception:
             log.exception("settings listener failed")
+    # After the listeners, so a client that reloads on this event sees what they applied.
+    state.events.publish("settings.changed", event)
     return SettingsSaveResult(
         settings=masked_document(result.document),
-        restart_required=restart,
-        changed=[_change_out(c, active, old, result.document) for c in changes],
+        restart_required=event.restart_required,
+        changed=event.changed,
         warnings=_issues(result.warnings),
+    )
+
+
+def settings_changed(
+    state: ManagerState, old: SettingsDocument, new: SettingsDocument, changes: list[Change]
+) -> SettingsChangedEvent:
+    """What a successful save changed: the `settings.changed` payload (docs/api.md §4). Every
+    write goes through here (PUT, presets, reset, profiles, MCP servers, storage moves)."""
+    active = state.active_model()
+    return SettingsChangedEvent(
+        changed=[_change_out(c, active, old, new) for c in changes],
+        restart_required=_restart_required(old, new, active),
     )
 
 

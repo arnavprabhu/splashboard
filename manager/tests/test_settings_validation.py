@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from splash_gui.events.alerts import NOTIFICATION_SETTING
 from splash_gui.settings.metadata import FIELDS, FIELDS_BY_KEY, SECTION_IDS
 from splash_gui.settings.model import CLAUDE_DESKTOP_SLOTS, SettingsDocument
 from splash_gui.settings.validation import ValidationContext, validate_document
@@ -412,6 +413,23 @@ def test_metadata_covers_every_settings_field() -> None:
     keychain = {f.key for f in FIELDS if f.storage == "keychain"}
     assert leaves == set(FIELDS_BY_KEY) - model_only - keychain
     assert all(f.section in SECTION_IDS for f in FIELDS)
+
+
+def test_every_notification_toggle_explains_itself() -> None:
+    """SPEC §10.9: each toggle has a one-line explanation, and every alert it silences exists."""
+    toggles = {f.key: f for f in FIELDS if f.section == "notifications"}
+    assert set(toggles) == {
+        "notifications.download_done",
+        "notifications.engine_failed",
+        "notifications.memory_critical",
+        "notifications.update_available",
+        "notifications.disk_cache_errors",
+    }
+    for key, field in toggles.items():
+        assert field.help and "\n" not in field.help and field.help.endswith("."), key
+        assert field.flag is None and field.env is None, key  # manager-only, no Splash flag
+    silenced = {f"notifications.{name}" for name in set(NOTIFICATION_SETTING.values())}
+    assert silenced == set(toggles)
 
 
 def test_every_appendix_a_flag_has_metadata() -> None:

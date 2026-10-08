@@ -151,6 +151,7 @@ Installer (`install/models.py`, and the install step of `serve`):
 | `FAKE_SPLASH_DL_COMMIT_SALT` | — | Changes every resolved commit, so `prepare` reports "moved from … to …" (simulates updates). The first weight file changes too, so an update fetches one file; if that fails, the old commit is kept with `Warning: keeping the installed …` and `prepare` still exits 0 (upstream.py `_keeping_installation`) |
 | `FAKE_SPLASH_DL_FAIL` | — | `gated` (401 unless `HF_TOKEN` is set), `network` (Hub unreachable), `network_mid`, `disk_full` (ENOSPC mid-download), `incompatible` |
 | `FAKE_SPLASH_DL_FAIL_AFTER` | half of the first weight file | Bytes written before `network_mid` or `disk_full` |
+| `FAKE_SPLASH_VERIFY_FAIL` | unset | Any value: `models.py verify` refuses the assembly (`source content hash mismatch`), so a download's auto-verify fails (SPEC §9.4) |
 | `FAKE_SPLASH_INSPECT_SECONDS` | 0 | Time the compatibility helper spends on one GGUF variant's header (`install/upstream.py` `_gguf_target`): `0.3`, or `0.3,UD-Q4_K_M=1` to slow one variant down (D59) |
 
 Fake Hub (`hub.py`, started by `launch.sh fake` and the `fake_hub` test fixtures):

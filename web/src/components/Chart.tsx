@@ -58,7 +58,8 @@ export function buildOptions(el: HTMLElement, props: ChartProps, width: number):
   const ink = cssVar(el, '--ink');
   const mute = cssVar(el, '--mute');
   const acc = cssVar(el, '--acc');
-  const font = `600 12px ${cssVar(el, '--font') || 'sans-serif'}`;
+  // Axes use the meta type (DESIGN.md Typography: 13px, 600; SPEC §18.3).
+  const font = `600 13px ${cssVar(el, '--font') || 'sans-serif'}`;
   const axis = (values?: uPlot.Axis['values'], y?: boolean): uPlot.Axis => ({
     stroke: mute,
     font,

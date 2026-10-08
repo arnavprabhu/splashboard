@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -23,8 +24,39 @@ def sizes(client: TestClient) -> dict[str, dict[str, Any]]:
 def test_every_target_reports_a_size(client: TestClient) -> None:
     targets = sizes(client)
     assert set(targets) == {"chats", "usage", "logs", "traces", "kv_cache", "responses", "models"}
-    assert targets["responses"]["bytes"] is None and targets["responses"]["note"]
+    # No engine is running, so no response is stored (SPEC §10.9): a size of 0, not a dash.
+    assert targets["responses"]["bytes"] == 0 and targets["responses"]["items"] == 0
+    assert targets["responses"]["note"]
     assert targets["chats"]["items"] == 0 and targets["usage"]["items"] == 0
+
+
+def test_stored_responses_are_sized_from_the_engine(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """The row reads the engine's `response_store` from its last `/status` (SPEC §10.9)."""
+    h = harness_factory()
+    h.load()
+    h.client.post(
+        "/v1/responses", json={"model": MODEL, "input": "hi", "store": True, "max_output_tokens": 4}
+    )
+
+    def stored() -> dict[str, Any]:
+        row: dict[str, Any] = sizes(h.client)["responses"]
+        return row
+
+    deadline = time.monotonic() + 10
+    while stored()["items"] != 1:  # the status poll runs every 0.2 s under the harness
+        assert time.monotonic() < deadline, stored()
+        time.sleep(0.05)
+    assert stored()["bytes"] > 0
+    result = h.client.post("/api/admin/data/clear", json={"target": "responses"}).json()
+    assert result["freed_bytes"] > 0 and result["engine_restarted"] is True
+    h.wait_state("ready")
+    deadline = time.monotonic() + 10
+    while stored()["items"] != 0:
+        assert time.monotonic() < deadline, stored()
+        time.sleep(0.05)
+    assert stored()["bytes"] == 0
 
 
 def test_clear_chats_and_usage(app: FastAPI, client: TestClient) -> None:

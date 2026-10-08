@@ -176,6 +176,9 @@ class EngineOptionsCache:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        # One helper run at a time: the startup read (SPEC §8.4) and a first Settings
+        # load share it, so the second caller takes the first one's result.
+        self._run_lock = threading.Lock()
         self._key: tuple[str | None, str | None] | None = None
         self._value: EngineOptions | None = None
 
@@ -184,10 +187,14 @@ class EngineOptionsCache:
         with self._lock:
             if self._key == key and self._value is not None:
                 return self._value
-        value = run_helper(engine)
-        with self._lock:
-            self._key, self._value = key, value
-        return value
+        with self._run_lock:
+            with self._lock:
+                if self._key == key and self._value is not None:
+                    return self._value
+            value = run_helper(engine)
+            with self._lock:
+                self._key, self._value = key, value
+            return value
 
     def clear(self) -> None:
         with self._lock:

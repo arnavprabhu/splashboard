@@ -144,6 +144,25 @@ def test_variant_table_reports_loadability_and_a_recommendation(hub_harness):
     assert len(recommended) <= 1, "at most one Recommended mark"
 
 
+def test_inspect_rows_carry_their_quality_tier_and_the_projector_is_labelled(hub_harness):
+    """SPEC §9.1 (D98): a variant row has its quality tier (a dash for one Splash cannot load).
+    The vision projector is named on `vision` and never listed as a variant; an MLX
+    repository has none."""
+    harness = hub_harness()
+    result = inspect(harness, MANY)
+    tiers = {v["name"]: v["quality"] for v in result["variants"]}
+    assert tiers["UD-Q4_K_M"] == "Balanced"
+    assert tiers["UD-IQ2_XXS"] == "Compact"
+    assert tiers["Q8_0"] == "Highest"
+    assert tiers["UD-Q8_K_XL"] is None
+    projector = result["vision"]["projector"]
+    assert projector and "mmproj" in projector, result["vision"]
+    assert result["vision"]["projector_bytes"] > 0
+    assert not [name for name in tiers if "mmproj" in name.lower()], tiers
+    mlx = inspect(harness, MLX_35B)
+    assert mlx["vision"]["projector"] is None and mlx["vision"]["projector_bytes"] is None
+
+
 def test_only_loadable_variants_are_ever_marked_recommended(hub_harness):
     harness = hub_harness()
     result = inspect(harness, GGUF_35B)

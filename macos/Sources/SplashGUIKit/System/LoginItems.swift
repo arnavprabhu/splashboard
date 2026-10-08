@@ -73,6 +73,7 @@ public enum ManagerAgent {
 /// The manager agent is registered when the app needs the manager (see `ManagerController`)
 /// and unregistered when the app quits with "stop server" — so it comes back at login only
 /// together with the app. This avoids killing a running manager when the toggle changes.
+/// The toggle never registers or unregisters the agent (SPEC §4.2, D87; the keep-running residual is §22 Q42).
 public final class LoginItemController: Sendable {
     public struct Outcome: Sendable, Equatable {
         public var status: AppServiceStatus

@@ -194,6 +194,7 @@ export const toolsStrings = {
   'tools.jd.copy_curl': 'Copy as curl',
   'tools.jd.results': 'Results',
   'tools.jd.results_meta': '{tokens} prompt tokens · {secs} s',
+  'tools.jd.request_id': 'Request {id}',
   'tools.jd.answer': 'Answer',
   'tools.jd.answer_v': 'Answer {v}',
   'tools.jd.confidence': 'Confidence {v}',

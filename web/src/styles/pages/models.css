@@ -28,6 +28,8 @@
 .dl-row { padding: 24px 0; border-bottom: 1px solid var(--rule); }
 .dl-meta, .dl-actions { margin-top: 12px; }
 .dl-files { margin-top: 16px; }
+/* SPEC §10.4: the queue stays at the bottom of the Downloader while anything is active (DownloadsPanel sets data-sticky). */
+.dl-panel[data-sticky='true'] { position: sticky; bottom: 0; z-index: 20; background: var(--bg); }
 .variant-table { width: 100%; border-collapse: collapse; }
 .variant-table td, .variant-table th { padding: 12px 8px; text-align: left; border-bottom: 1px solid var(--rule); }
 .variant-radio { display: flex; align-items: center; gap: 8px; }

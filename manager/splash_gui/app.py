@@ -14,6 +14,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import threading
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -168,6 +169,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     state.events.attach(asyncio.get_running_loop())
     with contextlib.suppress(Exception):
         await asyncio.to_thread(state.engine)
+    _read_engine_options_in_background(state)
     _ensure_shim(state)
     _migrate_mcp_secrets(state)
     core = [state.proxy, state.supervisor, state.metrics]
@@ -187,6 +189,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         with contextlib.suppress(Exception):
             await state.jobs.shutdown()
         state.usage.close_open_sessions()
+
+
+def _read_engine_options_in_background(state: ManagerState) -> None:
+    """SPEC §8.4: read the engine's serve options as the manager starts, on a daemon
+    thread, so the first Settings load does not wait for the helper (up to 20 s).
+    A failure is logged; Settings then shows the helper's error as before."""
+
+    def read() -> None:
+        try:
+            state.engine_options.get(state.engine())
+        except Exception:
+            log.warning("could not read the engine's serve options", exc_info=True)
+
+    threading.Thread(target=read, name="serve-options", daemon=True).start()
 
 
 def _migrate_mcp_secrets(state: ManagerState) -> None:

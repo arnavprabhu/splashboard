@@ -50,7 +50,8 @@ if TYPE_CHECKING:
     from ..state import ManagerState
 
 CLIENTS = {
-    "claude": ("Claude Code", "https://code.claude.com/docs/en/setup"),
+    # Install links: splash/install/clients.py INSTALL_URLS (SPEC §10.7; tested).
+    "claude": ("Claude Code", "https://code.claude.com/docs/en/overview"),
     "codex": ("Codex CLI", "https://developers.openai.com/codex/cli/"),
     "opencode": ("OpenCode", "https://opencode.ai/docs/"),
     "hermes": (
@@ -857,7 +858,19 @@ class IntegrationsService:
                 "has_more": False,
             }
 
+        def no_model() -> Response:
+            from ..proxy.pipeline import ProxyError
+
+            return ProxyError(
+                503,
+                "Splash GUI: no model loaded",
+                "engine_unavailable",
+                headers={"Retry-After": "5"},
+            ).response(anthropic=True)
+
         async def messages(request: Request) -> Response:
+            from ..proxy.pipeline import ProxyError
+
             try:
                 body = await request.json()
             except ValueError:
@@ -874,17 +887,21 @@ class IntegrationsService:
                 or self.state.settings.current.global_.routing.default_model
             )
             if not model:
-                from ..proxy.pipeline import ProxyError
-
-                return ProxyError(
-                    503,
-                    "Splash GUI: no model loaded",
-                    "engine_unavailable",
-                    headers={"Retry-After": "5"},
-                ).response(anthropic=True)
+                return no_model()
+            proxy = self.state.proxy
+            supervisor = proxy.sup
+            if supervisor is not None and not supervisor.accepting:
+                # SPEC §11.3.1: the engine is stopped while connected, so the gateway
+                # loads the mapped model first (the same routing the proxy runs, §7.4).
+                # If that fails, the answer is the overload message, not the load's error.
+                # A busy engine keeps the proxy's own message (switch while in flight).
+                try:
+                    await proxy.route(request, model)
+                except (ProxyError, ApiError):
+                    return no_model()
             return cast(
                 Response,
-                await self.state.proxy.handle(
+                await proxy.handle(
                     request,
                     request.url.path,
                     body_override=body,

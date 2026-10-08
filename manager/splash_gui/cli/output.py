@@ -153,6 +153,14 @@ class Style:
             return self.warning(self.glyph("warn"))
         return self.bold(self.glyph("ok"))
 
+    def bar(self, ratio: Any, width: int = 20) -> str:
+        """A progress bar (docs/ui/11 §2.2): `█`/`░` in UTF-8, `#`/`-` otherwise. The fill
+        is the ratio clamped to 0..1; a missing ratio draws an empty bar."""
+        fill, rest = ("█", "░") if self.utf8 else ("#", "-")
+        share = min(1.0, max(0.0, float(ratio))) if _num(ratio) else 0.0
+        done = round(share * width)
+        return fill * done + rest * (width - done)
+
 
 def make_style(choice: str, stream: TextIO, env: Mapping[str, str] | None = None) -> Style:
     return Style(colour=colour_enabled(choice, stream, env), utf8=utf8_locale(env))

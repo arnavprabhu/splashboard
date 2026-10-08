@@ -220,6 +220,13 @@ class ManagerRunner:
         else:
             log.info("%s received again; still stopping", name)
 
+    def request_stop(self) -> None:
+        """POST /api/admin/shutdown (`splash stop`, `splash restart`, SPEC §12.2): the same
+        stop as one signal (§4.2). The route answers first; the drain and the lifespan
+        shutdown follow, so the process exits 0 once the restore has run."""
+        log.info("stop requested through the admin API; stopping")
+        self.stop()
+
     @contextlib.contextmanager
     def _signal_handlers(self) -> Iterator[None]:
         """Hold SIGINT and SIGTERM from the lifespan startup to the end of its shutdown.
@@ -244,12 +251,14 @@ class ManagerRunner:
 
     async def serve(self) -> None:
         self.state.settings_listeners.append(self.on_settings_saved)
+        self.state.request_shutdown = self.request_stop
         try:
             with self._signal_handlers():
                 async with self.app.router.lifespan_context(self.app) as lifespan_state:
                     app = _WithLifespanState(self.app, dict(lifespan_state or {}))
                     await self._serve_loop(app)
         finally:
+            self.state.request_shutdown = None
             self.state.settings_listeners.remove(self.on_settings_saved)
             self.state.bound = None
 

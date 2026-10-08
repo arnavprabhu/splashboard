@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import fcntl
 import json
 import os
 import re
@@ -1195,6 +1196,63 @@ def cmd_load(ctx: Ctx, client: Client) -> int:
     return 0
 
 
+def restore_desktop(client: Client, name: str) -> int:
+    """`splash launch claude-desktop|codex-app --restore` (SPEC §11.3, §11.4): an explicit
+    Disconnect. With the manager down the restore runs here, from `state.json`, and it
+    reopens the app when it was running, as Disconnect does through the manager."""
+    if client.running():
+        client.request("POST", f"/integrations/{name}/disconnect")
+        return 0
+    import asyncio
+
+    from ..app import AppConfig, build_state
+    from ..integrations.service import IntegrationsService
+
+    state = build_state(AppConfig(paths=client.paths))
+    service = IntegrationsService(state)
+
+    async def restore() -> None:
+        await service.start()
+        await service.restore_one(name, reopen=True)
+
+    asyncio.run(restore())
+    return 0
+
+
+def connect_desktop(ctx: Ctx, client: Client, name: str) -> int:
+    """`splash launch claude-desktop|codex-app` (SPEC §11.3.1 step 1, docs/ui/11 §9.4).
+    Connecting restarts a running app, so the manager answers 409
+    `restart_confirmation_required` until the restart is confirmed. On a TTY the user is
+    asked first; off a TTY the command fails and nothing is changed."""
+    client.start(note=not ctx.quiet)
+    path = f"/integrations/{name}/connect"
+    try:
+        client.request("POST", path, {"confirm_restart": False})
+        return 0
+    except ApiFailure as error:
+        if error.code != "restart_confirmation_required":
+            raise
+    label = "Claude" if name == "claude-desktop" else "Codex"
+    if not sys.stdin.isatty():
+        raise CliError(
+            f"{label} is running, and connecting restarts it.",
+            exit_code=EXIT_USAGE,
+            fix=f"quit {label} and run this again, or run it in a terminal to confirm",
+        )
+    try:
+        answer = input(
+            f"{label} will restart. Your previous configuration is backed up and restored "
+            "when you disconnect or quit Splash GUI. Continue? [y/N] "
+        )
+    except EOFError:
+        answer = ""
+    if answer.strip().lower() not in ("y", "yes"):
+        ctx.note("Not connected.")
+        return EXIT_FAILED
+    client.request("POST", path, {"confirm_restart": True})
+    return 0
+
+
 def launch(ctx: Ctx, client: Client, passthrough_args: list[str]) -> int:
     args = ctx.args
     if args.client in DESKTOP_CLIENTS:
@@ -1206,25 +1264,9 @@ def launch(ctx: Ctx, client: Client, passthrough_args: list[str]) -> int:
             )
             print(f"{args.client}: {action}")
             return 0
-        if args.restore and not client.running():
-            import asyncio
-
-            from ..app import AppConfig, build_state
-            from ..integrations.service import IntegrationsService
-
-            state = build_state(AppConfig(paths=client.paths))
-            service = IntegrationsService(state)
-
-            async def restore() -> None:
-                await service.start()
-                await service.restore_one(args.client, reopen=False)
-
-            asyncio.run(restore())
-            return 0
-        client.start(note=not ctx.quiet)
-        action = "disconnect" if args.restore else "connect"
-        client.request("POST", f"/integrations/{args.client}/{action}", {"confirm_restart": True})
-        return 0
+        if args.restore:
+            return restore_desktop(client, args.client)
+        return connect_desktop(ctx, client, args.client)
     loaded: str | None = None
     if args.print_only:
         # `--print` changes nothing (docs/ui/11 §9.3): it never starts the manager
@@ -1416,7 +1458,9 @@ def cmd_pull(ctx: Ctx, client: Client) -> int:
             percent = fmt_percent(progress, 0) if progress is not None else ""
             text = " ".join(p for p in (item["state"], percent, sizes, rate, eta) if p)
             if tty:
-                print(f"\r\033[K{args.model}: {text}", end="", file=sys.stderr, flush=True)
+                # The overall bar (docs/ui/11 §6.2), drawn from the manager's byte progress.
+                drawn = f"{ctx.err.bar(progress)} " if progress is not None else ""
+                print(f"\r\033[K{args.model}: {drawn}{text}", end="", file=sys.stderr, flush=True)
             elif item["state"] != last_state or time.monotonic() - last_line >= 5:
                 ctx.note(f"pull {args.model}: {text}")
                 last_line, last_state = time.monotonic(), item["state"]
@@ -1550,6 +1594,36 @@ def admin_url(client: Client, page: str) -> str:
     return f"{client.url}{link['url']}&next={urllib.parse.quote(target, safe='/')}"
 
 
+def manager_exited(paths: Paths) -> bool:
+    """The manager holds `run/manager.lock` for its whole life (`manager.instance_lock`),
+    and the OS releases the lock at exit. A lock that can be taken means the manager has
+    exited, after the lifespan shutdown restored the integrations (SPEC §4.2)."""
+    lock_path = paths.run_dir / "manager.lock"
+    if not lock_path.exists():
+        return True
+    with lock_path.open("a+") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+    return True
+
+
+def shut_down(client: Client) -> None:
+    """Ask the manager to stop (`POST /shutdown`, SPEC §12.2) and wait until it has exited.
+    The port stops answering before the restore ends, so the wait is on the lock: a
+    `start` that follows never races the restore for the configuration files."""
+    client.request("POST", "/shutdown")
+    deadline = time.monotonic() + 30
+    while not manager_exited(client.paths):
+        if time.monotonic() >= deadline:
+            raise CliError(
+                "Splash GUI is still shutting down.",
+                fix="check " + home_relative(client.paths.manager_log),
+            )
+        time.sleep(0.2)
+
+
 def dispatch(ctx: Ctx, client: Client, rest: list[str]) -> int:
     name = ctx.args.command
     if name == "launch":
@@ -1560,17 +1634,12 @@ def dispatch(ctx: Ctx, client: Client, rest: list[str]) -> int:
         return 0
     if name == "restart":
         if client.running():
-            client.request("POST", "/shutdown")
-            deadline = time.monotonic() + 30
-            while client.running() and time.monotonic() < deadline:
-                time.sleep(0.2)
-            if client.running():
-                raise CliError("Splash GUI is still shutting down.")
+            shut_down(client)
         client.start(ctx.args.foreground, note=not ctx.quiet)
         return 0
     if name == "stop":
         if client.running():
-            client.request("POST", "/shutdown")
+            shut_down(client)
             ctx.ok("Splash GUI stopped")
         else:
             ctx.note("Splash GUI is not running.")

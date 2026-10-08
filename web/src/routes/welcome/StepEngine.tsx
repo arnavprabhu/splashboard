@@ -12,7 +12,7 @@ import { useApi } from '../../lib/use-api';
 import { refreshEngine, useEvent } from '../../store';
 import { loadVersions, versions } from '../../store/live';
 import { t } from '../../strings/welcome';
-import { getBrew, getDoctor, installEngine, notBuilt, upgradeEngine } from './api';
+import { getBrew, getDoctor, installEngine, notBuilt, openBrewInstaller, upgradeEngine } from './api';
 import { Glyph, StepLayout, useWizard } from './frame';
 import { HOMEBREW_INSTALL_COMMAND, openHomebrewInstaller, openTerminal, SPLASH_INSTALL_COMMAND, SPLASH_UPGRADE_COMMAND } from './host';
 import { brewStatus, doctorCheck, engineStepReady, macStatus, minimumEngine, shellStatus, splashStatus, type CheckStatus } from './logic';
@@ -117,14 +117,15 @@ export function StepEngine() {
     }
   };
 
+  // The installer needs the user's password, so it runs in Terminal: the app's bridge in the
+  // menu bar window, the manager's `POST /system/brew/install` in a browser (docs/ui/04 §2, W4).
   const installHomebrew = async () => {
-    if (hosted) {
-      try {
-        await openHomebrewInstaller();
-      } catch (err) {
-        toastError(t('welcome.engine.terminal_failed'), err);
-        return;
-      }
+    try {
+      if (hosted) await openHomebrewInstaller();
+      else await openBrewInstaller();
+    } catch (err) {
+      toastError(t('welcome.engine.terminal_failed'), err);
+      return;
     }
     setWaitingSince(Date.now());
     setNow(Date.now());
@@ -201,11 +202,9 @@ export function StepEngine() {
                   {!hosted && <p class="body mute">{t('welcome.engine.brew_web_hint')}</p>}
                   {!hosted && <CodeBlock code={HOMEBREW_INSTALL_COMMAND} what={t('welcome.engine.brew_command')} wrap />}
                   <div class="cluster">
-                    {hosted && (
-                      <Button size="s" onClick={() => void installHomebrew()}>
-                        {t('welcome.engine.brew_open_again')}
-                      </Button>
-                    )}
+                    <Button size="s" onClick={() => void installHomebrew()} data-testid="brew-open-again">
+                      {t('welcome.engine.brew_open_again')}
+                    </Button>
                     <Button size="s" variant="text" onClick={recheck}>
                       {t('welcome.engine.check_again')}
                     </Button>

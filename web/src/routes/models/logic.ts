@@ -258,9 +258,28 @@ export function inspectProgress(result: Pick<InspectResult, 'variants' | 'pendin
   return { checked: Math.max(0, total - pending.length), total };
 }
 
-/** `mmproj-*` files are vision projectors, not variants (SPEC §9.1). */
+/** `mmproj-*` files are vision projectors, not variants (SPEC §9.1). The manager names them as
+ * Splash does: `mmproj` anywhere in the stem (`MODEL-mmproj-BF16.gguf` as well). */
 export function isProjector(name: string): boolean {
-  return /^mmproj/i.test(name);
+  return /mmproj/i.test(name);
+}
+
+/** The variant table's projector row (SPEC §9.1): the repository's vision projector, labelled
+ * "Vision projector" and never selectable. Built from `vision`, since the manager keeps
+ * projectors out of `variants`. */
+export function projectorRow(vision: { projector?: string | null; projector_bytes?: number | null } | null | undefined): VariantOut | null {
+  if (!vision?.projector) return null;
+  return {
+    name: vision.projector,
+    size_bytes: vision.projector_bytes ?? null,
+    bits_per_weight: null,
+    quality: null,
+    loadable: null,
+    reason: null,
+    fit: null,
+    recommended: false,
+    files: [vision.projector],
+  };
 }
 
 export interface DiskCheck {

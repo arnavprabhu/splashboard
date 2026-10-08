@@ -131,6 +131,24 @@ def test_move_models_directory(app: FastAPI, client: TestClient, tmp_path: Path)
     assert any(j["job_id"] == job["job_id"] for j in client.get("/api/admin/jobs").json()["jobs"])
 
 
+def test_a_storage_move_announces_the_settings_it_saved(
+    app: FastAPI, client: TestClient, tmp_path: Path
+) -> None:
+    """docs/api.md §4: every successful settings write sends `settings.changed`."""
+    announced: list[dict[str, Any]] = []
+    app.state.manager.events.listeners.append(
+        lambda event, data: announced.append(data) if event == "settings.changed" else None
+    )
+    seed_models(app.state.manager.settings.models_dir())
+    destination = tmp_path / "announced" / "models"
+    response = client.post(
+        "/api/admin/storage/move", json={"target": "models", "path": str(destination)}
+    )
+    assert response.status_code == 202, response.text
+    assert wait_job(client, response.json()["job_id"])["state"] == "done"
+    assert [change["key"] for change in announced[-1]["changed"]] == ["storage.models_dir"]
+
+
 def test_move_cache_into_an_existing_empty_folder(
     app: FastAPI, client: TestClient, tmp_path: Path
 ) -> None:

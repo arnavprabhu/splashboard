@@ -48,6 +48,18 @@ def test_notifications_are_rate_limited_per_condition(app: FastAPI) -> None:
     assert len([d for e, d in published if e == "notification"]) == 2
 
 
+def test_download_notifications_are_per_item(app: FastAPI) -> None:
+    """D88: a download alert's rate key is its item id, so two downloads that finish
+    inside 10 minutes both notify, and a repeat of one item does not."""
+    alerts, published, _ = center(app)
+    alerts.clock = lambda: 1000.0
+    alerts.raise_alert("download_done", "A downloaded", source="downloader", subject="item-a")
+    alerts.raise_alert("download_done", "B downloaded", source="downloader", subject="item-b")
+    alerts.raise_alert("download_done", "A downloaded", source="downloader", subject="item-a")
+    titles = [d.title for e, d in published if e == "notification"]
+    assert titles == ["A downloaded", "B downloaded"]
+
+
 def test_banner_only_conditions_never_notify(app: FastAPI) -> None:
     alerts, published, _ = center(app)
     alerts.raise_alert("memory_warning", "Memory pressure is high", source="status")

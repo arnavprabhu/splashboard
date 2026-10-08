@@ -43,6 +43,11 @@ IGNORED_FILE = ".local-ignored.json"
 SLUG = re.compile(r"[^A-Za-z0-9._-]+")
 
 
+class DraftOffline(RuntimeError):
+    """The family's draft is missing and Hugging Face is set to offline. SPEC §9.6: the
+    file fails with an alert and is retried only On Rescan, not on the 10 min backoff."""
+
+
 def repo_id_for(path: Path) -> str:
     """A Splash-valid `local/<stem>-GGUF`; a name that had to be altered gets a short hash.
 
@@ -295,7 +300,7 @@ class LocalModels:
                 except asyncio.CancelledError:
                     raise
                 except Exception as error:
-                    self._fail(item, str(error), retry_later=True)
+                    self._fail(item, str(error), retry_later=not isinstance(error, DraftOffline))
         if added:
             for model in added:
                 self.state.events.publish(
@@ -445,7 +450,7 @@ class LocalModels:
             return True
         glob = self.state.settings.current.global_
         if glob.hf.offline:
-            raise RuntimeError(
+            raise DraftOffline(
                 f"{draft_repo} (this family's DFlash2 draft) is not downloaded and Hugging Face "
                 "is set to offline; turn offline off or download it, then rescan"
             )

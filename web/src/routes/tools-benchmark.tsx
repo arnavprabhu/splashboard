@@ -5,6 +5,7 @@ import { Banner } from "../components/Banner";
 import { Button } from "../components/Button";
 import { Checkbox } from "../components/controls";
 import { ConfirmSheet } from "../components/ConfirmSheet";
+import { RevealBlock } from "../components/RevealBlock";
 import { copyText } from "../components/CopyButton";
 import { NumberInput } from "../components/inputs";
 import { NumbersBand, Stat } from "../components/NumbersBand";
@@ -256,7 +257,11 @@ export default function Benchmark() {
         )}
       </Section>
       {openRun && <RunView id={openRun} onClose={() => setOpenRun(null)} />}
-      {comparing && <CompareView ids={comparing} onClose={() => setComparing(null)} />}
+      {comparing && (
+        <RevealBlock>
+          <CompareView ids={comparing} onClose={() => setComparing(null)} />
+        </RevealBlock>
+      )}
       <ConfirmSheet
         open={!!deleting}
         title={t("tools.bm.delete_title")}

@@ -9,6 +9,7 @@ are stubbed, and the filesystem under test is a throwaway `$HOME`.
 
 from __future__ import annotations
 
+import ast
 import json
 import plistlib
 import subprocess
@@ -1125,6 +1126,23 @@ def test_cli_rows_say_what_changes(service):
         str(service.home / ".hermes/profiles/splash/config.yaml")
     ]
     assert rows["pi"].changes.files == [str(service.home / ".pi/agent/models.json")]
+
+
+def test_cli_install_links_match_splash_clients(service):
+    """SPEC §10.7: each CLI row's Install link is the URL in splash/install/clients.py."""
+    reference = Path(__file__).resolve().parents[2] / "splash" / "install" / "clients.py"
+    if not reference.is_file():
+        pytest.skip("the splash/ reference clone is not checked out")
+    tree = ast.parse(reference.read_text(encoding="utf-8"))
+    install_urls = next(
+        ast.literal_eval(node.value)
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "INSTALL_URLS" for t in node.targets)
+    )
+    rows = {row.name: row for row in service.listing().cli}
+    for name, url in install_urls.items():
+        assert rows[name].install_url == url, name
 
 
 def test_hermes_and_pi_entries_are_listed_and_removed_with_a_backup(service):

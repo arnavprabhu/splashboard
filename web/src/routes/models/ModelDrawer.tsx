@@ -22,7 +22,7 @@ import * as flows from './actions';
 import { getCard, getModel } from './api';
 import { streamInspect } from './inspect';
 import { CompatTag } from './bits';
-import { formatLabel, hfUrl, inspectProgress, installedVariants, isClefId, isProjector, pickVariant, repoOf, sha7, shortName } from './logic';
+import { formatLabel, hfUrl, inspectProgress, installedVariants, isClefId, isProjector, pickVariant, projectorRow, repoOf, sha7, shortName } from './logic';
 import { isLocalId } from './local';
 import { Markdown } from './markdown';
 import { VariantTable } from './VariantTable';
@@ -247,6 +247,7 @@ export function ModelDrawer({ id, installed, activeId, onClose, onDelete, onVeri
               )}
               <VariantTable
                 variants={ins?.variants ?? []}
+                projector={projectorRow(ins?.vision)}
                 installed={installedSet}
                 pending={checking}
                 onDownload={compatible && ins?.badge !== 'checking' ? (v) => download(v.name) : undefined}

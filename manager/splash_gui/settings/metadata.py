@@ -585,14 +585,41 @@ FIELDS: tuple[FieldMeta, ...] = (
         "menubar.show_switcher", "Quick switcher", "Load Model submenu.", "menu_bar", "toggle"
     ),
     # Notifications
-    FieldMeta("notifications.download_done", "Download finished", "", "notifications", "toggle"),
-    FieldMeta("notifications.engine_failed", "Engine failed", "", "notifications", "toggle"),
+    # Each toggle silences the alerts in alerts.py NOTIFICATION_SETTING for its key (SPEC §16.3).
     FieldMeta(
-        "notifications.memory_critical", "Critical memory pressure", "", "notifications", "toggle"
+        "notifications.download_done",
+        "Download finished",
+        "Notify when a model download finishes or fails.",
+        "notifications",
+        "toggle",
     ),
-    FieldMeta("notifications.update_available", "Update available", "", "notifications", "toggle"),
     FieldMeta(
-        "notifications.disk_cache_errors", "Disk cache errors", "", "notifications", "toggle"
+        "notifications.engine_failed",
+        "Engine failed",
+        "Notify when the engine stops after repeated failures or crashes.",
+        "notifications",
+        "toggle",
+    ),
+    FieldMeta(
+        "notifications.memory_critical",
+        "Critical memory pressure",
+        "Notify when system memory pressure is critical and long requests may be suspended.",
+        "notifications",
+        "toggle",
+    ),
+    FieldMeta(
+        "notifications.update_available",
+        "Update available",
+        "Notify when a Splash or Splash GUI update is available.",
+        "notifications",
+        "toggle",
+    ),
+    FieldMeta(
+        "notifications.disk_cache_errors",
+        "Disk cache errors",
+        "Notify when SSD cache writes fail or the persistent cache pauses at its hourly write cap.",
+        "notifications",
+        "toggle",
     ),
     # Advanced
     FieldMeta(

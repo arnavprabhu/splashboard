@@ -26,6 +26,7 @@ from ..schemas import (
     StorageInfo,
     StorageMoveRequest,
 )
+from ..settings.api import settings_changed
 from ..state import ManagerState, get_state
 
 log = logging.getLogger(__name__)
@@ -166,7 +167,8 @@ async def move(state: State, body: StorageMoveRequest) -> JobAccepted:
                 destination.mkdir(parents=True, exist_ok=True)  # put the empty folder back
             raise JobFailed(f"The move failed and nothing was changed: {error}") from None
         job.update(progress=0.9, message="Saving settings…")
-        document = state.settings.current.model_dump(mode="json", by_alias=True)
+        old = state.settings.current
+        document = old.model_dump(mode="json", by_alias=True)
         document["global"]["storage"][body.target + "_dir"] = str(destination)
         try:
             result, changes = state.settings.save(document)
@@ -182,6 +184,10 @@ async def move(state: State, body: StorageMoveRequest) -> JobAccepted:
             raise JobFailed("Settings could not be saved; storage was restored")
         for listener in state.settings_listeners:
             listener(changes, False)
+        if result.document is not None:
+            state.events.publish(
+                "settings.changed", settings_changed(state, old, result.document, changes)
+            )
         job.line(f"{body.target} directory is now {destination}")
         state.events.publish("models.changed", ModelsChangedEvent(reason="moved"))
 

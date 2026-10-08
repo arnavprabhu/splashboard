@@ -378,6 +378,26 @@ def test_projectors_are_named_as_splash_names_them() -> None:
     assert cat.is_projector("mmproj-F16.gguf") and not cat.is_projector("Qwen3.8-27B-Q4_0.gguf")
 
 
+def test_quality_tiers_follow_the_bit_width_and_dash_what_splash_cannot_load() -> None:
+    """SPEC §9.1 (D98): every GGUF variant row carries its quality tier label. A variant
+    Splash cannot load, and a name without a bit width, has none (the table shows a dash)."""
+    assert cat.quality_tier("UD-IQ3_XXS") == "Compact"
+    assert cat.quality_tier("UD-Q2_K_XL") == "Compact"
+    assert cat.quality_tier("UD-Q4_K_M") == "Balanced"
+    assert cat.quality_tier("UD-Q5_K_XL") == "Higher"
+    assert cat.quality_tier("Q8_0") == "Highest"
+    assert cat.quality_tier("UD-Q8_K_XL") is None
+    assert cat.quality_tier("BF16") is None
+    assert cat.quality_tier("imatrix_unsloth", ["imatrix_unsloth.gguf"]) is None
+    assert cat.quality_tier("Mystery") is None
+    facts = cat.entry_facts("unsloth/Qwen3.8-27B-GGUF", "gguf", _Info(QWEN27_GGUF), 64 * GIB)
+    by = {v["name"]: v for v in facts["variants"]}
+    assert by["UD-Q4_K_M"]["quality"] == "Balanced"
+    assert by["UD-IQ3_XXS"]["quality"] == "Compact"
+    assert by["UD-Q8_K_XL"]["quality"] is None
+    assert all("quality" in v for v in facts["variants"])
+
+
 def test_catalog_variants_carry_what_splash_cannot_load() -> None:
     """QA row 15: every catalog variant had `loadable: null`, so the imatrix file,
     F16 and UD-Q8_K_XL were offered as downloads."""

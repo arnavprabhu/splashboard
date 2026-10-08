@@ -14,6 +14,7 @@ with the installer.
 from __future__ import annotations
 
 import asyncio
+import errno
 import fcntl
 import hashlib
 import json
@@ -342,6 +343,30 @@ def test_a_hash_mismatch_deletes_the_partial_and_falls_back_to_prepare(setup, fa
     assert any(
         line.startswith("Fetching 2 file(s)") and REPO_ID in line for line in finished["log_tail"]
     ), "the installer downloaded the weights as well as the projector"
+
+
+def test_a_full_disk_while_writing_a_range_fails_the_job_and_is_not_handed_to_the_installer(
+    setup, fake_hub_server, monkeypatch
+):
+    """SPEC §9.4: only a problem with the Hub, the stream or the bytes falls back to the
+    installer. An OS error while writing the partial is not one of them: the installer
+    writes to the same disk, so the job fails with that error (ENOSPC is `disk_full`)."""
+    harness = setup()
+
+    def full_disk(self: Any, offset: int, chunk: bytes) -> None:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(ranged._Journal, "write", full_disk)
+    dl = queue(harness)
+    failed = done(harness, dl)
+    assert failed["state"] == "failed", failed
+    assert failed["error"]["code"] == "disk_full", failed["error"]
+    log = "\n".join(failed["log_tail"])
+    assert "Splash's installer downloads it instead" not in log, log
+    assert not any(line.startswith("Fetching") for line in failed["log_tail"]), (
+        "the installer never ran"
+    )
+    assert weights(failed)["resumable"] is True
 
 
 def test_a_changed_remote_file_restarts_from_zero(setup, fake_hub_server, monkeypatch):

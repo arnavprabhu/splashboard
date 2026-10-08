@@ -18,6 +18,7 @@ import {
   Tag,
   type Column,
 } from "../components";
+import { RevealBlock } from "../components/RevealBlock";
 import { useApi } from "../lib/use-api";
 import { DASH, formatCompact, formatCount, formatMs, formatRelativeTime } from "../lib/format";
 import { engine } from "../store";
@@ -147,22 +148,33 @@ export default function History() {
       ) : (
         <>
           <Totals summary={summary.data} error={summary.error} onRetry={summary.reload} />
-          <TokensPerDay data={series.data} error={series.error} onRetry={series.reload} />
-          <Heatmap data={series.data} error={series.error} onRetry={series.reload} />
-          <RequestsOverTime data={series.data} error={series.error} onRetry={series.reload} />
-          <TopClients summary={summary.data} error={summary.error} onRetry={summary.reload} />
-          <RequestLog
-            rows={rows.data?.rows ?? null}
-            loading={rows.loading}
-            error={rows.error}
-            onRetry={rows.reload}
-            page={page}
-            total={rows.data?.total ?? null}
-            filtered={filtered}
-            onOlder={() => setPage(page + 1)}
-            onNewer={() => setPage(Math.max(0, page - 1))}
-            onReset={reset}
-          />
+          {/* Long page: the sections below the fold ease in (SPEC §18.4); visible-at-load ones never do. */}
+          <RevealBlock>
+            <TokensPerDay data={series.data} error={series.error} onRetry={series.reload} />
+          </RevealBlock>
+          <RevealBlock>
+            <Heatmap data={series.data} error={series.error} onRetry={series.reload} />
+          </RevealBlock>
+          <RevealBlock>
+            <RequestsOverTime data={series.data} error={series.error} onRetry={series.reload} />
+          </RevealBlock>
+          <RevealBlock>
+            <TopClients summary={summary.data} error={summary.error} onRetry={summary.reload} />
+          </RevealBlock>
+          <RevealBlock>
+            <RequestLog
+              rows={rows.data?.rows ?? null}
+              loading={rows.loading}
+              error={rows.error}
+              onRetry={rows.reload}
+              page={page}
+              total={rows.data?.total ?? null}
+              filtered={filtered}
+              onOlder={() => setPage(page + 1)}
+              onNewer={() => setPage(Math.max(0, page - 1))}
+              onReset={reset}
+            />
+          </RevealBlock>
         </>
       )}
     </>

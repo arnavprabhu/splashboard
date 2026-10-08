@@ -16,6 +16,8 @@ Environment knobs (all optional):
   FAKE_SPLASH_DL_COMMIT_SALT   changes every resolved commit (simulates updates)
   FAKE_SPLASH_DL_FAIL          gated | network | network_mid | disk_full | incompatible
   FAKE_SPLASH_DL_FAIL_AFTER    bytes written before network_mid/disk_full fail
+  FAKE_SPLASH_VERIFY_FAIL      set: `verify` refuses the assembly (a changed source,
+                               as after a bad download), so a job's auto-verify fails
                                (default: half the target's first weight file)
   FAKE_SPLASH_DL_HUB           partial-file behaviour: unset = huggingface_hub 1.28,
                                as bundled with Splash 1.2.0 (a fresh
@@ -776,6 +778,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             if installation_kind(selection.link) != ASSEMBLY:
                 raise ModelError(f"{args.model} is not installed in {args.models}")
+            if os.environ.get("FAKE_SPLASH_VERIFY_FAIL"):
+                raise ModelError("source content hash mismatch: " + selection.link.name)
             verify_assembly(selection.link, full=args.full)
             print(f"Splash model {args.model} preflight passed ({'full' if args.full else 'quick'}).")
     except (ModelError, OSError) as error:

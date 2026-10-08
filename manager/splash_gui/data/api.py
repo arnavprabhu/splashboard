@@ -12,6 +12,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
+from ..engine.status import integer
 from ..errors import ApiError, error_responses
 from ..logs.api import clear_logs, delete_trace, traces
 from ..models.layout import directory_size
@@ -67,6 +68,23 @@ def _cache_bytes(cache: Path) -> int:
     return total
 
 
+def _stored_responses(state: ManagerState) -> tuple[int | None, int | None]:
+    """(bytes, entries) of the stored responses: the engine's `response_store` (SPEC Appendix B).
+
+    The store lives in the engine process and goes with it, so it is read from the engine's
+    last `/status` (`splash/server/frontend.py` `ResponseStore.stats`). With no engine running
+    it is empty. An engine that is starting but not polled yet is unknown (None), which the UI
+    shows as a dash."""
+    supervisor = state.supervisor
+    status = supervisor.status
+    if status is None:
+        return (None, None) if supervisor.accepting else (0, 0)
+    return (
+        integer(status, "response_store.bytes"),
+        integer(status, "response_store.entries"),
+    )
+
+
 def clear_kv_cache(cache: Path) -> list[str]:
     """Delete every namespace no engine holds; returns the ones left in use."""
     held = []
@@ -81,6 +99,7 @@ def clear_kv_cache(cache: Path) -> list[str]:
 @router.get("/data/sizes", response_model=DataSizes)
 def sizes(state: State) -> DataSizes:
     trace_list = traces(state).traces
+    responses_bytes, responses_items = _stored_responses(state)
     return DataSizes(
         targets=[
             DataSize(
@@ -112,7 +131,8 @@ def sizes(state: State) -> DataSizes:
             DataSize(
                 target="responses",
                 label="Stored responses",
-                bytes=None,
+                bytes=responses_bytes,
+                items=responses_items,
                 note="Cleared by restarting the engine",
             ),
             DataSize(

@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from splash_gui import sse
 from splash_gui.logs.api import follow
 from splash_gui.paths import Paths
-from splash_gui.secrets import SecretName
+from splash_gui.secrets import SecretName, mask_secret
 
 TRACE = "splash-crash-g1-20261003T100000.json"
 
@@ -68,6 +68,28 @@ def test_diagnostics_redacts_secrets(client: TestClient, app: FastAPI, paths: Pa
     assert body["versions"]["engine"]["version"] == "1.3.0"
     assert body["engine"]["state"] == "stopped"
     assert app.state.manager.secrets.get(SecretName.API_KEY) == key
+
+
+def test_diagnostics_masks_mcp_values_when_the_keychain_is_unavailable(
+    client: TestClient, app: FastAPI
+) -> None:
+    """Drift 59: with the Keychain unavailable at start, MCP values stay plaintext in
+    settings.json. `X-Workspace` is not secret-looking by name, so only masking every
+    MCP value keeps it out of the bundle."""
+    value = "ws-plain-value-0001"
+    store = app.state.manager.settings
+    document = store.current.model_dump(mode="json", by_alias=True)
+    document["global"]["chat"]["mcp_servers"] = {
+        "web": {"url": "http://localhost:3000/mcp", "headers": {"X-Workspace": value}}
+    }
+    assert store.save(document)[0].ok
+    assert store.current.global_.chat.mcp_servers["web"].headers["X-Workspace"] == value, (
+        "the fallback state: plaintext in settings"
+    )
+    body = client.post("/api/admin/diagnostics").json()
+    assert value not in json.dumps(body)
+    headers = body["settings"]["global"]["chat"]["mcp_servers"]["web"]["headers"]
+    assert headers == {"X-Workspace": {"secret": True, "masked": mask_secret(value)[2]}}
 
 
 def test_follow_backfills_then_streams_new_lines(tmp_path: Path) -> None:

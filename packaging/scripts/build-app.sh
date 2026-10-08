@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Assembles the self-contained Splash GUI.app (docs/plans/packaging.md, PKG-4).
 #
-#   packaging/scripts/build-app.sh                              # default identity → build/package/Splash GUI.app
+#   packaging/scripts/build-app.sh                              # default identity → build/package/Splash GUI.app, ad hoc signed
 #   packaging/scripts/build-app.sh --out build/x/Splash\ GUI.app # a .app under build/ (absolute or repo-relative)
+#   packaging/scripts/build-app.sh --identity "Apple Development: <name> (<id>)"  # signed with a certificate (PKG-6)
 #   SPLASH_GUI_VERIFY_HOME=/abs/build/verify/<run>/home packaging/scripts/build-app.sh --variant verify \
 #       --out /abs/build/verify/<run>/Splash\ GUI.app           # .verify ids, throwaway home baked in
 #   make app                                                    # the default build, through the Makefile
@@ -23,7 +24,8 @@
 #
 # Identity (bundle id, agent label) comes from packaging/identity.env. The verify variant appends ".verify"
 # and bakes SPLASH_GUI_HOME (it must lie under build/verify/) and SPLASH_GUI_SECRETS=file into LSEnvironment
-# and the agent plist. The bundle is ad-hoc signed here; Developer ID and notarization are PKG-6 to PKG-8.
+# and the agent plist. The bundle is signed by sign.sh (PKG-6, D86): ad hoc by default, and --identity (or
+# SPLASH_GUI_SIGN_IDENTITY) names a certificate for the local lanes and, later, Developer ID. Notarization is PKG-8.
 #
 # The output is staged next to its final path and moved into place only after every check passes, so a
 # failed build leaves no bundle behind. Nothing downloaded is executed (the runtime script checks its pin).
@@ -36,6 +38,8 @@ RUNTIME="$PKG_DIR/manager"
 EXECUTABLE="SplashGUI"
 TEMPLATE="$REPO/packaging/launchagent.plist.in"
 IDENTITY="$REPO/packaging/identity.env"
+SIGN="$REPO/packaging/scripts/sign.sh"
+SIGN_IDENTITY="${SPLASH_GUI_SIGN_IDENTITY:--}"
 OUT="$PKG_DIR/Splash GUI.app"
 VARIANT="default"
 STAGE=""
@@ -68,6 +72,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --variant) VARIANT="${2:?--variant needs default or verify}"; shift 2 ;;
     --out) OUT="${2:?--out needs a path}"; shift 2 ;;
+    --identity) SIGN_IDENTITY="${2:?--identity needs - (ad hoc) or a certificate name}"; shift 2 ;;
     -h|--help) sed -n '2,/^set -euo/p' "$0" | sed '$d'; exit 0 ;;
     *) die "unknown option $1 (build-app.sh --help)" ;;
   esac
@@ -90,6 +95,14 @@ case "$OUT_PHYSICAL" in
   "$REPO_PHYSICAL/build/"*.app) ;;
   *) die "--out must be a .app under $REPO/build/ (got $OUT)" ;;
 esac
+# The default variant carries the owner's bundle id and agent label, so it never goes under build/verify/, where every
+# bundle is a throwaway .verify copy (PKG-6 review, 2026-10-07).
+if [[ "$VARIANT" == default ]]; then
+  case "$OUT_PHYSICAL" in
+    "$REPO_PHYSICAL/build/verify/"*) die "--variant default may not write under $REPO/build/verify/ (it carries the owner's bundle id and agent label); use --variant verify" ;;
+    *) ;;
+  esac
+fi
 
 [[ -f "$IDENTITY" ]] || die "missing $IDENTITY"
 set -a
@@ -105,7 +118,9 @@ BASE_BUNDLE_ID="$BUNDLE_ID"
 FONT="$REPO/web/src/assets/fonts/archivo-latin.woff2"
 ARCHIVO_LICENSE="$REPO/web/public/licenses/Archivo-OFL.txt"
 COLLECTOR="$REPO/packaging/scripts/collect-licenses.py"
-for input in "$TEMPLATE" "$FONT" "$ARCHIVO_LICENSE" "$COLLECTOR" "$REPO/LICENSE" "$REPO/NOTICE"; do
+for input in "$TEMPLATE" "$FONT" "$ARCHIVO_LICENSE" "$COLLECTOR" "$REPO/LICENSE" "$REPO/NOTICE" \
+  "$SIGN" "$REPO/packaging/entitlements/app.plist" "$REPO/packaging/entitlements/python.plist" \
+  "$REPO/packaging/entitlements/python-adhoc.plist"; do
   [[ -f "$input" ]] || die "missing $input"
 done
 mkdir -p "$REPO/build"
@@ -162,7 +177,7 @@ BIN_DIR="$(cd "$MACOS_DIR" && swift build -c release --show-bin-path)"
 
 note "assembling $OUT"
 mkdir -p "$(dirname "$OUT")"
-STAGE="$OUT.partial"
+STAGE="${OUT%.app}.partial.app"   # still a .app, so sign.sh accepts it (PKG-6)
 rm -rf "$STAGE"
 mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources/Fonts" "$STAGE/Contents/Library/LaunchAgents"
 cp "$BIN_DIR/$EXECUTABLE" "$STAGE/Contents/MacOS/$EXECUTABLE"
@@ -248,9 +263,11 @@ PY="$STAGE/$PYTHON_REL"
   --out "$STAGE/Contents/Resources/licenses/THIRD_PARTY.txt" \
   || die "collect-licenses.py stopped the build (its reasons are above)"
 
-note "codesign (ad-hoc)"
-codesign --force --sign - --deep "$STAGE"
-codesign --verify --deep --strict "$STAGE"
+# PKG-6: sign inside out with the hardened runtime (sign.sh). Ad hoc unless --identity or SPLASH_GUI_SIGN_IDENTITY
+# names a certificate. sign.sh ends with codesign --verify --strict --deep, so a failed signature stops the build.
+note "sign.sh --identity $SIGN_IDENTITY (inside out, hardened runtime)"
+"$SIGN" --identity "$SIGN_IDENTITY" --app "$STAGE" >"$REPO/build/package-sign.log" 2>&1 \
+  || { tail -20 "$REPO/build/package-sign.log" >&2; die "sign.sh failed (log: build/package-sign.log)"; }
 
 rm -rf "$OUT"
 mv "$STAGE" "$OUT"
@@ -263,4 +280,5 @@ echo "runtime $RUNTIME → Contents/Resources/manager (python $("$RUNTIME/python
 echo "web     $REPO/web/dist → Contents/Resources/web"
 echo "license LICENSE, NOTICE, licenses/THIRD_PARTY.txt → Contents/Resources (PKG-5)"
 echo "agent   Contents/Library/LaunchAgents/$PLIST_NAME (BundleProgram $PYTHON_REL)"
+echo "sign    $SIGN_IDENTITY (sign.sh, inside out, hardened runtime; log build/package-sign.log)"
 if [[ -n "$VERIFY_HOME" ]]; then echo "home    $VERIFY_HOME (SPLASH_GUI_SECRETS=file)"; fi

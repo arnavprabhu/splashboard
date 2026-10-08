@@ -241,6 +241,27 @@ def bits(name: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+# SPEC §9.1 quality tier (D98): the label from a variant's bits per weight, lowest floor last.
+QUALITY_TIERS: tuple[tuple[int, str], ...] = (
+    (8, "Highest"),
+    (5, "Higher"),
+    (4, "Balanced"),
+    (0, "Compact"),
+)
+
+
+def quality_tier(name: str, files: list[str] | None = None) -> str | None:
+    """The quality tier label of a GGUF variant, from its bits (`bits`, by name). None for a
+    variant Splash cannot load (`unloadable_reason`), so its row shows a dash, and for a name
+    without a bit width."""
+    if unloadable_reason(name, files) is not None:
+        return None
+    width = bits(name)
+    if width is None:
+        return None
+    return next(label for floor, label in QUALITY_TIERS if width >= floor)
+
+
 @dataclass
 class Variant:
     name: str
@@ -378,6 +399,7 @@ def entry_facts(repo_id: str, fmt: str, info: Any, memory: int) -> dict[str, Any
                 "name": v.name,
                 "size_bytes": v.size + ((files.get(mmproj) or 0) if mmproj else 0),
                 "bits_per_weight": float(b) if (b := bits(v.name)) else None,
+                "quality": quality_tier(v.name, v.files),
                 # False with the reason when the name tells; null = checked by /inspect.
                 "loadable": False if v.unloadable else None,
                 "reason": v.unloadable,

@@ -737,6 +737,27 @@ async def test_offline_with_no_draft_is_an_alert_not_a_job(
     assert "set to offline" in rig.local.last["a.gguf"]["error"]
 
 
+async def test_offline_with_no_draft_is_retried_only_on_rescan(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC §9.6 failure table: with `hf.offline` set and the draft missing, the file is
+    retried On Rescan. The 10 min backoff of a network failure does not apply."""
+    use_real_draft(rig, monkeypatch)
+    rig.settings.current.global_.hf.offline = True
+    rig.gguf("a.gguf")
+    assert await rig.settle() == []
+    read = len(rig.classified)
+    rig.clock[0] += local_module.RETRY_NETWORK_S + 1
+    assert await rig.local.scan() == []
+    assert len(rig.classified) == read, "the file is not read again on the backoff"
+    assert rig.downloads.queued == []
+    rig.settings.current.global_.hf.offline = False
+    assert await rig.local.scan() == [], "online again, but only Rescan retries it"
+    assert rig.downloads.queued == []
+    assert await rig.local.scan(retry=True) == []
+    assert rig.downloads.queued == [DRAFT], "Rescan queues the draft the file waits for"
+
+
 def test_sources_are_the_gguf_entries_without_projectors(rig: Rig) -> None:
     path = rig.gguf("m.gguf")
     rig.gguf("m-mmproj-F16.gguf")

@@ -961,13 +961,8 @@ class ProxyPipeline:
             return JSONResponse(
                 {"status": "unavailable"}, status_code=503, headers={**cors, "Retry-After": "5"}
             )
-        if upstream.status_code == 503 and self.state.alerts is not None:
-            self.state.alerts.raise_alert(
-                "memory_critical",
-                "Critical memory pressure — long requests may be suspended",
-                "/ready answered 503",
-                source="status",
-            )
+        # A 503 here is not memory evidence: Splash answers it during transport recovery too
+        # (server/backend.py is_ready). memory_critical comes from /status (SPEC §16.3).
         return Response(
             upstream.content,
             status_code=upstream.status_code,

@@ -28,6 +28,10 @@ INPUTS = [
     "web/public/licenses/Archivo-OFL.txt",
     "LICENSE",
     "NOTICE",
+    "packaging/scripts/sign.sh",
+    "packaging/entitlements/app.plist",
+    "packaging/entitlements/python.plist",
+    "packaging/entitlements/python-adhoc.plist",
 ]
 
 
@@ -122,6 +126,17 @@ def test_out_under_build_passes_the_guard(tmp_path: Path) -> None:
     assert "make web failed" in result.stderr
     assert "must be" not in result.stderr
     assert "missing" not in result.stderr
+
+
+def test_default_variant_under_build_verify_is_refused(tmp_path: Path) -> None:
+    # The default variant has the owner's bundle id and agent label, so it may not be written under build/verify/.
+    root = tmp_path / "repo"
+    script = skeleton(root)
+    out = root / "build" / "verify" / "run-1" / "Splash GUI.app"
+    result = run(script, "--out", str(out))
+    assert result.returncode == 1
+    assert "--variant default may not write under" in result.stderr
+    assert not out.parent.exists()
 
 
 # The verify home is baked into the bundle's LSEnvironment and the agent plist, so the .verify app reads and

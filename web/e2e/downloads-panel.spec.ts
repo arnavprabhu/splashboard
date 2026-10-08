@@ -36,3 +36,19 @@ test('the downloader page has one #downloads target', async ({ page }) => {
   await expect(page.getByTestId('downloads')).toBeVisible();
   await expect(page.locator('[id="downloads"]')).toHaveCount(1);
 });
+
+test('the queue stays at the bottom of the viewport while downloads are active (SPEC §10.4)', async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 520 });
+  await mockManager(page, { extra: (method, path) => (method === 'GET' && path === '/downloads' ? { json: { items: [RUNNING] } } : undefined) });
+  await page.goto('/admin/models/downloader');
+  const panel = page.getByTestId('downloads');
+  await expect(panel).toHaveAttribute('data-sticky', 'true');
+  await expect(panel).toHaveCSS('position', 'sticky');
+  // The page must be taller than the viewport, or the check proves nothing.
+  expect(await page.evaluate(() => document.documentElement.scrollHeight > window.innerHeight)).toBe(true);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const box = await panel.boundingBox();
+  const viewport = await page.evaluate(() => window.innerHeight);
+  expect(box).not.toBeNull();
+  expect(box!.y + box!.height).toBeLessThanOrEqual(viewport + 1);
+});

@@ -96,6 +96,20 @@ struct ManagerControllerTests {
         #expect(agent.unregisterCount.value == 1)
     }
 
+    @Test func runningAgentIsAdoptedNotRegisteredAgain() async {
+        // A manager already answering under an enabled agent is adopted. A second registration
+        // would start a RunAtLoad job at once, so the start path must not register (SPEC §4.2, D87).
+        let api = MockAPI()
+        let agent = MockService(.enabled)
+        let launcher = MockLauncher()
+        let mc = ManagerController(api: api, paths: paths, repo: repo, agent: agent, launcher: launcher, sleep: { _ in })
+        #expect(await mc.ensureRunning() == .success(.agent))
+        #expect(agent.registerCount.value == 0)
+        #expect(launcher.launches.value.isEmpty)
+        await mc.stopOwned()
+        #expect(agent.unregisterCount.value == 1)
+    }
+
     @Test func fallsBackToChildWhenAgentNeedsApproval() async {
         let api = MockAPI()
         api.healthy.value = false

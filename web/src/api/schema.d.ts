@@ -5244,6 +5244,8 @@ export interface components {
             reason?: string | null;
             /** Projector */
             projector?: string | null;
+            /** Projector Bytes */
+            projector_bytes?: number | null;
         };
         /** VolumeInfo */
         VolumeInfo: {
