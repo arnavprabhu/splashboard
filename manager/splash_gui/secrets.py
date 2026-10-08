@@ -28,11 +28,54 @@ SECURITY_TIMEOUT_S = 10
 REDACTED = "••••••"
 
 
+# The Keychain service prefix (D62: it follows the bundle id). PKG-16 switches it to
+# io.github.arnavprabhu.splashboard and adds the old one to LEGACY_PREFIXES, so the next start
+# copies every item over (`migrate_prefix`). packaging/identity.env names the same prefix.
+KEYCHAIN_PREFIX = "ai.splashgui"
+LEGACY_PREFIXES: tuple[str, ...] = ()
+
+
 class SecretName(StrEnum):
-    API_KEY = "ai.splashgui.apikey"
-    HF_TOKEN = "ai.splashgui.hf"  # noqa: S105 (a Keychain service name)
-    SESSION = "ai.splashgui.session"
-    CODEX_ROUTER = "ai.splashgui.codexrouter"  # D58: the Codex app's router token
+    API_KEY = f"{KEYCHAIN_PREFIX}.apikey"
+    HF_TOKEN = f"{KEYCHAIN_PREFIX}.hf"  # (a Keychain service name)
+    SESSION = f"{KEYCHAIN_PREFIX}.session"
+    CODEX_ROUTER = f"{KEYCHAIN_PREFIX}.codexrouter"  # D58: the Codex app's router token
+
+
+def suffix_of(name: str) -> str:
+    """`apikey` for `<prefix>.apikey`: the part of a service name after the prefix."""
+    return name.removeprefix(KEYCHAIN_PREFIX + ".")
+
+
+def migrate_prefix(
+    backend: SecretsBackend, suffixes: list[str], old: str, new: str
+) -> dict[str, list[str]]:
+    """Moves each `<old>.<suffix>` Keychain item to `<new>.<suffix>` (PKG-16, D62).
+
+    An item is copied raw (text values stay base64), read back, and the old one is deleted only
+    when the read-back matches. An item that already exists under the new name is left alone,
+    and so is its old copy, so nothing is ever lost. Returns the suffixes moved, kept (both
+    exist) and failed (the copy did not read back)."""
+    report: dict[str, list[str]] = {"moved": [], "kept": [], "failed": []}
+    for suffix in suffixes:
+        value = backend.get(f"{old}.{suffix}")
+        if value is None:
+            continue
+        target = f"{new}.{suffix}"
+        if backend.get(target) is not None:
+            report["kept"].append(suffix)
+            continue
+        try:
+            backend.set(target, value)
+            copied = backend.get(target)
+        except SecretsError:
+            copied = None
+        if copied != value:
+            report["failed"].append(suffix)
+            continue
+        backend.delete(f"{old}.{suffix}")
+        report["moved"].append(suffix)
+    return report
 
 
 class SecretsError(RuntimeError):

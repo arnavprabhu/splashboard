@@ -173,6 +173,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await asyncio.to_thread(state.engine)
     _read_engine_options_in_background(state)
     _ensure_shim(state)
+    _migrate_keychain_prefix(state)
     _migrate_mcp_secrets(state)
     core = [state.proxy, state.supervisor, state.metrics]
     services = subsystem_services(state)
@@ -205,6 +206,28 @@ def _read_engine_options_in_background(state: ManagerState) -> None:
             log.warning("could not read the engine's serve options", exc_info=True)
 
     threading.Thread(target=read, name="serve-options", daemon=True).start()
+
+
+def _migrate_keychain_prefix(state: ManagerState) -> None:
+    """PKG-16 (D62): move Keychain items from an earlier service prefix to KEYCHAIN_PREFIX, before
+    anything reads them. A no-op until LEGACY_PREFIXES names one."""
+    from .mcp.secrets import _current_values, secret_name
+    from .secrets import KEYCHAIN_PREFIX, LEGACY_PREFIXES, SecretName, migrate_prefix, suffix_of
+
+    if not LEGACY_PREFIXES:
+        return
+    suffixes = [suffix_of(name) for name in SecretName]
+    with contextlib.suppress(Exception):
+        for server, kind, key in _current_values(state.settings.current):
+            suffixes.append(suffix_of(secret_name(server, kind, key)))
+    for old in LEGACY_PREFIXES:
+        try:
+            report = migrate_prefix(state.secrets.backend, suffixes, old, KEYCHAIN_PREFIX)
+        except Exception:
+            log.warning("could not move Keychain items from %s", old, exc_info=True)
+            continue
+        if any(report.values()):
+            log.info("Keychain items from %s: %s", old, report)
 
 
 def _migrate_mcp_secrets(state: ManagerState) -> None:

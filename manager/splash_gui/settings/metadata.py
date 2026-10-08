@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
+from ..secrets import SecretName
+
 Applies = Literal["immediate", "restart", "next_load"]
 Scope = Literal["G", "M", "GM"]
 Control = Literal[
@@ -163,7 +165,7 @@ FIELDS: tuple[FieldMeta, ...] = (
     FieldMeta(
         "security.api_key",
         "API key",
-        "Generate, reveal, copy or rotate. Stored in the macOS Keychain (ai.splashgui.apikey).",
+        f"Generate, reveal, copy or rotate. Stored in the macOS Keychain ({SecretName.API_KEY}).",
         "security",
         "secret",
         flag="--api-key",
@@ -487,7 +489,7 @@ FIELDS: tuple[FieldMeta, ...] = (
     FieldMeta(
         "hf.token_override",
         "Hugging Face token",
-        "Overrides the hf auth login token. Stored in the Keychain (ai.splashgui.hf).",
+        f"Overrides the hf auth login token. Stored in the Keychain ({SecretName.HF_TOKEN}).",
         "hugging_face",
         "secret",
         applies="next_load",

@@ -54,6 +54,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarHost {
         NSApp.setActivationPolicy(.accessory)
         FontLoader.registerBundledFonts()
 
+        // PKG-16: a packaged app that replaced the development bundle moves the manager agent to the bundled
+        // interpreter before the manager starts. A development bundle (no bundled runtime) does nothing here.
+        let migration = DevAgentMigration.plan(
+            currentLabel: ManagerAgent.label, legacyLabels: DevAgentMigration.legacyLabels,
+            packaged: BundledRuntime().python != nil, printer: DevAgentMigration.launchctlPrint)
+        DevAgentMigration.apply(migration, agent: ManagerAgent.plistInBundle() ? SMAppServiceWrapper.agent() : nil)
+
         if bundled {
             let model = self.model
             let responder = NotificationResponder { action, info in
