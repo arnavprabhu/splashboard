@@ -68,9 +68,7 @@ def test_the_manager_moves_items_at_startup_once_a_legacy_prefix_is_named(
     backend.set(f"{OLD}.apikey", "sk-splash-keep-me")
     monkeypatch.setattr(secrets_module, "KEYCHAIN_PREFIX", NEW)
     monkeypatch.setattr(secrets_module, "LEGACY_PREFIXES", (OLD,))
-    monkeypatch.setattr(
-        secrets_module, "suffix_of", lambda name: name.removeprefix(f"{OLD}.")
-    )
+    monkeypatch.setattr(secrets_module, "suffix_of", lambda name: name.removeprefix(f"{OLD}."))
     application = create_app(AppConfig(paths=paths, secrets=SecretStore(backend)))
 
     with caplog.at_level(logging.INFO):
