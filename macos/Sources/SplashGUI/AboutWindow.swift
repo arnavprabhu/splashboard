@@ -66,8 +66,7 @@ struct AboutView: View {
             row("Status", v?.statusSchemaVersion.map { "schema \($0)" } ?? Format.unknown)
 
             HStack(spacing: 12) {
-                SquareButton("Check for Updates") { model.openAdmin("/admin/settings/about") }
-                    .disabled(!running)
+                SquareButton("Check for Updates") { Task { await model.checkForUpdates() } }
                 SquareButton("Upgrade Engine…") { model.openAdmin("/admin/settings/about") }
                     .disabled(!running)
             }

@@ -112,8 +112,8 @@ check "the app is the last item" \
   bash -c "grep '^sign\[' \"$DRY\" | tail -1 | grep -q ' app \. '"
 check "under an ad hoc identity the interpreter gets python-adhoc.plist (D100)" \
   grep -q 'bin/python3.13 entitlements=python-adhoc.plist' "$DRY"
-check "the app gets app.plist" \
-  grep -q 'app \. entitlements=app.plist' "$DRY"
+check "under an ad hoc identity the app gets app-adhoc.plist (D101: it must load the ad hoc Sparkle.framework)" \
+  grep -q 'app \. entitlements=app-adhoc.plist' "$DRY"
 check "the nested dylib gets no entitlements" \
   grep -q 'libfixture.dylib entitlements=none' "$DRY"
 check "no codesign line uses --deep (signing never does)" \
@@ -131,6 +131,10 @@ check "a real identity is passed to codesign by name" \
   grep -q -- "--sign Apple Development: Test (ABCDE12345)" "$REAL"
 check "a real identity gives the interpreter python.plist, which keeps library validation on" \
   grep -q 'bin/python3.13 entitlements=python.plist' "$REAL"
+check "a real identity gives the app app.plist, which keeps library validation on" \
+  grep -q 'app \. entitlements=app.plist' "$REAL"
+check "app-adhoc.plist turns library validation off and nothing else" \
+  bash -c "[[ \"\$(plutil -convert json -o - '$REPO/packaging/entitlements/app-adhoc.plist')\" == '{\"com.apple.security.cs.disable-library-validation\":true}' ]]"
 check "python.plist stays empty (identity builds)" \
   bash -c "[[ \"\$(plutil -convert json -o - '$REPO/packaging/entitlements/python.plist')\" == '{}' ]]"
 check "python-adhoc.plist turns library validation off and nothing else" \

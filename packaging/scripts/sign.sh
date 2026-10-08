@@ -12,8 +12,8 @@
 #      interpreter binaries (…/python/bin/*) get packaging/entitlements/python.plist, or python-adhoc.plist when the
 #      identity is - (ad hoc; D100); the rest get none.
 #   2. every nested bundle (*.framework, *.xpc, *.appex, *.app), deepest first.
-#   3. the app bundle. Signing it signs Contents/MacOS/<executable> with packaging/entitlements/app.plist
-#      and seals everything else.
+#   3. the app bundle. Signing it signs Contents/MacOS/<executable> with packaging/entitlements/app.plist, or
+#      app-adhoc.plist when the identity is - (ad hoc; D101), and seals everything else.
 # Every codesign call passes --options runtime. --timestamp is added only for a real identity, because an
 # ad hoc signature has no secure timestamp. The script never signs with --deep (docs/plans/packaging.md,
 # Appendix B). It ends with codesign --verify --strict --deep on the app and a check that every Mach-O file
@@ -27,6 +27,7 @@ ENT_DIR="$REPO/packaging/entitlements"
 APP_ENT="$ENT_DIR/app.plist"
 PY_ENT="$ENT_DIR/python.plist"
 PY_ADHOC_ENT="$ENT_DIR/python-adhoc.plist"
+APP_ADHOC_ENT="$ENT_DIR/app-adhoc.plist"
 IDENTITY=""
 APP_ARG=""
 DRY_RUN=0
@@ -68,7 +69,8 @@ APP="$(cd "$APP" && pwd -P)"
 refuse_installed "$APP"
 [[ "$APP" == *.app ]] || die "--app must end in .app (got $APP)"
 [[ -f "$APP/Contents/Info.plist" ]] || die "no Contents/Info.plist in $APP"
-[[ -f "$APP_ENT" && -f "$PY_ENT" && -f "$PY_ADHOC_ENT" ]] || die "missing $APP_ENT, $PY_ENT or $PY_ADHOC_ENT"
+[[ -f "$APP_ENT" && -f "$APP_ADHOC_ENT" && -f "$PY_ENT" && -f "$PY_ADHOC_ENT" ]] \
+  || die "missing $APP_ENT, $APP_ADHOC_ENT, $PY_ENT or $PY_ADHOC_ENT"
 
 MAIN="$(plutil -extract CFBundleExecutable raw -o - "$APP/Contents/Info.plist")" \
   || die "no CFBundleExecutable in $APP/Contents/Info.plist"
@@ -165,7 +167,8 @@ while IFS= read -r rel; do
 done <<<"$NESTED_ORDERED"
 
 # Step 3: the app, last.
-sign_item app "$APP" "." "$APP_ENT"
+# An ad hoc app cannot load the ad hoc Sparkle.framework under library validation (no team identifier; D101).
+if [[ "$IDENTITY" == - ]]; then sign_item app "$APP" "." "$APP_ADHOC_ENT"; else sign_item app "$APP" "." "$APP_ENT"; fi
 
 if [[ $DRY_RUN -eq 1 ]]; then
   echo "dry-run: $N items in this order, nothing signed ($APP)"

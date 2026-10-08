@@ -80,6 +80,8 @@ public final class MenuBarViewModel {
     @ObservationIgnored private let gpu: GPUSampling
     @ObservationIgnored public let paths: HomePaths
     @ObservationIgnored public weak var host: MenuBarHost?
+    /// Sparkle in a packaged build (PKG-9); nil when the bundle has no feed.
+    @ObservationIgnored public var updater: Updater?
     @ObservationIgnored public private(set) var quitCoordinator: QuitCoordinator!
 
     @ObservationIgnored private var eventsTask: Task<Void, Never>?
@@ -323,6 +325,9 @@ public final class MenuBarViewModel {
             if let m = try? await api.models() { models = m }
         case "settings.changed":
             await refreshSettings()
+        case "app.check_updates":
+            // The web About page's Check for updates (`POST /app/check-updates`, PKG-9).
+            await checkForUpdates()
         case "integration.state":
             if let d = DesktopIntegration(json: data) {
                 var view = integrations ?? IntegrationsView()
@@ -483,6 +488,16 @@ public final class MenuBarViewModel {
         return url
     }
 
+    /// Sparkle's check when this build has an updater (PKG-9). Without one (no feed: `swift run`, the dev
+    /// bundle) the About section of Settings shows the versions instead, as before Sparkle.
+    public func checkForUpdates() async {
+        if let updater {
+            if updater.canCheckForUpdates { updater.checkForUpdates() }
+            return
+        }
+        if manager == .running { await openAdminSignedIn("/admin/settings/about") } else { host?.showAbout() }
+    }
+
     public func perform(_ command: MenuCommand) async {
         switch command {
         case .startManager:
@@ -523,8 +538,7 @@ public final class MenuBarViewModel {
         case .openTerminal(let client):
             await call { try await $0.openTerminal(client: client) }
         case .checkForUpdates:
-            // Sparkle is deferred (D30): show the About section of Settings instead.
-            if manager == .running { await openAdminSignedIn("/admin/settings/about") } else { host?.showAbout() }
+            await checkForUpdates()
         case .about:
             host?.showAbout()
         case .continueSetup:

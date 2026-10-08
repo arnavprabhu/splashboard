@@ -94,6 +94,11 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/Fonts" "$APP/Contents/Library/LaunchAgents"
 cp "$BIN_DIR/$EXECUTABLE" "$APP/Contents/MacOS/$EXECUTABLE"
 chmod 755 "$APP/Contents/MacOS/$EXECUTABLE"
+# Sparkle 2 (PKG-9): the binary links it, so the dev bundle needs it too. No feed is written here, so the dev
+# app creates no updater and Check for Updates keeps opening About.
+# shellcheck source=../../packaging/scripts/lib-sparkle.sh
+source "$REPO/packaging/scripts/lib-sparkle.sh"
+embed_sparkle "$APP" "$BIN_DIR" "$EXECUTABLE"
 
 # Archivo (OFL), the same file the web admin self-hosts, for the About window.
 FONT="$REPO/web/src/assets/fonts/archivo-latin.woff2"

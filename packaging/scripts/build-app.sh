@@ -120,7 +120,8 @@ ARCHIVO_LICENSE="$REPO/web/public/licenses/Archivo-OFL.txt"
 COLLECTOR="$REPO/packaging/scripts/collect-licenses.py"
 for input in "$TEMPLATE" "$FONT" "$ARCHIVO_LICENSE" "$COLLECTOR" "$REPO/LICENSE" "$REPO/NOTICE" \
   "$SIGN" "$REPO/packaging/entitlements/app.plist" "$REPO/packaging/entitlements/python.plist" \
-  "$REPO/packaging/entitlements/python-adhoc.plist"; do
+  "$REPO/packaging/entitlements/python-adhoc.plist" "$REPO/packaging/entitlements/app-adhoc.plist" \
+  "$REPO/packaging/scripts/lib-sparkle.sh"; do
   [[ -f "$input" ]] || die "missing $input"
 done
 mkdir -p "$REPO/build"
@@ -182,6 +183,10 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources/Fonts" "$STAGE/Contents/Library/LaunchAgents"
 cp "$BIN_DIR/$EXECUTABLE" "$STAGE/Contents/MacOS/$EXECUTABLE"
 chmod 755 "$STAGE/Contents/MacOS/$EXECUTABLE"
+# Sparkle 2 in Contents/Frameworks, without its XPC services, and the rpath to it (PKG-9).
+# shellcheck source=lib-sparkle.sh
+source "$REPO/packaging/scripts/lib-sparkle.sh"
+embed_sparkle "$STAGE" "$BIN_DIR" "$EXECUTABLE"
 
 # ditto keeps symlinks (python3 → python3.13), modes and extended attributes.
 ditto "$RUNTIME" "$STAGE/Contents/Resources/manager"
@@ -196,6 +201,19 @@ cp "$ARCHIVO_LICENSE" "$STAGE/Contents/Resources/"
 cp "$REPO/LICENSE" "$REPO/NOTICE" "$STAGE/Contents/Resources/"
 
 xml_escape() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' <<<"$1"; }
+
+# Sparkle's feed and public key (PKG-9): identity.env, or SPLASH_GUI_SU_FEED_URL / SPLASH_GUI_SU_PUBLIC_ED_KEY for a
+# local test feed and a throwaway key. Without both, no keys are written and the app creates no updater.
+SU_FEED="${SPLASH_GUI_SU_FEED_URL:-${SU_FEED_URL:-}}"
+SU_KEY="${SPLASH_GUI_SU_PUBLIC_ED_KEY:-${SU_PUBLIC_ED_KEY:-}}"
+SU_BLOCK=""
+if [[ -n "$SU_FEED" && -n "$SU_KEY" ]]; then
+  SU_BLOCK="  <key>SUFeedURL</key><string>$(xml_escape "$SU_FEED")</string>
+  <key>SUPublicEDKey</key><string>$(xml_escape "$SU_KEY")</string>
+  <key>SUEnableAutomaticChecks</key><true/>"
+elif [[ -n "$SU_FEED$SU_KEY" ]]; then
+  die "a Sparkle feed needs both SU_FEED_URL and SU_PUBLIC_ED_KEY (identity.env or SPLASH_GUI_SU_*)"
+fi
 
 LS_ENV_BLOCK=""
 if [[ "$VARIANT" == verify ]]; then
@@ -229,6 +247,7 @@ cat > "$STAGE/Contents/Info.plist" <<PLIST
   <key>NSAppTransportSecurity</key>
   <dict><key>NSAllowsLocalNetworking</key><true/></dict>
   <key>SplashGUIAgentLabel</key><string>$AGENT_LABEL</string>
+$SU_BLOCK
 $LS_ENV_BLOCK
 </dict>
 </plist>

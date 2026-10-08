@@ -39,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarHost {
             loginItems: loginItems)
         super.init()
         model.host = self
+        model.updater = SparkleUpdater()
     }
 
     // MARK: NSApplicationDelegate
