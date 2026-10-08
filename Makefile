@@ -7,6 +7,8 @@
 #   make bundle     build "macos/build/Splash GUI.app" (ad-hoc signed)
 #   make runtime    build the bundled Python runtime, build/package/manager/python (PKG-2)
 #   make app        build the self-contained build/package/Splash GUI.app (PKG-4: web, runtime, menu bar app)
+#   make dmg        build build/package/<Name>-<version>.dmg from that app (PKG-7)
+#   make notarize   TARGET=<app or dmg> ARGS="--keychain-profile NAME": notarize and staple (PKG-8; needs Developer ID)
 #   make test       unit and integration tests: manager, fake engine, packaging scripts, web (vitest + Playwright), macOS
 #   make test-real  contract tests against the installed Splash and the live Hub (SPEC §20.2)
 #   make lint       ruff, mypy, tsc
@@ -29,7 +31,7 @@ else
 DEV_ENV :=
 endif
 
-.PHONY: help dev manager web web-deps manager-deps macos bundle runtime app test test-manager test-fake test-packaging test-web test-e2e test-macos test-real lint
+.PHONY: help dev manager web web-deps manager-deps macos bundle runtime app dmg notarize test test-manager test-fake test-packaging test-web test-e2e test-macos test-real lint
 
 help:
 	@sed -n 's/^#   //p' $(MAKEFILE_LIST)
@@ -69,6 +71,13 @@ runtime:
 app:
 	packaging/scripts/build-app.sh
 
+dmg:
+	packaging/scripts/make-dmg.sh
+
+notarize:
+	@test -n "$(TARGET)" || { echo 'usage: make notarize TARGET=<app or dmg> ARGS="--keychain-profile NAME"'; exit 1; }
+	packaging/scripts/notarize.sh $(ARGS) "$(TARGET)"
+
 test: test-manager test-fake test-packaging test-web test-e2e test-macos
 
 test-manager: manager-deps
@@ -81,6 +90,8 @@ test-fake:
 ## and no signing identity: sign.sh and build-app.sh run on fixtures in temp folders, never on a real app.
 test-packaging:
 	bash packaging/tests/test_sign.sh
+	bash packaging/tests/test_dmg.sh
+	bash packaging/tests/test_notarize.sh
 	uv run --no-project --with pytest pytest packaging/tests
 
 test-web: web-deps
