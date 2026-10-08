@@ -92,6 +92,8 @@ test-packaging:
 	bash packaging/tests/test_sign.sh
 	bash packaging/tests/test_dmg.sh
 	bash packaging/tests/test_notarize.sh
+	cd macos && swift package resolve >/dev/null  # Sparkle's generate_appcast and sign_update
+	bash packaging/tests/test_appcast.sh
 	uv run --no-project --with pytest pytest packaging/tests
 
 test-web: web-deps
