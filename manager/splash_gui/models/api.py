@@ -155,9 +155,10 @@ def get_model(state: State, model_id: str) -> ModelDetail:
     responses={**_ERR, **error_responses(409)},
 )
 async def delete_model(
-    state: State, model_id: str, confirm_active: bool = False
+    state: State, model_id: str, confirm_active: bool = False, trash_source: bool = False
 ) -> DeleteModelResult:
-    return await cast(Models, state.models).delete(model_id, confirm_active)
+    """`trash_source` (D67, `local/` models only): also move the model's `.gguf` to the Trash."""
+    return await cast(Models, state.models).delete(model_id, confirm_active, trash_source)
 
 
 @router.post(

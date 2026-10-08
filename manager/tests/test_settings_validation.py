@@ -168,6 +168,11 @@ def test_spec_example_document_is_valid() -> None:
         ("routing.default_model", "qwen", "full Hugging Face repository ID"),
         ("hf.endpoint", "ftp://mirror", "must be an http(s) URL"),
         ("engine.extra_flags", [{"flag": "-x"}], "must be a long option"),
+        ("wizard.step", 6, "Input should be 1, 2, 3, 4 or 5"),
+        ("wizard.pending_port", 0, "Input should be greater than or equal to 1"),
+        ("wizard.pending_port", 70000, "Input should be less than or equal to 65535"),
+        ("wizard.use_case", "fast", "Input should be 'coding', 'chat' or 'speed'"),
+        ("wizard.model", "qwen", "full Hugging Face repository ID"),
     ],
 )
 def test_field_errors(path: str, value: Any, message: str) -> None:
@@ -188,6 +193,10 @@ def test_field_errors(path: str, value: Any, message: str) -> None:
         ("server.allowed_origins", ["*", "tauri://localhost"]),
         ("server.allowed_hosts", ["mymac.local"]),
         ("server.host", "0.0.0.0"),  # noqa: S104 (valid once a key exists, see below)
+        ("wizard.step", 3),
+        ("wizard.pending_port", 18435),
+        ("wizard.use_case", "chat"),
+        ("wizard.model", MLX),
     ],
 )
 def test_field_accepts(path: str, value: Any) -> None:
@@ -437,3 +446,16 @@ def test_every_appendix_a_flag_has_metadata() -> None:
     assert {"HF_TOKEN", "HF_HUB_CACHE", "HF_ENDPOINT", "SPLASH_CRASH_TRACE"} <= envs
     restart = {f.key for f in FIELDS if f.flag and f.key.startswith("serve.")}
     assert all(FIELDS_BY_KEY[k].applies == "restart" for k in restart)
+
+
+def test_wizard_progress_defaults_to_nothing_pending() -> None:
+    """Old settings.json files have no progress fields: they read as not started."""
+    result = validate_document(SettingsDocument().to_json_dict())
+    assert result.ok and result.document is not None
+    wizard = result.document.global_.wizard
+    assert (wizard.step, wizard.pending_port, wizard.use_case, wizard.model) == (
+        None,
+        None,
+        None,
+        None,
+    )

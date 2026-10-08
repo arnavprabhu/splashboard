@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent template for the packaged Splash GUI.app (docs/plans/packaging.md, PKG-4).
+  packaging/scripts/build-app.sh fills the @...@ placeholders and writes the result to
+  Contents/Library/LaunchAgents/<agent label>.plist, where SMAppService.agent(plistName:) finds it.
+
+  The program is named relative to the app bundle (BundleProgram), so the plist holds no absolute
+  path: moving the app moves the agent with it. No home, repo or uv path is baked in. The manager
+  writes its own logs under ~/.splash/logs, so launchd output is discarded.
+  Verify builds add SPLASH_GUI_HOME and SPLASH_GUI_SECRETS to EnvironmentVariables (build-app.sh).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>@AGENT_LABEL@</string>
+  <key>AssociatedBundleIdentifiers</key><array><string>@BUNDLE_ID@</string></array>
+  <key>BundleProgram</key><string>@PYTHON_REL@</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@PYTHON_REL@</string>
+    <string>-I</string>
+    <string>-B</string>
+    <string>-m</string>
+    <string>splash_gui.manager</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ProcessType</key><string>Interactive</string>
+</dict>
+</plist>

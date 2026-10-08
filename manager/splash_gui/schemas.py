@@ -579,6 +579,8 @@ class SecretsState(ApiModel):
 
 
 class ResolvedPaths(ApiModel):
+    # The current user's home folder: the web shortens only paths under it to `~`.
+    home: str
     base: str
     models_dir: str
     cache_dir: str
@@ -899,6 +901,9 @@ class DeleteModelResult(ApiModel):
     freed_bytes: int
     kept_draft: bool
     engine_stopped: bool
+    # D67: source files moved to the Trash, and those a failed move left in place.
+    trashed: list[str] = Field(default_factory=list)
+    trash_failed: list[str] = Field(default_factory=list)
 
 
 class VerifyRequest(ApiModel):
@@ -1090,6 +1095,8 @@ class DownloadError(ApiModel):
 class DownloadItem(ApiModel):
     id: str
     model: str
+    # `draft`: a local model's DFlash2 draft (SPEC §9.6, D68), not a model of its own.
+    kind: Literal["model", "draft"] = "model"
     revision: str | None = None
     draft_model: str | None = None
     language_only: bool = False

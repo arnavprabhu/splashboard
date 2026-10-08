@@ -92,65 +92,138 @@ def run_shell(argv: list[str]) -> str | None:
     return result.stdout
 
 
-_DEFINITION = re.compile(r"(?m)^\s*(?:function\s+splash\b|splash\s*\(\s*\)|alias\s+splash=)")
+_DEFINITION = re.compile(r"^\s*(?:function\s+splash\b|splash\s*\(\s*\)|alias\s+splash=)")
+_BREW_SHELLENV = re.compile(r"\bbrew\s+shellenv\b")
+# zsh says where a function came from: "splash is a shell function from /Users/x/.zshrc".
+_FROM = re.compile(r" from (/.+)$")
 RC_FILES = (".zshrc", ".zprofile", ".zshenv", ".bashrc", ".bash_profile", ".profile")
 
 
-def rc_definitions(home: Path) -> list[Path]:
-    found = []
-    for name in RC_FILES:
-        path = home / name
-        try:
-            if path.is_file() and _DEFINITION.search(path.read_text(errors="replace")):
-                found.append(path)
-        except OSError:
-            continue
-    return found
+@dataclass(frozen=True)
+class Site:
+    """The line that defines `splash()` or an alias for it (SPEC §12.1)."""
+
+    path: Path
+    line: int
+    kind: str  # "function" or "alias"
+
+    @property
+    def where(self) -> str:
+        return f"{home_relative(self.path)}:{self.line}"
+
+
+def first_match(path: Path, pattern: re.Pattern[str]) -> tuple[int, str] | None:
+    """The 1-based line number and text of the first line of `path` that matches."""
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return None
+    for number, text in enumerate(lines, 1):
+        if pattern.search(text):
+            return number, text
+    return None
+
+
+def _first_in(paths: Iterable[Path], pattern: re.Pattern[str]) -> tuple[Path, int, str] | None:
+    for path in paths:
+        found = first_match(path, pattern) if path.is_file() else None
+        if found:
+            return path, found[0], found[1]
+    return None
+
+
+def definition_site(home: Path, reported: str | None = None) -> Site | None:
+    """Where the function or alias is written: the file zsh names, then the startup files."""
+    paths = ([Path(reported)] if reported else []) + [home / name for name in RC_FILES]
+    found = _first_in(paths, _DEFINITION)
+    if found is None:
+        return None
+    path, line, text = found
+    kind = "alias" if text.lstrip().startswith("alias") else "function"
+    return Site(path, line, kind)
 
 
 def shell_check(paths: Paths, home: Path, runner: Runner = run_shell) -> Check:
     """SPEC §12.1: a function, an alias or an earlier PATH hit hides the shim."""
     shim = str(paths.shim)
+    shim_text = home_relative(shim)
     hidden_by: list[str] = []
+    reported: str | None = None
     earlier: list[str] = []
     for shell in ("zsh", "bash"):
         if not shutil.which(shell) and runner is run_shell:
             continue
-        output = runner([shell, "-ic", "type -a splash"]) or ""
+        # A login interactive shell is what a new Terminal tab runs: it reads ~/.zprofile too.
+        output = runner([shell, "-lic", "type -a splash"]) or ""
         lines = [line.strip() for line in output.splitlines() if line.strip()]
         if not lines:
             continue
         first = lines[0]
         if "function" in first or "alias" in first:
             hidden_by.append(shell)
+            source = _FROM.search(first)
+            if source and reported is None:
+                reported = source.group(1)
         elif any(shim in line for line in lines) and shim not in first:
             earlier.append(first)
-    shim_text = home_relative(shim)
     if hidden_by:
-        files = [home_relative(p) for p in rc_definitions(home)]
-        where = ", ".join(files) if files else "your shell startup files"
-        rc = files[0] if files else "~/.zshrc"
         reload = "exec zsh" if "zsh" in hidden_by else "exec bash"
+        check_line = f"Check: type -a splash   → the first line should be {shim_text}"
+        site = definition_site(home, reported)
+        if site is None:
+            return Check(
+                "path",
+                "fail",
+                "`splash` is hidden by a shell function",
+                detail=[
+                    "your shell startup files define splash() or an alias, so your shell runs "
+                    f"it instead of {shim_text}."
+                ],
+                fix=[
+                    "rename splash() to splash-legacy in your shell startup files, "
+                    f"then run: {reload}",
+                    check_line,
+                ],
+            )
+        if site.kind == "alias":
+            return Check(
+                "path",
+                "fail",
+                "`splash` is hidden by an alias",
+                detail=[
+                    f"{site.where} defines an alias for splash, so your shell runs it "
+                    f"instead of {shim_text}."
+                ],
+                fix=[f"remove the alias at {site.where}, then run: {reload}", check_line],
+            )
         return Check(
             "path",
             "fail",
             "`splash` is hidden by a shell function",
             detail=[
-                f"{where} defines splash() or an alias, so your shell runs it "
-                f"instead of {shim_text}."
+                f"{site.where} defines splash(), so your shell runs it instead of {shim_text}."
             ],
             fix=[
-                f"remove or rename the function (e.g. splash-legacy) in {rc}, then run: {reload}",
-                f"Check: type -a splash   → the first line should be {shim_text}",
+                f"rename splash() at {site.where} to splash-legacy, then run: {reload}",
+                check_line,
             ],
         )
     if earlier:
+        found = _first_in([home / name for name in RC_FILES], _BREW_SHELLENV)
+        fix = [f"put {home_relative(paths.bin_dir)} first on PATH, then open a new terminal"]
+        if found:
+            path, line, _ = found
+            fix = [
+                f"the `brew shellenv` at {home_relative(path)}:{line} puts Homebrew ahead of "
+                f"{shim_text}. Remove that line, or keep it above every Splash GUI PATH block, "
+                "then open a new terminal"
+            ]
         return Check(
             "path",
             "fail",
             "`splash` runs another program first",
             detail=[f"{earlier[0]} comes before {shim_text} on PATH."],
-            fix=[f"put {home_relative(paths.bin_dir)} first on PATH, then open a new terminal"],
+            fix=fix,
         )
     return Check("path", "ok", "No shell function or alias hides `splash`")
 

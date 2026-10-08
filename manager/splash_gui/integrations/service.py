@@ -8,6 +8,7 @@ import contextlib
 import json
 import logging
 import os
+import plistlib
 import re
 import shlex
 import shutil
@@ -80,6 +81,16 @@ def _version_key(text: str | None) -> tuple[int, ...]:
 def untested(name: str, version: str | None) -> bool:
     tested = TESTED_VERSIONS.get(name)
     return tested is None or version is None or _version_key(version) < _version_key(tested)
+
+
+def bundle_id(app: Path) -> str | None:
+    """The app's CFBundleIdentifier from its Info.plist, or None when it cannot be read."""
+    try:
+        with (app / "Contents" / "Info.plist").open("rb") as handle:
+            value = plistlib.load(handle).get("CFBundleIdentifier")
+    except (OSError, plistlib.InvalidFileException, ValueError, AttributeError):
+        return None
+    return str(value) if value else None
 
 
 def through_link(path: Path) -> Path:
@@ -476,6 +487,14 @@ class IntegrationsService:
         app = self.app(name)
         label = app.stem if app else "Claude" if name == "claude-desktop" else "Codex"
         result = await asyncio.to_thread(self.state.macos.quit_app, label)
+        if result.returncode and name == "codex-app" and app is not None:
+            # SPEC §11.3.2: quitting by name can fail; the app's bundle id is the fallback.
+            # An unreadable Info.plist falls back to the Codex id only for Codex.app.
+            fallback = bundle_id(app) or (CODEX_BUNDLE_ID if app.name == "Codex.app" else None)
+            if fallback:
+                result = await asyncio.to_thread(
+                    self.state.macos.quit_app, label, bundle_id=fallback
+                )
         if result.returncode:
             raise ApiError(409, "Could not quit " + label, "app_quit_failed")
         deadline = time.monotonic() + (30 if name == "claude-desktop" else 5)

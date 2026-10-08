@@ -24,25 +24,41 @@ import sys
 from pathlib import Path
 
 from ..engine.discovery import SHIM_MARKER
+from ..packaged import bundle_root, bundled_python
 from ..paths import Paths, write_atomic
+from . import COMMANDS
 
 BEGIN = "# >>> splash gui (managed block, do not edit) >>>"
 END = "# <<< splash gui <<<"
 # Lines inside the block that let removal restore the exact original bytes.
 CREATED = "# splash gui: this file did not exist before"
 NEWLINE_ADDED = "# splash gui: ended the line above with a newline"
-RC_FILES = (".zprofile", ".bash_profile")
+# Each shell's login file and its interactive file. The block goes last in both: a
+# `brew shellenv` in either one puts Homebrew ahead of a block above it, and zsh reads
+# ~/.zshrc for every interactive shell (PKG-11, SPEC §12.1).
+RC_FILES = (".zprofile", ".zshrc", ".bash_profile", ".bashrc")
 RC_MODE = 0o644
 SHIM_MODE = 0o700
+MOVED_OR_DELETED = (
+    "Splash GUI.app was moved or deleted. Reinstall it, or run the engine directly with: "
+    "command splash"
+)
+NO_ENGINE = "splash: Splash is not installed. Run: brew install incoai/tap/splash"
 
 
 def interpreter_command(project: Path | None = None) -> list[str]:
     """The argv that runs this package's `splash` entry point.
 
-    The source tree is the installed form for now (D30), so this is the same
-    `uv run --project <repo>/manager` the menu bar app uses. Once packaging
-    ships, the bundled Python takes this place.
+    From `Splash GUI.app` the shim runs the bundled interpreter in isolated mode, so
+    nothing is read from the environment and no bytecode is written into the signed
+    bundle (PKG-3). From a source checkout it is `uv run --project <repo>/manager`,
+    the same form the menu bar app uses (D30). `_ensure_shim` rewrites the shim on
+    every manager start, so moving the app heals it.
     """
+    root = bundle_root() if project is None else None
+    if root is not None:
+        # The bundle's own interpreter path, never sys.executable (see packaged.this_interpreter).
+        return [str(bundled_python(root)), "-I", "-B", "-m", "splash_gui.cli"]
     if project is None:
         # manager/splash_gui/cli/install.py -> manager/
         project = Path(__file__).resolve().parents[2]
@@ -51,16 +67,87 @@ def interpreter_command(project: Path | None = None) -> list[str]:
 
 
 def render(launch: list[str]) -> bytes:
-    """The shim script. POSIX sh, quoted arguments, exec so signals reach us."""
+    """The shim script. POSIX sh, quoted arguments, exec so signals reach us.
+
+    From the app the script also survives the app being moved or deleted (PKG-11):
+    our commands then say why they cannot run, and engine commands (`serve`,
+    `--version`, ...) go straight to the real Splash, found without Python.
+    """
     quoted = " ".join(_shell_quote(part) for part in launch)
-    return (
+    header = (
         "#!/bin/sh\n"
         "# splash - Splash GUI CLI. Generated; edits are overwritten.\n"
         "# Our commands are handled here; anything else is exec'd to the real\n"
         "# Splash engine, found by skipping this script on PATH.\n"
         f"# {SHIM_MARKER}: engine discovery skips any file carrying this marker.\n"
-        f'exec {quoted} "$@"\n'
-    ).encode()
+    )
+    if bundle_root(launch[0]) is None:
+        return (header + f'exec {quoted} "$@"\n').encode()
+    return (header + _packaged_body(launch[0], quoted)).encode()
+
+
+_PACKAGED_BODY = """PY=__PY__
+# Shell builtins only: this runs without the app, and PATH may not hold grep or head.
+is_shim() {
+  count=0
+  while [ "$count" -lt 20 ] && IFS= read -r line; do
+    case $line in *SPLASH_GUI_SHIM*) return 0 ;; esac
+    count=$((count + 1))
+  done <"$1"
+  return 1
+}
+# The real engine: SPLASH_GUI_REAL_SPLASH, else the first `splash` on PATH that is not a shim.
+splash_engine() {
+  set -f
+  if [ -n "${SPLASH_GUI_REAL_SPLASH:-}" ]; then
+    printf '%s\\n' "$SPLASH_GUI_REAL_SPLASH"
+    return 0
+  fi
+  IFS=:
+  for dir in $PATH; do
+    [ -n "$dir" ] || continue
+    candidate="$dir/splash"
+    [ "$candidate" = "$0" ] && continue
+    [ -f "$candidate" ] && [ -x "$candidate" ] || continue
+    if ! is_shim "$candidate"; then
+      printf '%s\\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+if [ ! -x "$PY" ]; then
+  # The app is gone. Our commands need the manager; engine commands still work.
+  wanted=
+  skip=0
+  for arg in "$@"; do
+    if [ "$skip" = 1 ]; then skip=0; continue; fi
+    case $arg in
+      --port|--color) skip=1 ;;
+      -*) ;;
+      *) wanted=$arg; break ;;
+    esac
+  done
+  case $wanted in
+    __OURS__)
+      echo "__MSG__" >&2
+      exit 1 ;;
+  esac
+  real=$(splash_engine) || { echo "__NO_ENGINE__" >&2; exit 127; }
+  exec "$real" "$@"
+fi
+exec __QUOTED__ "$@"
+"""
+
+
+def _packaged_body(python: str, quoted: str) -> str:
+    return (
+        _PACKAGED_BODY.replace("__PY__", _shell_quote(python))
+        .replace("__OURS__", "|".join(COMMANDS))
+        .replace("__MSG__", MOVED_OR_DELETED)
+        .replace("__NO_ENGINE__", NO_ENGINE)
+        .replace("__QUOTED__", quoted)
+    )
 
 
 def _shell_quote(value: str) -> str:

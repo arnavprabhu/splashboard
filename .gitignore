@@ -32,6 +32,8 @@ xcuserdata/
 # Build output
 dist/
 build/
+# Bundled Python runtime and its downloads (PKG-2); already under build/, listed for clarity
+build/package/
 
 # Claude Code agent worktrees
 .claude/worktrees/

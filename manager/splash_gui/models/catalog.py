@@ -183,8 +183,29 @@ def official_ids(pkg: Path | None, data_dir: Path) -> list[str]:
     return out
 
 
-def memory_need(target: int, *, vision: bool) -> int:
-    return target + DRAFT_BYTES + (VISION_BYTES if vision else 0) + KV_RUNWAY_BYTES + RESERVE_BYTES
+# The KV cache's geometry per family: (full-attention layers, KV heads, head dimension).
+# Splash's hybrid models run a full-attention layer every fourth layer
+# (runtime/model/Qwen3_8.hpp and Qwen3_6Moe.hpp: `fullAttentionPeriod = 4`; 64 and 40
+# layers), with 4 and 2 KV heads of 256 (`attentionKvHeads`, `attentionHeadDimension`).
+KV_GEOMETRY: dict[str, tuple[int, int, int]] = {
+    "Qwen3.8-27B": (16, 4, 256),
+    "Qwen3.6-35B-A3B": (10, 2, 256),
+}
+
+
+def kv_bytes(family: str, tokens: int, *, bf16: bool = False) -> int:
+    """The KV cache a context of `tokens` takes (runtime/ops/PagedKv.hpp `bytesPerModelPage`).
+    The default INT8 format stores each head's values as one byte each plus one float32
+    scale per token and head, for keys and for values; BF16 stores two bytes each."""
+    layers, heads, dim = KV_GEOMETRY[family]
+    per_token = layers * 2 * heads * (dim * 2 if bf16 else dim + 4)
+    return per_token * tokens
+
+
+def memory_need(target: int, *, vision: bool, kv: int | None = None) -> int:
+    """`kv` is the KV cache the context needs (`kv_bytes`); the default is the 64-page runway."""
+    cache = KV_RUNWAY_BYTES if kv is None else max(kv, KV_RUNWAY_BYTES)
+    return target + DRAFT_BYTES + (VISION_BYTES if vision else 0) + cache + RESERVE_BYTES
 
 
 def fit_for(need: int, memory: int) -> str:

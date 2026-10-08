@@ -196,6 +196,7 @@ class Handler(BaseHTTPRequestHandler):
         sha = remote.blob
         xet = hashlib.sha256(b"xet:" + sha.encode()).hexdigest()
         hub.cdn_files[xet] = remote
+        hub.cdn_commits[xet] = repo.commit
         expires = int(time.time()) + 3600
         signature = hashlib.sha256(f"{xet}{expires}".encode()).hexdigest()[:32]
         self.send_response(302)
@@ -226,6 +227,8 @@ class Handler(BaseHTTPRequestHandler):
     def _route(self, path: str) -> None:
         if path == "/api/models":
             self._json([self._search_entry(name) for name in _catalog()])
+        elif path.startswith("/api/models/") and "/tree/" in path:
+            self._tree(path.removeprefix("/api/models/"))
         elif path.startswith("/api/models/"):
             self._repo_info(path.removeprefix("/api/models/"))
         elif "/resolve/" in path:
@@ -248,6 +251,33 @@ class Handler(BaseHTTPRequestHandler):
             "likes": 10,
             "lastModified": "2026-10-01T00:00:00.000Z",
         }
+
+    def _tree(self, rest: str) -> None:
+        """`GET /api/models/{repo}/tree/{revision}` (what `snapshot_download` lists)."""
+        repo_id, _, revision = rest.partition("/tree/")
+        repo, _, _ = repository(repo_id, revision or None)
+        self._json(
+            [
+                {
+                    "type": "file",
+                    "path": remote.name,
+                    "size": remote.size,
+                    "oid": remote.blob,
+                    **(
+                        {
+                            "lfs": {
+                                "oid": remote.blob,
+                                "size": remote.size,
+                                "pointerSize": 134,
+                            }
+                        }
+                        if remote.lfs
+                        else {}
+                    ),
+                }
+                for remote in repo.files
+            ]
+        )
 
     def _repo_info(self, rest: str) -> None:
         repo_id, _, revision = rest.partition("/revision/")
@@ -323,6 +353,27 @@ class CdnHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def do_HEAD(self) -> None:
+        """What `huggingface_hub` asks before a xet-bridge GET (size and ETag, no body)."""
+        hub: FakeHub = self.server.hub  # type: ignore[attr-defined]
+        entry = hub.record("cdn", self)
+        parts = urlsplit(self.path)
+        remote = hub.cdn_files.get(parts.path.rsplit("/", 1)[-1])
+        if "Signature" not in parse_qs(parts.query) or remote is None:
+            entry["status"] = 403 if "Signature" not in parse_qs(parts.query) else 404
+            self._empty(entry["status"])
+            return
+        entry["status"] = 200
+        xet = parts.path.rsplit("/", 1)[-1]
+        self.send_response(200)
+        # huggingface_hub follows the Hub's redirect to here and reads the commit from
+        # this response, as it does from the Hub's own (a fake CDN must answer the same).
+        self.send_header("X-Repo-Commit", hub.cdn_commits.get(xet, ""))
+        self.send_header("Content-Length", str(remote.size))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("ETag", f'"{xet}"')
+        self.end_headers()
+
     def do_GET(self) -> None:
         hub: FakeHub = self.server.hub  # type: ignore[attr-defined]
         entry = hub.record("cdn", self)
@@ -338,7 +389,7 @@ class CdnHandler(BaseHTTPRequestHandler):
             return
         start, end, status = 0, remote.size - 1, 200
         wanted = self.headers.get("Range")
-        if wanted:
+        if wanted and not hub.ignore_range:
             match = _RANGE.match(wanted)
             if match is None or int(match.group(1)) >= remote.size:
                 entry["status"] = 416
@@ -346,6 +397,9 @@ class CdnHandler(BaseHTTPRequestHandler):
                 return
             start = int(match.group(1))
             end = min(end, int(match.group(2))) if match.group(2) else end
+            if hub.max_range_bytes:
+                # A server that caps each answer (D84 tests): the rest is asked for again.
+                end = min(end, start + hub.max_range_bytes - 1)
             status = 206
         entry["status"] = status
         self.send_response(status)
@@ -370,6 +424,8 @@ class CdnHandler(BaseHTTPRequestHandler):
                         time.sleep(ahead)
         except (BrokenPipeError, ConnectionResetError):
             return
+        finally:
+            entry["ended"] = time.monotonic()
 
 
 def _catalog() -> list[str]:
@@ -392,7 +448,12 @@ class FakeHub:
 
     def __init__(self) -> None:
         self.cdn_files: dict[str, models.RemoteFile] = {}
+        self.cdn_commits: dict[str, str] = {}  # xet hash -> commit it was linked at
         self.cdn_bps = int(os.environ.get("FAKE_HUB_CDN_BPS") or 0)
+        # True: the CDN answers every Range request with 200 and the whole file (D84 tests).
+        self.ignore_range = False
+        # Non-zero: each Range answer carries at most this many bytes (D84 tests).
+        self.max_range_bytes = 0
         self.requests: list[dict[str, Any]] = []
         self._lock = threading.Lock()
         self._servers = [
@@ -423,6 +484,10 @@ class FakeHub:
             "query": parts.query,
             "headers": {k.lower(): v for k, v in handler.headers.items()},
             "status": None,
+            # When the request arrived and when its answer ended (CDN only: the tests
+            # check that segments overlapped).
+            "started": time.monotonic(),
+            "ended": None,
         }
         with self._lock:
             self.requests.append(entry)

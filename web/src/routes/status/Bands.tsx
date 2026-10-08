@@ -16,7 +16,7 @@ import { Select } from '../../components/inputs';
 import { KeyValue, MeterBar, type KeyValueItem } from '../../components/KeyValue';
 import { Section } from '../../components/Section';
 import { Table } from '../../components/Table';
-import { DASH, formatBytes, formatCount, formatMs, formatPercent } from '../../lib/format';
+import { DASH, formatBytes, formatCount, formatMs, formatPercent, tildePath } from '../../lib/format';
 import { useApi } from '../../lib/use-api';
 import { engine, settings } from '../../store';
 import { loadSystem, systemInfo } from '../../store/live';
@@ -236,7 +236,6 @@ export function NeuralEngineBand({ raw, stopped }: BandsProps) {
 export function CacheBand({ raw, stopped }: BandsProps) {
   if (stopped) return <Stopped label={t('bands.cache.label')} />;
   const serve = (settings.value?.settings.global?.serve ?? {}) as { max_cache_disk?: string | number; persistent_cache?: boolean };
-  const storage = (settings.value?.settings.global?.storage ?? {}) as { cache_dir?: string | null };
   const capacity = rawNum(raw, 'disk.capacity_bytes');
   const diskOn = (capacity !== null && capacity > 0) || (serve.max_cache_disk !== undefined && String(serve.max_cache_disk) !== '0');
   const persistent = rawGet(raw, 'disk.persistent') === true;
@@ -322,7 +321,7 @@ export function CacheBand({ raw, stopped }: BandsProps) {
             label: t('bands.cache.persistent'),
             value: persistent ? (
               <span class="band-lines">
-                <span class="mono">{t('bands.cache.persistent_on', { dir: storage.cache_dir ?? '~/.splash/cache' })}</span>
+                <span class="mono">{t('bands.cache.persistent_on', { dir: tildePath(settings.value?.resolved?.cache_dir ?? '~/.splash/cache', settings.value?.resolved?.home) })}</span>
                 <span>
                   {t('bands.cache.taken_back', {
                     s: count(rawNum(raw, 'disk.taken_back.states')),

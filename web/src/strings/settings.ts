@@ -315,7 +315,7 @@ export const settingsStrings = {
   "settings.about.license_app": "Splash GUI: Apache-2.0.",
   "settings.about.license_engine": "Splash and its third-party notices (llama.cpp, MIT): see THIRD_PARTY_NOTICES in the Splash repository.",
   "settings.about.license_font": "Archivo: SIL Open Font License 1.1.",
-  "settings.about.license_libs": "Preact, wouter, uPlot, marked and highlight.js: MIT; @preact/signals: MIT.",
+  "settings.about.license_libs": "Preact, @preact/signals, uPlot and marked: MIT. wouter-preact: Unlicense. highlight.js: BSD-3-Clause.",
   "settings.about.setup": "Setup",
   "settings.about.rerun_wizard": "Re-run welcome wizard",
   "settings.about.run_doctor": "Run doctor",

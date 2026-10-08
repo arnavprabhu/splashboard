@@ -49,6 +49,12 @@ class MacOS:
         """Reveal in Finder (`open -R`)."""
         return self.open("-R", str(path))
 
+    def trash(self, path: Path) -> CommandResult:
+        """Move a file to the Trash through Finder (SPEC §9.5, D67). Never a hard delete."""
+        return self.osascript(
+            f'tell application "Finder" to delete POSIX file {applescript_string(str(path))}'
+        )
+
     def pgrep(self, *args: str) -> list[int]:
         result = self.run(["/usr/bin/pgrep", *args])
         return [int(x) for x in result.stdout.split() if x.isdigit()]

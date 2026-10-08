@@ -148,3 +148,34 @@ export function stepSearch(search: string, step: Step): string {
   params.set('step', String(step));
   return params.toString();
 }
+
+/** The progress fields kept in `settings.global.wizard` (the manager's names). */
+export interface WizardServerProgress {
+  step: Step | null;
+  pending_port: number | null;
+  use_case: PresetId | null;
+  model: string | null;
+}
+
+/** What settings.json holds for the wizard; `reached` and `downloadId` stay in this browser. */
+export function toServerProgress(p: WizardProgress): WizardServerProgress {
+  return { step: p.step, pending_port: p.pendingPort, use_case: p.preset, model: p.model };
+}
+
+/**
+ * Settings win where they hold a value (another browser may have moved on); the browser's own
+ * copy fills what settings lack, and `reached` never goes back.
+ */
+export function mergeServerProgress(local: WizardProgress, server: Partial<WizardServerProgress> | null | undefined): WizardProgress {
+  if (!server) return local;
+  const step = isStep(server.step) ? server.step : local.step;
+  const port = typeof server.pending_port === 'number' && Number.isInteger(server.pending_port) && server.pending_port >= 1 && server.pending_port <= 65535 ? server.pending_port : null;
+  return {
+    ...local,
+    step,
+    reached: Math.max(local.reached, step) as Step,
+    pendingPort: port ?? local.pendingPort,
+    preset: isPresetId(server.use_case) ? server.use_case : local.preset,
+    model: typeof server.model === 'string' && server.model ? server.model : local.model,
+  };
+}

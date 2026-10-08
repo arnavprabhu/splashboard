@@ -5,6 +5,8 @@
 #   make web        build the web admin (web/dist)
 #   make macos      build the menu bar app (swift build)
 #   make bundle     build "macos/build/Splash GUI.app" (ad-hoc signed)
+#   make runtime    build the bundled Python runtime, build/package/manager/python (PKG-2)
+#   make app        build the self-contained build/package/Splash GUI.app (PKG-4: web, runtime, menu bar app)
 #   make test       unit and integration tests: manager, fake engine, web (vitest + Playwright), macOS
 #   make test-real  contract tests against the installed Splash and the live Hub (SPEC §20.2)
 #   make lint       ruff, mypy, tsc
@@ -27,7 +29,7 @@ else
 DEV_ENV :=
 endif
 
-.PHONY: help dev manager web web-deps manager-deps macos bundle test test-manager test-fake test-web test-e2e test-macos test-real lint
+.PHONY: help dev manager web web-deps manager-deps macos bundle runtime app test test-manager test-fake test-web test-e2e test-macos test-real lint
 
 help:
 	@sed -n 's/^#   //p' $(MAKEFILE_LIST)
@@ -57,6 +59,15 @@ macos:
 
 bundle:
 	macos/scripts/bundle.sh
+
+## Bundled Python runtime for the packaged app: python-build-standalone (pinned in packaging/runtime.lock) plus splash_gui.
+runtime:
+	packaging/scripts/build-runtime.sh
+
+## The self-contained app (PKG-4): make web, make runtime, swift build -c release, then one bundle with the
+## bundled runtime (Contents/Resources/manager), the web admin (Contents/Resources/web) and the agent plist.
+app:
+	packaging/scripts/build-app.sh
 
 test: test-manager test-fake test-web test-e2e test-macos
 

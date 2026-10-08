@@ -27,7 +27,7 @@ import type {
   StorageInfo,
 } from '../../api/models';
 import { loadSettings } from '../../store';
-import type { PresetId } from './steps';
+import type { PresetId, WizardServerProgress } from './steps';
 
 /** A stub route (501) — the feature is not built into the manager yet. */
 export function notBuilt(err: unknown): boolean {
@@ -72,11 +72,26 @@ function clone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T;
 }
 
+/** Wizard writes and every other settings write run one after another: each one reads the document the one before it wrote. */
+let wizardQueue: Promise<unknown> = Promise.resolve();
+
+function queued<T>(task: () => Promise<T>): Promise<T> {
+  const next = wizardQueue.then(task);
+  wizardQueue = next.catch(() => undefined);
+  return next;
+}
+
 /**
  * Read-modify-write of settings.json (PUT replaces the whole document, docs/api.md §6.1).
  * Reads a fresh copy first so other clients' edits are kept, then refreshes the store.
+ * Queued with the wizard's writes, so two edits never read the same document and drop one.
  */
-export async function saveSettings(edit: (doc: Doc) => void): Promise<SettingsSaveResult> {
+export function saveSettings(edit: (doc: Doc) => void): Promise<SettingsSaveResult> {
+  return queued(() => saveSettingsNow(edit));
+}
+
+/** The read-modify-write itself. Call it only inside `queued`, or it waits for itself. */
+async function saveSettingsNow(edit: (doc: Doc) => void): Promise<SettingsSaveResult> {
   const current = await getSettings();
   const doc = clone(current.settings) as Doc;
   doc.global ??= {};
@@ -96,11 +111,30 @@ export function withEdit(doc: SettingsDocument, edit: (doc: Doc) => void): Setti
   return next;
 }
 
+/** Keeps the wizard's place in `settings.global.wizard` (F3). Rejects when the manager refuses it. */
+export function saveWizardProgress(progress: WizardServerProgress): Promise<SettingsSaveResult> {
+  return queued(() =>
+    saveSettingsNow((doc) => {
+      doc.global.wizard = { ...(doc.global.wizard ?? { completed: false }), ...progress };
+    }),
+  );
+}
+
+/** Finishing setup also clears the progress, so the next run starts from step 1. */
 export async function markCompleted(extra?: (doc: Doc) => void): Promise<SettingsSaveResult> {
-  return saveSettings((doc) => {
-    doc.global.wizard = { ...(doc.global.wizard ?? { completed: false }), completed: true };
-    extra?.(doc);
-  });
+  return queued(() =>
+    saveSettingsNow((doc) => {
+      doc.global.wizard = {
+        ...(doc.global.wizard ?? { completed: false }),
+        completed: true,
+        step: null,
+        pending_port: null,
+        use_case: null,
+        model: null,
+      };
+      extra?.(doc);
+    }),
+  );
 }
 
 // ---------- storage ----------

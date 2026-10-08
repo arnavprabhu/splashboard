@@ -2,6 +2,9 @@ import Foundation
 import Testing
 @testable import SplashGUIKit
 
+/// The interpreter a packaged app carries (PKG-4), as a path under a fake `.app`.
+private let packagedPython = "/Applications/Test.app/Contents/Resources/manager/python/bin/python3"
+
 @Suite("SMAppService wrappers (mocked)")
 struct LoginItemTests {
     @Test func registersWhenEnabled() {
@@ -134,6 +137,52 @@ struct ManagerControllerTests {
                                home: URL(fileURLWithPath: "/nowhere"), fileExists: { _ in false })
         let mc = ManagerController(api: api, paths: paths, repo: noUv, agent: nil, launcher: MockLauncher(), sleep: { _ in })
         #expect(await mc.ensureRunning() == .failure(.uvMissing))
+    }
+
+    @Test func bundledRuntimeBeatsUvAndTheRepo() async {
+        // PKG-4: a packaged app starts the manager with its own interpreter; uv and the repo are not consulted.
+        let api = MockAPI()
+        api.healthy.value = false
+        let launcher = MockLauncher()
+        launcher.onLaunch = { api.healthy.value = true }
+        let bundled = BundledRuntime(resources: URL(fileURLWithPath: "/Applications/Test.app/Contents/Resources"),
+                                     fileExists: { $0 == packagedPython })
+        let mc = ManagerController(api: api, paths: paths, repo: repo, agent: nil, bundled: bundled,
+                                   launcher: launcher, sleep: { _ in })
+        #expect(await mc.ensureRunning() == .success(.child))
+        #expect(launcher.launches.value == [[packagedPython, "-I", "-B", "-m", "splash_gui.manager"]])
+        await mc.stopOwned()
+    }
+
+    @Test func bundledRuntimeWorksWithoutUvOrRepo() async {
+        let api = MockAPI()
+        api.healthy.value = false
+        let launcher = MockLauncher()
+        launcher.onLaunch = { api.healthy.value = true }
+        let noUv = RepoLocator(environment: [:], defaultsValue: nil, infoPlistValue: nil, executableURL: nil,
+                               home: URL(fileURLWithPath: "/nowhere"), fileExists: { _ in false })
+        let bundled = BundledRuntime(resources: URL(fileURLWithPath: "/Applications/Test.app/Contents/Resources"),
+                                     fileExists: { $0 == packagedPython })
+        let mc = ManagerController(api: api, paths: paths, repo: noUv, agent: nil, bundled: bundled,
+                                   launcher: launcher, sleep: { _ in })
+        #expect(await mc.ensureRunning() == .success(.child))
+        await mc.stopOwned()
+    }
+
+    @Test func noBundledRuntimeKeepsTheDevelopmentPath() async {
+        // A development bundle has no Resources/manager: the same uv command as before PKG-4.
+        let api = MockAPI()
+        api.healthy.value = false
+        let launcher = MockLauncher()
+        launcher.onLaunch = { api.healthy.value = true }
+        let bundled = BundledRuntime(resources: URL(fileURLWithPath: "/Applications/Test.app/Contents/Resources"),
+                                     fileExists: { _ in false })
+        #expect(bundled.python == nil)
+        let mc = ManagerController(api: api, paths: paths, repo: repo, agent: nil, bundled: bundled,
+                                   launcher: launcher, sleep: { _ in })
+        #expect(await mc.ensureRunning() == .success(.child))
+        #expect(launcher.launches.value == [["/opt/homebrew/bin/uv", "run", "--project", "/r/manager", "splash-gui-manager"]])
+        await mc.stopOwned()
     }
 }
 

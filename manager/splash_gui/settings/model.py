@@ -377,6 +377,19 @@ class UiSettings(_Strict):
 class WizardSettings(_Strict):
     completed: bool = False
     preset: PresetId | None = None
+    # Progress through the welcome wizard (docs/ui/04 §13), so another browser resumes
+    # where this one stopped. null = nothing pending; cleared when setup finishes.
+    step: Literal[1, 2, 3, 4, 5] | None = None
+    # The port typed in step 2, applied by step 5 (W2).
+    pending_port: int | None = Field(default=None, ge=1, le=65535)
+    # The use case chosen in step 3; `preset` stays the one already applied.
+    use_case: PresetId | None = None
+    model: str | None = None
+
+    @field_validator("model")
+    @classmethod
+    def _model_id(cls, value: str | None) -> str | None:
+        return None if value is None else p.parse_model_id(value)
 
 
 class GlobalSettings(_Strict):

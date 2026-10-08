@@ -922,7 +922,10 @@ export interface paths {
         get: operations["get_model_api_admin_models__model_id__get"];
         put?: never;
         post?: never;
-        /** Delete Model */
+        /**
+         * Delete Model
+         * @description `trash_source` (D67, `local/` models only): also move the model's `.gguf` to the Trash.
+         */
         delete: operations["delete_model_api_admin_models__model_id__delete"];
         options?: never;
         head?: never;
@@ -2553,6 +2556,10 @@ export interface components {
             kept_draft: boolean;
             /** Engine Stopped */
             engine_stopped: boolean;
+            /** Trashed */
+            trashed?: string[];
+            /** Trash Failed */
+            trash_failed?: string[];
         };
         /** DeletedBytes */
         DeletedBytes: {
@@ -2722,6 +2729,12 @@ export interface components {
             id: string;
             /** Model */
             model: string;
+            /**
+             * Kind
+             * @default model
+             * @enum {string}
+             */
+            kind: "model" | "draft";
             /** Revision */
             revision?: string | null;
             /** Draft Model */
@@ -4302,6 +4315,8 @@ export interface components {
         };
         /** ResolvedPaths */
         ResolvedPaths: {
+            /** Home */
+            home: string;
             /** Base */
             base: string;
             /** Models Dir */
@@ -5248,6 +5263,14 @@ export interface components {
             completed: boolean;
             /** Preset */
             preset?: ("coding" | "chat" | "speed") | null;
+            /** Step */
+            step?: (1 | 2 | 3 | 4 | 5) | null;
+            /** Pending Port */
+            pending_port?: number | null;
+            /** Use Case */
+            use_case?: ("coding" | "chat" | "speed") | null;
+            /** Model */
+            model?: string | null;
         };
         /** AlertCleared */
         AlertCleared: {
@@ -7475,6 +7498,7 @@ export interface operations {
         parameters: {
             query?: {
                 confirm_active?: boolean;
+                trash_source?: boolean;
             };
             header?: never;
             path: {

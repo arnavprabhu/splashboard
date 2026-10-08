@@ -89,7 +89,7 @@ export const welcomeStrings = {
   "welcome.start.agents": "Connect coding agents",
   "welcome.start.open_status": "Open Status",
   "welcome.start.path": "The splash command is at ~/.splash/bin/splash. Add it to PATH?",
-  "welcome.start.path_help": "Adds one line to ~/.zprofile and ~/.bash_profile inside a marked block.",
+  "welcome.start.path_help": "Adds one marked block to the end of ~/.zprofile, ~/.zshrc, ~/.bash_profile and ~/.bashrc.",
   "welcome.start.path_add": "Add to PATH",
   "welcome.start.path_done": "Added. Open a new terminal to use splash.",
   "welcome.start.path_failed": "Couldn’t update PATH.",

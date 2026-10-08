@@ -1,11 +1,14 @@
 import Foundation
 
-/// Finds the Splash GUI source checkout and `uv` (packaging is deferred, D30: the app runs
+/// Finds the Splash GUI source checkout and `uv` for the development bundle (D30: the app runs
 /// the manager from the source tree with `uv run --project <repo>/manager splash-gui-manager`).
+/// The packaged app never gets here: `BundledRuntime` (PKG-4) runs the manager from inside the bundle first.
 ///
 /// Repo resolution order:
 /// 1. env `SPLASH_GUI_REPO`
-/// 2. UserDefaults `SplashGUIRepoPath` (`defaults write ai.splashgui.app SplashGUIRepoPath /path`)
+/// 2. UserDefaults `SplashGUIRepoPath` (`defaults write <bundle id> SplashGUIRepoPath /path`; the
+///    defaults domain is the app's bundle id, from packaging/identity.env, e.g. `ai.splashgui.app`
+///    or `ai.splashgui.app.verify` for the verify variant)
 /// 3. Info.plist `SplashGUIRepoPath` (baked in by scripts/bundle.sh)
 /// 4. walking up from the executable (works for `swift run`, `.build/…`, and `macos/build/*.app`)
 /// 5. `~/Desktop/Projects/Splash-GUI`
@@ -87,5 +90,38 @@ public struct RepoLocator: Sendable {
         parts += (environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin").split(separator: ":").map(String.init)
         var seen = Set<String>()
         return parts.filter { seen.insert($0).inserted }.joined(separator: ":")
+    }
+}
+
+/// The Python runtime that `Splash GUI.app` carries (PKG-4, docs/plans/packaging.md):
+/// `Contents/Resources/manager/python/bin/python3`, beside `Contents/Resources/web`.
+/// When it exists the manager starts with it, and neither `uv` nor the repo is consulted.
+public struct BundledRuntime: Sendable, Equatable {
+    /// Arguments after the interpreter: the manager as a module, isolated, and no bytecode writes
+    /// into the signed bundle (the same flags the CLI shim uses, PKG-3).
+    public static let managerArguments = ["-I", "-B", "-m", "splash_gui.manager"]
+
+    /// The bundled interpreter, or nil when the app carries none (a development bundle, `swift run`).
+    public let python: URL?
+
+    /// - Parameters:
+    ///   - resources: the app's Resources folder (`Bundle.main.resourceURL` in the app).
+    ///   - fileExists: injected for tests.
+    public init(
+        resources: URL? = Bundle.main.resourceURL,
+        fileExists: @Sendable (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
+    ) {
+        let candidate = resources?.appendingPathComponent("manager/python/bin/python3")
+        if let candidate, fileExists(candidate.path) {
+            python = candidate
+        } else {
+            python = nil
+        }
+    }
+
+    /// The full command that starts the manager with the bundled interpreter, or nil.
+    public func managerCommand() -> [String]? {
+        guard let python else { return nil }
+        return [python.path] + Self.managerArguments
     }
 }

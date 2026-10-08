@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for the app's main executable, Contents/MacOS/SplashGUI (docs/plans/packaging.md,
+  PKG-6; D86). Starts empty. sign.sh applies it in step 3, when it signs the app bundle. Add a key only when a
+  live lane shows the need, and record that lane's log in the decision log (SPEC §1).
+-->
+<plist version="1.0">
+<dict>
+</dict>
+</plist>

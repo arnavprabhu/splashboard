@@ -1,16 +1,19 @@
-"""Byte-level download resume (SPEC §9.4, D61) against the fake Hub and its CDN.
+"""Byte-level download resume (SPEC §9.4, D61, D84) against the fake Hub and its CDN.
 
 The manager fetches large LFS/Xet files itself with HTTP Range requests into the Hub
 cache, then runs the fake `install/models.py prepare`, which skips blobs that exist.
 The fake Hub answers `HEAD …/resolve/…` with the real Hub's 302 + `X-Linked-Etag`
 shape and its CDN (another port, so another host) serves `206` ranges, so every
-request the manager makes is recorded and checked here. The size threshold is
-lowered to 3 MiB so the 4 MiB fake GGUF takes the Range path; the projector and the
-draft stay with the installer.
+request the manager makes is recorded and checked here. A large file is fetched in
+`RANGE_SEGMENTS` parallel ranges (D84); the one-stream fallback, the old one-stream
+sidecar and a hard kill mid-segment are covered too. The size threshold is lowered to
+3 MiB so the 4 MiB fake GGUF takes the Range path; the projector and the draft stay
+with the installer.
 """
 
 from __future__ import annotations
 
+import asyncio
 import fcntl
 import hashlib
 import json
@@ -22,6 +25,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Iterator
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -116,7 +120,51 @@ def range_files(harness: Any) -> list[str]:
     return sorted(p.name for p in blobs(harness).glob("*.splashgui.*"))
 
 
-def test_pause_keeps_the_partial_and_resume_continues_from_its_byte_offset(setup, fake_hub_server):
+def segments_on_disk(sidecar: Path) -> list[dict[str, int]]:
+    """The segments a version 2 sidecar records: `start`, `end`, `verified_end`."""
+    segments: list[dict[str, int]] = json.loads(sidecar.read_text())["segments"]
+    return segments
+
+
+def done_on_disk(sidecar: Path) -> int:
+    """The verified bytes a version 2 sidecar records; -1 while it cannot be read."""
+    try:
+        return sum(s["verified_end"] - s["start"] for s in segments_on_disk(sidecar))
+    except (OSError, ValueError, KeyError):
+        return -1
+
+
+def xet_of(hub: Any, sha: str) -> str:
+    """The CDN's name for a blob: the Xet hash the fake Hub answered its HEAD with."""
+    return next(xet for xet, remote in hub.cdn_files.items() if remote.blob == sha)
+
+
+def gets_of(hub: Any, sha: str) -> list[dict[str, Any]]:
+    """The CDN's GET requests for one blob, in the order they arrived."""
+    suffix = "/" + xet_of(hub, sha)
+    return [r for r in cdn_gets(hub) if r["path"].endswith(suffix)]
+
+
+def span(get: dict[str, Any]) -> tuple[int, int]:
+    """The first and the last byte a GET's Range asked for."""
+    first, _, last = get["headers"]["range"].removeprefix("bytes=").partition("-")
+    return int(first), int(last)
+
+
+def hub_remote(hub: Any) -> ranged.Remote:
+    """The weights as the Hub describes them, read the way the Downloader reads them."""
+
+    async def resolve() -> ranged.Remote:
+        downloader = ranged.RangeDownloader(Path(), hub.url, None)
+        async with downloader.client() as client:
+            return await downloader.resolve(client, REPO_ID, None, WEIGHTS)
+
+    return asyncio.run(resolve())
+
+
+def test_pause_keeps_every_segment_and_resume_continues_each_from_its_verified_end(
+    setup, fake_hub_server
+):
     harness = setup()
     dl = queue(harness)
     queued = item(harness, dl)
@@ -128,25 +176,31 @@ def test_pause_keeps_the_partial_and_resume_continues_from_its_byte_offset(setup
     assert paused["state"] == "paused"
     sha = remote_file().blob
     partial = blobs(harness) / f"{sha}.splashgui.incomplete"
-    at_pause = partial.stat().st_size
+    sidecar = blobs(harness) / f"{sha}.splashgui.json"
+    segments = segments_on_disk(sidecar)
+    at_pause = done_on_disk(sidecar)
+    assert len(segments) == ranged.RANGE_SEGMENTS
     assert 0 < at_pause < SHARD
-    assert weights(paused)["done_bytes"] == at_pause, "Pause reports the bytes on disk"
-    assert (blobs(harness) / f"{sha}.splashgui.json").is_file(), "the sidecar stays too"
+    assert weights(paused)["done_bytes"] == at_pause, "Pause reports the verified bytes"
+    assert partial.stat().st_size == SHARD, "the partial is preallocated to the file's size"
     time.sleep(1.0)
-    assert partial.stat().st_size == at_pause, "nothing writes while paused"
-    assert weights(item(harness, dl))["done_bytes"] == at_pause, "progress is the partial"
-    before = len(cdn_gets(fake_hub_server))
+    assert segments_on_disk(sidecar) == segments, "nothing writes while paused"
+    assert weights(item(harness, dl))["done_bytes"] == at_pause, "progress is the verified bytes"
+    before = len(gets_of(fake_hub_server, sha))
 
     fake_hub_server.cdn_bps = 0
     harness.client.post(f"/api/admin/downloads/{dl}/resume")
     finished = done(harness, dl)
     assert finished["state"] == "done", finished
 
-    after = cdn_gets(fake_hub_server)[before:]
-    assert after, "the resume fetched the rest"
-    assert after[0]["headers"].get("range") == f"bytes={at_pause}-"
-    assert after[0]["status"] == 206
-    assert f"resuming at byte {at_pause} (Range: bytes={at_pause}-) -> 206" in "\n".join(
+    # Each unfinished segment resumes at its own verified end; no verified byte is fetched again.
+    after = gets_of(fake_hub_server, sha)[before:]
+    unfinished = [s for s in segments if s["verified_end"] < s["end"]]
+    assert sorted(span(g) for g in after) == sorted(
+        (s["verified_end"], s["end"] - 1) for s in unfinished
+    )
+    assert all(g["status"] == 206 for g in after)
+    assert f"resuming in {ranged.RANGE_SEGMENTS} ranges from {at_pause} bytes." in "\n".join(
         finished["log_tail"]
     )
     blob = blobs(harness) / sha
@@ -159,6 +213,109 @@ def test_pause_keeps_the_partial_and_resume_continues_from_its_byte_offset(setup
     pointer = blobs(harness).parent / "snapshots"
     links = [p for p in pointer.rglob(WEIGHTS) if p.is_symlink()]
     assert links and links[0].resolve() == blob.resolve()
+
+
+def test_a_large_file_is_fetched_in_parallel_range_segments(setup, fake_hub_server):
+    harness = setup()
+    dl = queue(harness)
+    finished = done(harness, dl)
+    assert finished["state"] == "done", finished
+    sha = remote_file().blob
+    gets = gets_of(fake_hub_server, sha)
+    assert len(gets) == ranged.RANGE_SEGMENTS, [g["headers"] for g in gets]
+    assert all(g["status"] == 206 for g in gets)
+    spans = sorted(span(g) for g in gets)
+    assert spans[0][0] == 0 and spans[-1][1] == SHARD - 1, "the segments cover the file"
+    assert all(a[1] + 1 == b[0] for a, b in pairwise(spans)), "and not twice"
+    ends = [g["ended"] for g in gets]
+    assert all(end is not None for end in ends)
+    assert max(g["started"] for g in gets) < min(ends), "the streams ran at the same time"
+    assert sha256(blobs(harness) / sha) == sha
+    assert range_files(harness) == []
+    log = "\n".join(finished["log_tail"])
+    assert f"downloading in {ranged.RANGE_SEGMENTS} ranges." in log
+    assert f"{WEIGHTS}: checking the sha256." in log
+
+
+def test_a_server_that_ignores_range_is_fetched_as_one_stream(setup, fake_hub_server):
+    fake_hub_server.ignore_range = True
+    try:
+        harness = setup(cdn_bps=0)
+        dl = queue(harness)
+        finished = done(harness, dl)
+    finally:
+        fake_hub_server.ignore_range = False
+    assert finished["state"] == "done", finished
+    sha = remote_file().blob
+    gets = gets_of(fake_hub_server, sha)
+    ranged_gets = [g for g in gets if "range" in g["headers"]]
+    plain = [g for g in gets if "range" not in g["headers"]]
+    assert ranged_gets, "the segments asked for their ranges first"
+    assert all(g["status"] == 200 for g in ranged_gets), "and got the whole file back"
+    assert len(plain) == 1 and gets[-1] is plain[0], "then one stream from byte 0"
+    assert plain[0]["status"] == 200
+    log = "\n".join(finished["log_tail"])
+    assert "the server ignored Range; continuing as one stream from byte 0." in log
+    assert sha256(blobs(harness) / sha) == sha
+    assert range_files(harness) == []
+
+
+def test_a_server_that_caps_each_answer_is_asked_again_for_the_rest(setup, fake_hub_server):
+    """Ranges honoured but cut short (a proxy's limit): the segments keep asking, and the
+    file is never handed to one stream."""
+    fake_hub_server.max_range_bytes = 256 << 10
+    try:
+        harness = setup(cdn_bps=0)
+        dl = queue(harness)
+        finished = done(harness, dl)
+    finally:
+        fake_hub_server.max_range_bytes = 0
+    assert finished["state"] == "done", finished
+    sha = remote_file().blob
+    gets = gets_of(fake_hub_server, sha)
+    assert all(g["status"] == 206 and "range" in g["headers"] for g in gets)
+    # Each segment's next request starts where its last answer ended: every 256 KiB.
+    piece, quarter = 256 << 10, SHARD // ranged.RANGE_SEGMENTS
+    expected = sorted(
+        segment * quarter + k * piece
+        for segment in range(ranged.RANGE_SEGMENTS)
+        for k in range(quarter // piece)
+    )
+    assert sorted(span(g)[0] for g in gets) == expected, "four segments in 256 KiB pieces"
+    assert sha256(blobs(harness) / sha) == sha
+    assert range_files(harness) == []
+
+
+def test_a_one_stream_sidecar_from_before_segments_resumes_as_one_stream(setup, fake_hub_server):
+    harness = setup()
+    remote = hub_remote(fake_hub_server)
+    sha, keep = remote.etag, 1_500_000
+    blobs(harness).mkdir(parents=True, exist_ok=True)
+    (blobs(harness) / f"{sha}.splashgui.incomplete").write_bytes(remote_file().read(0, keep))
+    # The sidecar as the one-stream downloader wrote it before D84: no version, no segments.
+    (blobs(harness) / f"{sha}.splashgui.json").write_text(
+        json.dumps(
+            {
+                "repo": REPO_ID,
+                "path": WEIGHTS,
+                "commit": remote.commit,
+                "etag": sha,
+                "size": remote.size,
+                "xet_hash": remote.xet_hash,
+                "validator": None,
+            }
+        )
+    )
+    dl = queue(harness)
+    finished = done(harness, dl)
+    assert finished["state"] == "done", finished
+    gets = gets_of(fake_hub_server, sha)
+    assert [(g["headers"].get("range"), g["status"]) for g in gets] == [(f"bytes={keep}-", 206)]
+    assert f"resuming at byte {keep} (Range: bytes={keep}-) -> 206" in "\n".join(
+        finished["log_tail"]
+    )
+    assert sha256(blobs(harness) / sha) == sha
+    assert range_files(harness) == []
 
 
 def test_a_hash_mismatch_deletes_the_partial_and_falls_back_to_prepare(setup, fake_hub_server):
@@ -193,22 +350,25 @@ def test_a_changed_remote_file_restarts_from_zero(setup, fake_hub_server, monkey
     partway(harness, dl)
     harness.client.post(f"/api/admin/downloads/{dl}/pause")
     old = remote_file().blob
-    assert (blobs(harness) / f"{old}.splashgui.incomplete").stat().st_size > 0
+    assert done_on_disk(blobs(harness) / f"{old}.splashgui.json") > 0
 
     # A new commit on main changes the weights file (and only it).
     monkeypatch.setenv("FAKE_SPLASH_DL_COMMIT_SALT", "v2")
     new = remote_file().blob
     assert new != old
     fake_hub_server.cdn_bps = 0
-    before = len(cdn_gets(fake_hub_server))
     harness.client.post(f"/api/admin/downloads/{dl}/resume")
     finished = done(harness, dl)
     assert finished["state"] == "done", finished
 
-    after = cdn_gets(fake_hub_server)[before:]
-    assert after and "range" not in after[0]["headers"], "the new version starts at byte 0"
-    assert after[0]["status"] == 200
+    fresh = gets_of(fake_hub_server, new)
+    starts = sorted(span(g)[0] for g in fresh)
+    assert starts == [i * SHARD // ranged.RANGE_SEGMENTS for i in range(ranged.RANGE_SEGMENTS)], (
+        "the new version starts at byte 0 in every segment"
+    )
+    assert all(g["status"] == 206 for g in fresh)
     assert not (blobs(harness) / f"{old}.splashgui.incomplete").exists()
+    assert not (blobs(harness) / f"{old}.splashgui.json").exists()
     assert sha256(blobs(harness) / new) == new
     assert harness.state.downloads.blobs[dl][KEY] == new
     assert "changed on the Hub; downloading the new version from 0" in "\n".join(
@@ -332,6 +492,53 @@ def test_the_stale_partial_cleanup_knows_the_range_partial(tmp_path):
     ]
 
 
+def test_a_segment_answer_starts_at_its_verified_end_and_stays_inside_the_segment():
+    segment = ranged.Segment(start=0, end=100, verified_end=40)
+    assert ranged._check_range("bytes 40-99/1000", segment, 1000) == 99
+    assert ranged._check_range("bytes 40-99/*", segment, 1000) == 99
+    assert ranged._check_range("bytes 40-60/1000", segment, 1000) == 60, "a capped answer"
+    for header in (
+        "bytes 0-99/1000",
+        "bytes 41-99/1000",
+        "bytes 40-100/1000",
+        "bytes 40-39/1000",
+        "bytes 40-99/999",
+        "bytes 40-99",
+        None,
+        "nonsense",
+    ):
+        with pytest.raises(ranged._Mismatch):
+            ranged._check_range(header, segment, 1000)
+
+
+def test_a_segmented_partial_reports_its_verified_bytes_not_its_size(tmp_path):
+    sha = "ab" * 32
+    partial = tmp_path / f"{sha}.splashgui.incomplete"
+    partial.write_bytes(bytes(1000))  # preallocated: the full size, not all of it verified
+    sidecar = tmp_path / f"{sha}.splashgui.json"
+    sidecar.write_text(
+        json.dumps(
+            {
+                "repo": REPO_ID,
+                "path": WEIGHTS,
+                "commit": "c",
+                "etag": sha,
+                "size": 1000,
+                "xet_hash": None,
+                "validator": None,
+                "version": 2,
+                "segments": [
+                    {"start": 0, "end": 500, "verified_end": 120},
+                    {"start": 500, "end": 1000, "verified_end": 700},
+                ],
+            }
+        )
+    )
+    assert ranged.partial_progress(partial) == 120 + 200
+    sidecar.unlink()
+    assert ranged.partial_progress(partial) == 0, "without its sidecar nothing claims it"
+
+
 # A hard kill of the whole manager mid-file --------------------------------------------
 
 _AVOID = {8123, 9999, *range(8000, 8011)}
@@ -448,22 +655,25 @@ def manager_process(tmp_path: Path, fake_hub_server: Any, monkeypatch) -> Iterat
         manager.stop()
 
 
-def test_a_hard_killed_manager_continues_the_file_after_a_restart(manager_process):
+def test_a_hard_killed_manager_resumes_every_segment_from_its_verified_end(manager_process):
     manager, hub = manager_process, manager_process.hub
     hub.cdn_bps = 512 << 10
     manager.start()
     dl = manager.api("POST", "/downloads", {"id": MODEL})["id"]
     sha = remote_file().blob
-    partial = manager.home / "models" / ("models--" + REPO_ID.replace("/", "--")) / "blobs"
-    partial = partial / f"{sha}.splashgui.incomplete"
+    folder = manager.home / "models" / ("models--" + REPO_ID.replace("/", "--")) / "blobs"
+    partial = folder / f"{sha}.splashgui.incomplete"
+    sidecar = folder / f"{sha}.splashgui.json"
     deadline = time.monotonic() + 60
-    while not (partial.exists() and partial.stat().st_size >= 1 << 20):
+    while done_on_disk(sidecar) < 1 << 20:
         assert time.monotonic() < deadline, "the Range download never got going"
         time.sleep(0.05)
     manager.kill()
-    at_kill = partial.stat().st_size
+    # The sidecar is final now: a restart may keep each segment's verified bytes, no more.
+    unfinished = [s for s in segments_on_disk(sidecar) if s["verified_end"] < s["end"]]
+    at_kill = done_on_disk(sidecar)
     assert 0 < at_kill < SHARD
-    before = len(cdn_gets(hub))
+    before = len(gets_of(hub, sha))
 
     hub.cdn_bps = 0
     manager.start()  # the queue comes back `queued` and runs again by itself
@@ -475,10 +685,12 @@ def test_a_hard_killed_manager_continues_the_file_after_a_restart(manager_proces
         assert time.monotonic() < deadline, row
         time.sleep(0.1)
     assert row["state"] == "done", row
-    after = cdn_gets(hub)[before:]
-    assert after[0]["headers"].get("range") == f"bytes={at_kill}-"
-    assert after[0]["status"] == 206
-    blob = partial.with_name(sha)
-    assert sha256(blob) == sha
-    assert not partial.exists()
+    # Each unfinished segment continues at its verified end, and nothing below it is refetched.
+    after = gets_of(hub, sha)[before:]
+    assert sorted(span(g) for g in after) == sorted(
+        (s["verified_end"], s["end"] - 1) for s in unfinished
+    )
+    assert all(g["status"] == 206 for g in after)
+    assert sha256(folder / sha) == sha
+    assert not partial.exists() and not sidecar.exists()
     assert "range GET" in (manager.home / "logs" / "manager.log").read_text()

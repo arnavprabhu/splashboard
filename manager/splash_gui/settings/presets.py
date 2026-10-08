@@ -6,6 +6,7 @@ import copy
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..models import catalog as cat
 from .model import PresetId, SettingsDocument
 
 GIB = 1024**3
@@ -111,6 +112,55 @@ def recommend(preset: PresetId, memory_bytes: int) -> Recommendation:
     return Recommendation(ModelPick(_GGUF_35B_Q2, "MoE at 2-bit"), (), "24–35 GB")
 
 
+# The context ladder for "128K (or the largest that fits)" (SPEC §8.6), in tokens.
+CODING_CONTEXTS: tuple[tuple[str, int], ...] = (
+    ("128K", 128 * 1024),
+    ("64K", 64 * 1024),
+    ("32K", 32 * 1024),
+    ("16K", 16 * 1024),
+    ("8K", 8 * 1024),
+)
+
+# Each coding pick's family (its KV geometry, `catalog.KV_GEOMETRY`) and target weights.
+# MLX: Splash's own download size less the draft (splash/DEVELOPMENT.md "Model storage",
+# up to about 21 GB and 24 GB). UD-Q4_K_M: the Hub's file size (docs/spec-drift.md row
+# 70). The two smaller GGUF variants are estimates from their bits per weight.
+_CODING_TARGETS: dict[str, tuple[str, int]] = {
+    _MLX_27B: ("Qwen3.8-27B", int(20 * GIB)),
+    _MLX_35B: ("Qwen3.6-35B-A3B", int(23 * GIB)),
+    _GGUF_35B_Q4: ("Qwen3.6-35B-A3B", int(16.5 * GIB)),
+    _GGUF_27B_IQ3: ("Qwen3.8-27B", 11 * GIB),
+    _GGUF_35B_Q2: ("Qwen3.6-35B-A3B", 12 * GIB),
+}
+
+
+def coding_context(memory_bytes: int, pick: ModelPick) -> str:
+    """The largest context step whose memory estimate (SPEC §9.1, with the KV cache that
+    context takes at the default INT8 format) is not "Won't fit" for `pick` on this Mac.
+    None of them fitting gives the smallest step; a pick with no geometry keeps 128K."""
+    spec = _CODING_TARGETS.get(pick.model)
+    if spec is None:
+        return CODING_CONTEXTS[0][0]
+    family, target = spec
+    vision = not pick.overrides.get("language_only", False)
+    for label, tokens in CODING_CONTEXTS:
+        need = cat.memory_need(target, vision=vision, kv=cat.kv_bytes(family, tokens))
+        if cat.fit_for(need, memory_bytes) != "wont_fit":
+            return label
+    return CODING_CONTEXTS[-1][0]
+
+
+def preset_settings(preset_id: PresetId, memory_bytes: int | None = None) -> dict[str, Any]:
+    """The dotted global settings a preset applies. The coding preset's context is the
+    largest step that fits this Mac (`coding_context`) when the memory is known."""
+    settings = dict(PRESETS[preset_id].settings)
+    if preset_id == "coding" and memory_bytes is not None:
+        primary = recommend("coding", memory_bytes).primary
+        if primary is not None:
+            settings["serve.max_context"] = coding_context(memory_bytes, primary)
+    return settings
+
+
 def apply_preset(
     doc: SettingsDocument,
     preset_id: PresetId,
@@ -119,10 +169,9 @@ def apply_preset(
 ) -> dict[str, Any]:
     """The raw settings document with the preset's global values (and, when `model` is
     the recommended pick, its per-model overrides) applied. Validate before saving."""
-    preset = PRESETS[preset_id]
     data = doc.to_json_dict()
     glob = data["global"]
-    for key, value in preset.settings.items():
+    for key, value in preset_settings(preset_id, memory_bytes).items():
         section, name = key.split(".", 1)
         glob.setdefault(section, {})[name] = copy.deepcopy(value)
     glob["wizard"]["preset"] = preset_id

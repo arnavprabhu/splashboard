@@ -1,11 +1,13 @@
-import { useState } from 'preact/hooks';
+import { useEffect, useId, useState } from 'preact/hooks';
 import { ApiError } from '../../api/client';
 import type { InstalledModel } from '../../api/models';
 import { ConfirmSheet } from '../../components/ConfirmSheet';
+import { Checkbox } from '../../components/controls';
 import { describeError, toast } from '../../components/Toast';
 import { formatBytes } from '../../lib/format';
 import { t } from '../../strings/models';
 import { deleteModel } from './api';
+import { isLocalId } from './local';
 import { deletePlan, shortName } from './logic';
 
 export interface DeleteSheetProps {
@@ -29,8 +31,15 @@ export interface DeleteSheetProps {
 export function DeleteSheet({ open, models, activeId, freeBytes, all, onClose, onDone }: DeleteSheetProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // D67: the local model's .gguf goes to the Trash only when this is ticked.
+  const [trash, setTrash] = useState(false);
+  const trashId = useId();
+  useEffect(() => {
+    if (!open) setTrash(false);
+  }, [open]);
   const plan = deletePlan(models, activeId, all);
   const n = models.length;
+  const hasLocal = models.some((m) => isLocalId(m.id));
   const title = n === 1 ? t('models.delete.title_one', { short: shortName(models[0]!.id) }) : t('models.delete.title_many', { n });
   const frees = formatBytes(plan.freesBytes);
 
@@ -40,13 +49,15 @@ export function DeleteSheet({ open, models, activeId, freeBytes, all, onClose, o
     const deleted: string[] = [];
     let freed = 0;
     const failures: string[] = [];
+    const trashFailed: string[] = [];
     // The active model goes first so the engine is stopped before the rest.
     const ordered = [...models].sort((a, b) => Number(b.id === activeId) - Number(a.id === activeId));
     for (const m of ordered) {
       try {
-        const res = await deleteModel(m.id, m.id === activeId);
+        const res = await deleteModel(m.id, m.id === activeId, trash && isLocalId(m.id));
         deleted.push(m.id);
         freed += typeof res?.freed_bytes === 'number' ? res.freed_bytes : (m.unique_bytes ?? 0);
+        for (const path of res?.trash_failed ?? []) trashFailed.push(path.split('/').pop() ?? path);
       } catch (err) {
         if (err instanceof ApiError && err.code === 'needs_confirmation') {
           // The engine started serving this model after the sheet opened: ask again, accent.
@@ -65,6 +76,7 @@ export function DeleteSheet({ open, models, activeId, freeBytes, all, onClose, o
       );
       onDone(deleted);
     }
+    for (const name of trashFailed) toast(t('models.delete.trash_failed', { name }), { tone: 'error' });
     if (failures.length) setError(t('models.delete.failed', { why: failures.join(' · ') }));
     else onClose();
   };
@@ -107,6 +119,14 @@ export function DeleteSheet({ open, models, activeId, freeBytes, all, onClose, o
             </li>
           ))}
         </ul>
+        {hasLocal && (
+          <div class="stack" data-testid="delete-local">
+            <p class="body" data-testid="delete-local-keep">
+              {t('models.delete.local_keep')}
+            </p>
+            <Checkbox id={trashId} checked={trash} onChange={setTrash} label={t('models.delete.trash_label')} />
+          </div>
+        )}
         <p class="body tnum" data-testid="delete-frees">
           {typeof freeBytes === 'number'
             ? t('models.delete.frees_after', { size: frees, free: formatBytes(freeBytes), after: formatBytes(freeBytes + plan.freesBytes) })

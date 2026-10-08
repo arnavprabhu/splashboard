@@ -22,21 +22,66 @@ from typing import TYPE_CHECKING, ClassVar, TypeVar
 
 from ..errors import ApiError
 from ..events.alerts import action
-from ..hubcache import blob_partials, blobs_dir, range_partial, remove_partial
-from ..models.hf import HubError
+from ..hubcache import blob_partials, blobs_dir, range_partial, remove_partial, repo_folder
+from ..models.hf import HubError, is_blob_id
+from ..models.layout import read_all
 from ..models.service import valid_id
-from ..paths import write_atomic
+from ..paths import splash_models_dir, write_atomic
 from ..schemas import DownloadError, DownloadFile, DownloadItem, DownloadRequest, ModelsChangedEvent
 from ..settings.parsers import split_model_id
 from ..units import format_bytes
 from ..usage.db import iso
-from .ranged import Fallback, RangeDownloader, Remote, is_candidate
+from .ranged import Fallback, RangeDownloader, Remote, is_candidate, partial_progress
 
 if TYPE_CHECKING:
     from ..state import ManagerState
 
 log = logging.getLogger(__name__)
 T = TypeVar("T")
+
+# Fetches a draft repo's JSON and safetensors into HF_HUB_CACHE at the commit argv[2]
+# (argv[1] is the repo), then names the commit in `refs/main`, which the local drop-in
+# reads as "complete" (`LocalModels._draft_complete`). snapshot_download names a branch
+# only when it is given one, so the ref is written here.
+DRAFT_SCRIPT = """\
+import os, sys
+from huggingface_hub import snapshot_download
+repo, commit = sys.argv[1], sys.argv[2]
+path = snapshot_download(repo, revision=commit or None, allow_patterns=["*.json", "*.safetensors"])
+if commit:
+    refs = os.path.join(os.path.dirname(os.path.dirname(path)), "refs")
+    os.makedirs(refs, exist_ok=True)
+    with open(os.path.join(refs, "main"), "w") as handle:
+        handle.write(commit)
+"""
+
+
+def _load_blob_map(raw: object) -> dict[str, dict[str, str]]:
+    """The persisted blob map, `{download id: {repo/file: blob ID}}` (SPEC §9.4). Cancel
+    joins each blob ID into the blobs folder and unlinks what it finds there, so a value
+    that is not a Hub blob ID (`../../x` reaches the models folder) is dropped and logged.
+    Its file then has no blob, and nothing is joined or removed for it."""
+    if not isinstance(raw, dict):
+        log.warning("downloads.json: the blob map is not an object; ignored")
+        return {}
+    blobs: dict[str, dict[str, str]] = {}
+    for download, mapping in raw.items():
+        if not isinstance(mapping, dict):
+            log.warning("downloads.json: the blobs of %s are not an object; ignored", download)
+            continue
+        kept: dict[str, str] = {}
+        for key, digest in mapping.items():
+            if is_blob_id(digest):
+                kept[key] = digest
+            else:
+                log.warning(
+                    "downloads.json: dropped %s of %s, %r is not a Hub blob ID",
+                    key,
+                    download,
+                    digest,
+                )
+        blobs[download] = kept
+    return blobs
 
 
 class Downloads:
@@ -53,12 +98,17 @@ class Downloads:
     async def start(self) -> None:
         try:
             raw = json.loads(self.state.paths.downloads_file.read_text())
-            self.blobs = raw.get("blobs", {})
+            self.blobs = _load_blob_map(raw.get("blobs", {}))
             self.preexisting = raw.get("preexisting", {})
             for data in raw["items"]:
                 item = DownloadItem.model_validate(data)
                 if item.state in ("running", "verifying"):
                     item.state = "queued"
+                for file in item.files:
+                    # A file whose blob ID was dropped has no Range path (fetch_large skips it).
+                    key = f"{file.repo_id}/{file.name}"
+                    if file.resumable and key not in self.blobs.get(item.id, {}):
+                        file.resumable = False
                 self.items[item.id] = item
         except FileNotFoundError:
             pass
@@ -95,7 +145,13 @@ class Downloads:
         async with self.queue_lock:
             return await self._queue(body)
 
-    async def _queue(self, body: DownloadRequest) -> DownloadItem:
+    async def queue_draft(self, repo_id: str) -> DownloadItem:
+        """The local drop-in's DFlash2 draft (SPEC §9.6, D68): an ordinary queue item of
+        kind `draft`, which fetches the draft repo's JSON and safetensors only."""
+        async with self.queue_lock:
+            return await self._queue(DownloadRequest(id=repo_id, verify=False), draft=True)
+
+    async def _queue(self, body: DownloadRequest, *, draft: bool = False) -> DownloadItem:
         if self.state.jobs.running("storage_move") or self.state.jobs.running("import"):
             raise ApiError(409, "Wait for the storage operation to finish", "storage_busy")
         valid_id(body.id)
@@ -104,6 +160,7 @@ class Downloads:
         item = DownloadItem(
             id=uuid.uuid4().hex,
             model=body.id,
+            kind="draft" if draft else "model",
             revision=body.revision,
             draft_model=body.draft_model,
             language_only=body.language_only,
@@ -111,50 +168,14 @@ class Downloads:
             state="queued",
             created_at=iso(),
         )
-        # Inspection also resolves the exact file set, before any weight is downloaded.
-        inspection = await self.state.models.inspect(body.id, revision=body.revision)
-        if not inspection.compatible:
-            message = inspection.reason or "Model is incompatible"
-            if inspection.reason_detail:
-                # D53: the plain line first, Splash's own words after it.
-                message += f" Splash's check: {inspection.reason_detail}"
-            raise ApiError(
-                422,
-                message,
-                "incompatible",
-                details={"reason_detail": inspection.reason_detail}
-                if inspection.reason_detail
-                else None,
-            )
-        if (
-            not body.language_only
-            and not inspection.vision.available
-            and inspection.format != "legacy"
-        ):
-            raise ApiError(
-                422,
-                inspection.vision.reason or "Use language-only for this model",
-                "vision_unavailable",
-            )
-        repos = [
-            (
-                inspection.repo_id,
-                body.revision,
-                (
-                    self.state.models.language_file_sets
-                    if body.language_only
-                    else self.state.models.file_sets
-                ).get(body.id, []),
-            )
-        ]
-        if body.draft_model or inspection.draft:
-            draft = body.draft_model or inspection.draft
-            if draft and not Path(draft).is_absolute():
-                repos.append((draft, None, []))
+        repos = [(body.id, None, [])] if draft else await self._model_repos(body)
         blob_map: dict[str, str] = {}
         try:
             for repo_id, revision, selected in repos:
                 repo = await self.state.models.hf.repo_info(repo_id, revision)
+                if draft and repo.sha:
+                    # The draft is fetched at the commit listed here, so its blobs match.
+                    item.revision = repo.sha
                 for name, size in repo.files.items():
                     if selected and name not in selected:
                         continue
@@ -189,11 +210,66 @@ class Downloads:
                 f"Not enough disk space: need {format_bytes(required)}, have {format_bytes(free)}",
                 "disk_full",
             )
-        self.preexisting[item.id] = [str(p) for p in directory.glob("models--*/blobs/*.incomplete")]
+        # What the job found on disk: partial blobs, and complete blobs it must not
+        # delete on cancel (SPEC §9.4). A snapshot link to a complete blob is never
+        # created by this job, so the blobs are enough to protect the links too.
+        complete = [
+            str(self.blob_path(file.repo_id, digest))
+            for file in item.files
+            if (digest := blob_map.get(file.repo_id + "/" + file.name))
+            and self.blob_path(file.repo_id, digest).is_file()
+        ]
+        self.preexisting[item.id] = [
+            str(p) for p in directory.glob("models--*/blobs/*.incomplete")
+        ] + complete
         self.items[item.id] = item
         self.publish(item)
         self.schedule()
         return item
+
+    async def _model_repos(self, body: DownloadRequest) -> list[tuple[str, str | None, list[str]]]:
+        """The repositories a model download fetches, with the files it selects in each.
+        Inspection also resolves the exact file set, before any weight is downloaded."""
+        inspection = await self.state.models.inspect(body.id, revision=body.revision)
+        if not inspection.compatible:
+            message = inspection.reason or "Model is incompatible"
+            if inspection.reason_detail:
+                # D53: the plain line first, Splash's own words after it.
+                message += f" Splash's check: {inspection.reason_detail}"
+            raise ApiError(
+                422,
+                message,
+                "incompatible",
+                details={"reason_detail": inspection.reason_detail}
+                if inspection.reason_detail
+                else None,
+            )
+        if (
+            not body.language_only
+            and not inspection.vision.available
+            and inspection.format != "legacy"
+        ):
+            raise ApiError(
+                422,
+                inspection.vision.reason or "Use language-only for this model",
+                "vision_unavailable",
+            )
+        repos: list[tuple[str, str | None, list[str]]] = [
+            (
+                inspection.repo_id,
+                body.revision,
+                (
+                    self.state.models.language_file_sets
+                    if body.language_only
+                    else self.state.models.file_sets
+                ).get(body.id, []),
+            )
+        ]
+        if body.draft_model or inspection.draft:
+            draft = body.draft_model or inspection.draft
+            if draft and not Path(draft).is_absolute():
+                repos.append((draft, None, []))
+        return repos
 
     def schedule(self) -> None:
         if self.stopping:
@@ -238,7 +314,8 @@ class Downloads:
             for partial_path in self.partials(file.repo_id, digest):
                 with contextlib.suppress(FileNotFoundError):
                     info = partial_path.stat()
-                    sizes.append((info.st_mtime, info.st_size))
+                    # A Range partial is preallocated (D84): its verified bytes are the progress.
+                    sizes.append((info.st_mtime, partial_progress(partial_path)))
             if sizes:
                 file.done_bytes, file.state = max(sizes)[1], "downloading"
         item.bytes_done = sum(f.done_bytes for f in item.files)
@@ -381,7 +458,17 @@ class Downloads:
         log.info("range %s changed on the Hub: %s -> %s", key, old, remote.etag)
         self.note(item, f"{file.name} changed on the Hub; downloading the new version from 0.")
 
-    async def command(self, item: DownloadItem, action: str) -> None:
+    def job_argv(self, item: DownloadItem, action: str) -> tuple[list[str], dict[str, str]]:
+        """The process a job runs. A draft (D68) is fetched with `huggingface_hub` under the
+        engine's own Python: Splash's installer prepares only a model with its draft, so it
+        cannot fetch a draft alone. The process is a plain child, so Pause signals it like
+        the installer."""
+        if item.kind == "draft":
+            engine = self.state.engine_cached()
+            if not engine.python:
+                raise ApiError(503, "Install Splash before managing models", "engine_unavailable")
+            argv = [str(engine.python), "-c", DRAFT_SCRIPT, item.model, item.revision or ""]
+            return argv, self.state.models.env()
         argv, env = self.state.models.installer(
             item.model,
             action,
@@ -390,6 +477,10 @@ class Downloads:
             language_only=item.language_only,
             full=action == "verify" and self.state.settings.current.global_.downloads.full_verify,
         )
+        return argv, env
+
+    async def command(self, item: DownloadItem, action: str) -> None:
+        argv, env = self.job_argv(item, action)
         proc = await asyncio.create_subprocess_exec(
             *argv,
             env=env,
@@ -449,6 +540,9 @@ class Downloads:
                 self.publish(item)
                 await self.command(item, "verify")
             item.state, item.finished_at, item.progress = "done", iso(), 1.0
+            if item.kind == "draft":
+                # The local drop-in polls the cache and registers its file on its next pass.
+                return
             self.state.alerts.raise_alert(
                 "download_done",
                 f"{item.model} downloaded",
@@ -555,6 +649,51 @@ class Downloads:
         self.schedule()
         return item
 
+    def remove_downloaded(self, item: DownloadItem) -> None:
+        """SPEC §9.4: a cancelled download also removes the snapshot links and blobs it
+        created, unless an installed model or another unfinished download uses them.
+        A blob that was complete when the job was queued is never removed, and a job
+        with no record of what it found (queued before this record existed) removes
+        nothing. A blob is removed only when every snapshot link to it is one of this
+        job's own files."""
+        if item.id not in self.preexisting:
+            return
+        keep = set(self.preexisting[item.id])
+        shared = self.shared_digests(item.id)
+        models_dir = self.state.settings.models_dir()
+        installed = {
+            path.resolve()
+            for selection in read_all(splash_models_dir())
+            for path in selection.real_paths()
+        }
+        # Every snapshot link in the cache, by the blob it resolves to.
+        links: dict[Path, list[Path]] = {}
+        for folder in models_dir.glob("models--*"):
+            for link in (folder / "snapshots").rglob("*"):
+                if link.is_symlink():
+                    links.setdefault(link.resolve(), []).append(link)
+        for file in item.files:
+            digest = self.blobs.get(item.id, {}).get(file.repo_id + "/" + file.name)
+            if not digest or digest in shared:
+                continue
+            blob = self.blob_path(file.repo_id, digest)
+            if str(blob) in keep or not blob.is_file() or blob.resolve() in installed:
+                continue
+            snapshots = repo_folder(models_dir, file.repo_id) / "snapshots"
+            names = [Path(f.name).parts for f in item.files if f.repo_id == file.repo_id]
+            found = links.get(blob.resolve(), [])
+            if not all(
+                link.is_relative_to(snapshots)
+                and any(link.parts[-len(name) :] == name for name in names)
+                for link in found
+            ):
+                continue  # another snapshot, of this job or any other, still uses it
+            for link in found:
+                link.unlink(missing_ok=True)
+                with contextlib.suppress(OSError):
+                    link.parent.rmdir()  # a snapshot folder only when it is empty
+            blob.unlink(missing_ok=True)
+
     async def cancel(self, dl: str, keep_files: bool) -> None:
         item = self.get(dl)
         if item.state in ("queued", "running", "verifying"):
@@ -562,6 +701,7 @@ class Downloads:
         item.state = "cancelled"
         if not keep_files:
             self.remove_partials(item, stale_only=False)
+            self.remove_downloaded(item)
         self.publish(item)
 
     async def shutdown(self) -> None:

@@ -27,11 +27,11 @@ import { t } from '../../strings/welcome';
 import { FitTag } from '../models/bits';
 import { DownloadsPanel } from '../models/DownloadsPanel';
 import { applyPreset, getCatalog, getEffective, getPresets, getSchema, loadEngine, markCompleted, queueDownload } from './api';
-import { StepLayout, progress, updateProgress, useWizard } from './frame';
+import { StepLayout, progress, resetProgress, updateProgress, useWizard } from './frame';
 import { closeWelcome, openURL } from './host';
 import { activeDownloadFor, defaultInstalled, servingModel, installedChoices, savedPreset, curlSample, endpoints, movedOrigin, presetDiff, recommendation, tierSentence } from './logic';
 import { probeOrigin } from '../settings/api';
-import type { PresetId } from './steps';
+import { type PresetId } from './steps';
 
 const ORDER: PresetId[] = ['coding', 'chat', 'speed'];
 /** Hub download sizes are decimal, as in the downloads panel. */
@@ -358,7 +358,8 @@ const PHASES = ['installing', 'loading', 'warming', 'ready'] as const;
 export function StepStart() {
   const { goTo, hosted } = useWizard();
   const [, navigate] = useLocation();
-  const model = progress.value.model;
+  // Read once: finishing setup resets the progress (below), but the ready screen still names the model.
+  const [model] = useState(() => progress.value.model);
   const e = engine.value;
   const ready = !!e && e.model === model && ['ready', 'busy', 'idle_released'].includes(e.state);
   const installed = useApi((s) => api.get<InstalledModels>('/models', undefined, s), [downloads.value.length]);
@@ -380,6 +381,9 @@ export function StepStart() {
       if (port) doc.global.server = { ...((doc.global.server ?? { host: '127.0.0.1', port: 8000 }) as object), port } as never;
     })
       .then(async () => {
+        // The port is applied and the pending copy is gone, here and in settings. The signal is
+        // reset too, or a later step change would write the old step and port back.
+        resetProgress();
         // W2: the port typed in step 2 applies now; follow the manager to its new address.
         if (!port || String(port) === location.port) return;
         const origin = movedOrigin(location.origin, port);

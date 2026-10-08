@@ -49,7 +49,7 @@ from . import parsers as p
 from .effective import effective_profiles, effective_values, sampling_defaults
 from .metadata import FIELDS_BY_KEY
 from .model import PresetId, SettingsDocument
-from .presets import PRESETS, Recommendation, apply_preset, recommend
+from .presets import PRESETS, Recommendation, apply_preset, preset_settings, recommend
 from .schema import build_schema
 from .store import Change, SettingsReadOnlyError
 from .validation import Issue, ValidationContext
@@ -100,6 +100,7 @@ def _settings_response(state: ManagerState) -> SettingsResponse:
             hf_login_token_present=_hf_login_token_present(),
         ),
         resolved=ResolvedPaths(
+            home=str(Path.home()),
             base=str(state.paths.base),
             models_dir=str(store.models_dir()),
             cache_dir=str(store.cache_dir()),
@@ -233,9 +234,16 @@ def put_settings(state: State, body: Annotated[dict[str, Any], Body()]) -> Setti
 
 
 # What "Reset all settings" keeps (docs/ui/05 G3): where the data lives, the
-# wizard's completion (otherwise the admin would bounce to the welcome flow) and
-# the configured MCP servers. Secrets, models, chats and usage are untouched.
-RESET_KEEPS = ("global.storage", "global.wizard", "global.chat.mcp_servers")
+# wizard's completion and applied preset (otherwise the admin would bounce to the
+# welcome flow) and the configured MCP servers. The wizard's transient progress
+# (step, pending port, use case, model) is cleared. Secrets, models, chats and
+# usage are untouched.
+RESET_KEEPS = (
+    "global.storage",
+    "global.wizard.completed",
+    "global.wizard.preset",
+    "global.chat.mcp_servers",
+)
 
 
 @router.post(
@@ -388,7 +396,7 @@ def list_presets(state: State) -> PresetList:
                 id=preset.id,
                 label=preset.label,
                 description=preset.description,
-                settings=dict(preset.settings),
+                settings=preset_settings(preset.id, memory),
                 recommendation=_rec_out(recommend(preset.id, memory)),
             )
             for preset in PRESETS.values()

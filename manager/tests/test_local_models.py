@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
@@ -20,6 +22,7 @@ from splash_gui.hubcache import repo_folder
 from splash_gui.models import local as local_module
 from splash_gui.models.local import Candidate, LocalModels, repo_id_for, revision_for
 from splash_gui.paths import splash_models_dir
+from splash_gui.system.macos import CommandResult, RecordingMacOS
 
 if TYPE_CHECKING:
     from splash_gui.models.service import Models
@@ -79,7 +82,9 @@ class _Settings:
     def __init__(self, models_dir: Path) -> None:
         self._models_dir = models_dir
         # What `_remember_settings` saves: model ID -> entry with `serve.revision`.
-        self.current = SimpleNamespace(models={})
+        self.current = SimpleNamespace(
+            models={}, global_=SimpleNamespace(hf=SimpleNamespace(offline=False, endpoint=""))
+        )
 
     def models_dir(self) -> Path:
         return self._models_dir
@@ -111,12 +116,32 @@ class _Supervisor:
         yield
 
 
+class _Downloads:
+    """The Downloads queue as the drop-in sees it (D68): which draft jobs are queued."""
+
+    def __init__(self) -> None:
+        self.queued: list[str] = []
+        self.active: set[str] = set()  # queued, running, verifying or paused
+        self.error: Exception | None = None
+
+    def active_model(self, model: str) -> bool:
+        return model in self.active
+
+    async def queue_draft(self, repo_id: str) -> None:
+        if self.error is not None:
+            raise self.error
+        self.queued.append(repo_id)
+        self.active.add(repo_id)
+
+
 class _Models:
     def __init__(self) -> None:
         self.dropped: list[str] = []
+        self.kept_drafts: list[bool] = []
 
-    async def drop_selection(self, repo_id: str) -> None:
+    async def drop_selection(self, repo_id: str, *, keep_draft: bool = False) -> None:
         self.dropped.append(repo_id)
+        self.kept_drafts.append(keep_draft)
 
 
 class Rig:
@@ -128,6 +153,7 @@ class Rig:
         self.events = _Events()
         self.alerts = _Alerts()
         self.models = _Models()
+        self.downloads = _Downloads()
         self.clock = [1000.0]
         state = SimpleNamespace(
             settings=_Settings(self.dir),
@@ -136,6 +162,7 @@ class Rig:
             alerts=self.alerts,
             supervisor=_Supervisor(),
             active_model=lambda: self.active,
+            downloads=self.downloads,
         )
         self.settings = state.settings
         self.active: str | None = None
@@ -145,6 +172,7 @@ class Rig:
         self.verdicts: dict[str, dict[str, Any]] = {}
         self.drafts: list[str] = []
         self.draft_error: Exception | None = None
+        self.draft_ready = True  # what the stubbed `_ensure_draft` answers
         self.prepared: list[tuple[str, str, bool]] = []
         self.remembered: list[tuple[str, str, bool]] = []
         monkeypatch.setattr(self.local, "_classify", self._classify)
@@ -156,10 +184,11 @@ class Rig:
         self.classified.append([i.path.name for i in items])
         return {str(i.path): self.verdicts.get(i.path.name, SUPPORTED) for i in items}
 
-    async def _ensure_draft(self, draft_repo: str) -> None:
+    async def _ensure_draft(self, draft_repo: str, *, force: bool = False) -> bool:
         self.drafts.append(draft_repo)
         if self.draft_error is not None:
             raise self.draft_error
+        return self.draft_ready
 
     async def _prepare(
         self, repo_id: str, revision: str, *, language_only: bool, must: bool = False
@@ -308,6 +337,7 @@ async def test_a_changed_file_replaces_its_registration(rig: Rig) -> None:
     info = path.stat()
     assert await rig.settle() == ["local/a-GGUF"]
     assert rig.models.dropped == ["local/a-GGUF"]
+    assert rig.models.kept_drafts == [True], "the draft survives the drop"
     revision = revision_for(path, info.st_size, info.st_mtime_ns)
     snapshots = repo_folder(rig.dir, "local/a-GGUF") / "snapshots"
     assert [p.name for p in snapshots.iterdir()] == [revision]
@@ -581,3 +611,389 @@ def test_names_that_differ_only_in_case(rig: Rig) -> None:
         assert upper.read_bytes() == b"two", "the second write replaced the first"
     else:
         assert sorted(names) == ["Model.gguf", "model.gguf"]
+
+
+# --- The DFlash2 draft as a Downloads job (SPEC §9.6, D68) ------------------------------
+
+DRAFT = "z-lab/Qwen3.8-27B-DFlash2"
+
+
+def use_real_draft(rig: Rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real `_ensure_draft` (the Rig stubs it), still over the fake Downloads queue."""
+    import types
+
+    monkeypatch.setattr(
+        rig.local, "_ensure_draft", types.MethodType(LocalModels._ensure_draft, rig.local)
+    )
+
+
+def fetch_draft(rig: Rig, repo: str = DRAFT) -> None:
+    """What a finished draft job leaves in the Hub cache: refs/main, config and weights."""
+    folder = repo_folder(rig.dir, repo)
+    snapshot = folder / "snapshots" / ("d" * 40)
+    snapshot.mkdir(parents=True, exist_ok=True)
+    (snapshot / "config.json").write_text("{}")
+    (snapshot / "model.safetensors").write_bytes(b"w")
+    (folder / "refs").mkdir(parents=True, exist_ok=True)
+    (folder / "refs" / "main").write_text("d" * 40)
+
+
+async def test_a_missing_draft_is_queued_once_and_the_file_waits(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_real_draft(rig, monkeypatch)
+    rig.gguf("a.gguf")
+    assert await rig.settle() == [], "the file waits for its draft, it does not register"
+    assert rig.downloads.queued == [DRAFT]
+    assert rig.local.last["a.gguf"] == {
+        "waiting": "draft",
+        "draft": DRAFT,
+        "family": "Qwen3.8-27B",
+    }
+    assert rig.alerts.raised == [], "waiting is not a failure"
+    assert await rig.local.scan() == []
+    assert await rig.local.scan(retry=True) == []
+    assert rig.downloads.queued == [DRAFT], "queued or running: no second job"
+    assert len(rig.classified) == 1, "a waiting file keeps its verdict"
+
+    fetch_draft(rig)
+    rig.downloads.active.clear()
+    assert await rig.local.scan() == ["local/a-GGUF"]
+    assert len(rig.classified) == 1 and rig.downloads.queued == [DRAFT]
+    assert rig.local.waiting == {}
+
+
+async def test_two_files_that_need_one_draft_share_one_job(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_real_draft(rig, monkeypatch)
+    rig.gguf("a.gguf")
+    rig.gguf("b.gguf", b"GGUF-b")
+    await rig.settle()
+    assert rig.downloads.queued == [DRAFT]
+    assert len(rig.local.waiting) == 2
+
+
+async def test_a_paused_draft_is_not_queued_again(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_real_draft(rig, monkeypatch)
+    rig.gguf("a.gguf")
+    await rig.settle()
+    rig.clock[0] += local_module.RETRY_NETWORK_S * 10
+    assert await rig.local.scan(retry=True) == []
+    assert rig.downloads.queued == [DRAFT], "the active job is still active (paused counts)"
+
+
+async def test_a_failed_draft_job_is_queued_again_after_the_backoff(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_real_draft(rig, monkeypatch)
+    rig.gguf("a.gguf")
+    await rig.settle()
+    rig.downloads.active.clear()  # the job failed: its own alert says why
+    assert await rig.local.scan() == []
+    assert rig.downloads.queued == [DRAFT], "not due for 10 min"
+    rig.clock[0] += local_module.RETRY_NETWORK_S
+    assert await rig.local.scan() == []
+    assert rig.downloads.queued == [DRAFT, DRAFT]
+    assert rig.alerts.raised == [], "the drop-in adds no alert of its own for a waiting draft"
+
+
+async def test_rescan_queues_a_draft_without_waiting(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_real_draft(rig, monkeypatch)
+    rig.gguf("a.gguf")
+    await rig.settle()
+    rig.downloads.active.clear()
+    assert await rig.local.scan(retry=True) == []
+    assert rig.downloads.queued == [DRAFT, DRAFT]
+
+
+async def test_a_draft_queue_refusal_alerts_and_retries_later(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_real_draft(rig, monkeypatch)
+    rig.downloads.error = RuntimeError("Not enough disk space: need 3.0 GB")
+    rig.gguf("a.gguf")
+    assert await rig.settle() == []
+    [alert] = rig.alerts.raised
+    assert alert["condition"] == "download_failed" and alert["subject"] == "local:a.gguf"
+    assert "Not enough disk space" in alert["message"]
+    assert (
+        rig.local.failed[key_of(rig.dir / "a.gguf")] == rig.clock[0] + local_module.RETRY_NETWORK_S
+    )
+
+
+async def test_offline_with_no_draft_is_an_alert_not_a_job(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_real_draft(rig, monkeypatch)
+    rig.settings.current.global_.hf.offline = True
+    rig.gguf("a.gguf")
+    assert await rig.settle() == []
+    assert rig.downloads.queued == []
+    assert "set to offline" in rig.local.last["a.gguf"]["error"]
+
+
+def test_sources_are_the_gguf_entries_without_projectors(rig: Rig) -> None:
+    path = rig.gguf("m.gguf")
+    rig.gguf("m-mmproj-F16.gguf")
+    snapshot = repo_folder(rig.dir, "local/m-GGUF") / "snapshots" / ("0" * 40)
+    snapshot.mkdir(parents=True)
+    (snapshot / "m.gguf").symlink_to(path)
+    (snapshot / "m-mmproj-F16.gguf").symlink_to(rig.dir / "m-mmproj-F16.gguf")
+    assert rig.local.sources("local/m-GGUF") == [path]
+    assert rig.local.sources("unsloth/Qwen3.6-35B-A3B-GGUF:Q4") == []
+    assert rig.local.key_of(rig.dir / "gone.gguf") is None
+    rig.local.tombstone("local/m-GGUF")
+    assert rig.local.ignored() == {key_of(path)}
+    rig.local.unignore(key_of(path))
+    assert rig.local.ignored() == set()
+
+
+# --- Deleting a local model, and its source file to the Trash (SPEC §9.5, D67) ---------
+
+
+def local_model(harness_factory: Callable[..., Any]) -> tuple[Any, Path, str]:
+    """A harness with one registered local model, as the drop-in leaves it."""
+    h = harness_factory(installed=())
+    models_dir = h.state.settings.models_dir()
+    path = models_dir / "a.gguf"
+    path.write_bytes(b"GGUF" + b"\0" * 60)
+    info = path.stat()
+    repo_id = "local/a-GGUF"
+    revision = revision_for(path, info.st_size, info.st_mtime_ns)
+    folder = repo_folder(models_dir, repo_id)
+    (folder / "refs").mkdir(parents=True)
+    (folder / "refs" / "main").write_text(revision)
+    snapshot = folder / "snapshots" / revision
+    snapshot.mkdir(parents=True)
+    (snapshot / "a.gguf").symlink_to(os.path.relpath(path, snapshot))
+    selection(repo_id)
+    return h, path, repo_id
+
+
+class FailingMacOS(RecordingMacOS):
+    """Finder refuses the move (for example, Automation was not allowed)."""
+
+    def run(self, argv: list[str], timeout: float = 15) -> CommandResult:
+        self.calls.append(list(argv))
+        return CommandResult(1, "", "Finder got an error: Not authorized to send Apple events.")
+
+
+def test_delete_with_trash_moves_the_gguf_through_finder(
+    harness_factory: Callable[..., Any],
+) -> None:
+    h, path, repo_id = local_model(harness_factory)
+    recorder = RecordingMacOS()
+    h.state.macos = recorder
+    deleted = h.client.delete(f"/api/admin/models/{repo_id}", params={"trash_source": True})
+    assert deleted.status_code == 200, deleted.text
+    body = deleted.json()
+    assert body["deleted"] == [repo_id]
+    assert body["trashed"] == [str(path)] and body["trash_failed"] == []
+    [script] = [c for c in recorder.calls if c[0] == "/usr/bin/osascript"]
+    assert f'delete POSIX file "{path}"' in script[-1]
+    assert 'tell application "Finder"' in script[-1]
+    assert path.exists(), "the manager never unlinks the file itself; Finder does the move"
+    assert h.state.models.local.ignored() == set(), "a file that left the folder is no tombstone"
+    assert not repo_folder(h.state.settings.models_dir(), repo_id).exists()
+
+
+def test_delete_without_trash_keeps_the_file_and_never_calls_finder(
+    harness_factory: Callable[..., Any],
+) -> None:
+    h, path, repo_id = local_model(harness_factory)
+    recorder = RecordingMacOS()
+    h.state.macos = recorder
+    deleted = h.client.delete(f"/api/admin/models/{repo_id}")
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["trashed"] == [] and deleted.json()["trash_failed"] == []
+    assert not any(c[0] == "/usr/bin/osascript" for c in recorder.calls)
+    assert path.exists()
+    assert h.state.models.local.ignored() == {key_of(path)}, "tombstoned: not re-imported"
+
+
+def test_a_failed_trash_keeps_the_file_alerts_and_the_delete_succeeds(
+    harness_factory: Callable[..., Any],
+) -> None:
+    h, path, repo_id = local_model(harness_factory)
+    h.state.macos = FailingMacOS()
+    deleted = h.client.delete(f"/api/admin/models/{repo_id}", params={"trash_source": True})
+    assert deleted.status_code == 200, deleted.text
+    body = deleted.json()
+    assert body["deleted"] == [repo_id]
+    assert body["trashed"] == [] and body["trash_failed"] == [str(path)]
+    assert path.exists()
+    assert h.state.models.local.ignored() == {key_of(path)}, "still tombstoned after a failed move"
+    alerts = h.client.get("/api/admin/alerts").json()["alerts"]
+    [alert] = [a for a in alerts if a["title"] == "Could not move a.gguf to the Trash"]
+    assert alert["condition"] == "download_failed" and "Not authorized" in alert["message"]
+
+
+def test_trash_is_refused_for_a_hub_model(harness_factory: Callable[..., Any]) -> None:
+    from .fakeengine import MODEL
+
+    h = harness_factory(installed=(MODEL,))
+    recorder = RecordingMacOS()
+    h.state.macos = recorder
+    refused = h.client.delete(f"/api/admin/models/{MODEL}", params={"trash_source": True})
+    assert refused.status_code == 400, refused.text
+    assert refused.json()["error"]["code"] == "trash_not_local"
+    assert recorder.calls == []
+    assert h.client.get(f"/api/admin/models/{MODEL}").status_code == 200, "nothing was deleted"
+
+
+def test_finder_is_asked_off_the_event_loop(harness_factory: Callable[..., Any]) -> None:
+    """Finder's `trash` is a blocking subprocess of up to 15 s. It runs on a worker thread, so
+    the event loop keeps serving other requests while the file moves."""
+    h, path, repo_id = local_model(harness_factory)
+    on_loop: list[bool] = []
+
+    class Watching(RecordingMacOS):
+        def trash(self, path: Path) -> CommandResult:
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                on_loop.append(False)
+            else:
+                on_loop.append(True)
+            return super().trash(path)
+
+    h.state.macos = Watching()
+    deleted = h.client.delete(f"/api/admin/models/{repo_id}", params={"trash_source": True})
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["trashed"] == [str(path)]
+    assert on_loop == [False]
+
+
+def test_a_models_file_replaced_by_a_link_is_never_trashed(
+    harness_factory: Callable[..., Any],
+) -> None:
+    """The file is a link into the Hub cache now. What it names may be a blob other models
+    share, so Finder is never asked to move it: the entry is reported as left in place."""
+    h, path, repo_id = local_model(harness_factory)
+    blob = h.state.settings.models_dir() / "models--owner--shared" / "blobs" / ("b" * 64)
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(b"weights another model uses")
+    path.unlink()
+    path.symlink_to(blob)
+    recorder = RecordingMacOS()
+    h.state.macos = recorder
+    deleted = h.client.delete(f"/api/admin/models/{repo_id}", params={"trash_source": True})
+    assert deleted.status_code == 200, deleted.text
+    body = deleted.json()
+    assert body["trashed"] == [] and body["trash_failed"] == [str(path)]
+    assert not any(c[0] == "/usr/bin/osascript" for c in recorder.calls)
+    assert path.is_symlink() and blob.read_bytes() == b"weights another model uses"
+    alerts = h.client.get("/api/admin/alerts").json()["alerts"]
+    [alert] = [a for a in alerts if a["title"] == "Could not move a.gguf to the Trash"]
+    assert "left in place" in alert["message"]
+
+
+def _record_source(repo_id: str, entry: Path) -> None:
+    """Splash's assembly for a local model records the snapshot entry it links as its file."""
+    assembly = splash_models_dir() / ".resolved" / hashlib.sha256(repo_id.encode()).hexdigest()
+    record = json.loads((assembly / "model.json").read_text())
+    record["files"] = {"target/a.gguf": {"path": str(entry), "bytes": entry.stat().st_size}}
+    (assembly / "model.json").write_text(json.dumps(record))
+
+
+def test_deleting_a_local_model_whose_file_now_links_another_repos_blob(
+    harness_factory: Callable[..., Any],
+) -> None:
+    """D49 through the delete endpoint: the local model's file was replaced by a link into
+    another repository's blob. The delete removes the local model's own registration and
+    leaves that blob, which is not this model's to free."""
+    h, path, repo_id = local_model(harness_factory)
+    models_dir = h.state.settings.models_dir()
+    blob = models_dir / "models--other--repo" / "blobs" / ("b" * 64)
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(b"weights another model uses")
+    path.unlink()
+    path.symlink_to(blob)
+    [entry] = (repo_folder(models_dir, repo_id) / "snapshots").glob("*/a.gguf")
+    _record_source(repo_id, entry)
+
+    deleted = h.client.delete(f"/api/admin/models/{repo_id}")
+
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["freed_bytes"] == 0
+    assert blob.read_bytes() == b"weights another model uses"
+    assert not repo_folder(models_dir, repo_id).exists()
+
+
+def _draft_in_hub(models_dir: Path) -> Path:
+    """The DFlash2 draft as a finished download leaves it in the Hub cache: refs/main and a
+    snapshot whose files link to blobs. Returns the snapshot folder."""
+    folder = repo_folder(models_dir, DRAFT)
+    commit = "d" * 40
+    snapshot = folder / "snapshots" / commit
+    snapshot.mkdir(parents=True)
+    (folder / "refs").mkdir()
+    (folder / "refs" / "main").write_text(commit)
+    (folder / "blobs").mkdir()
+    for name, data in (("config.json", b"{}"), ("model.safetensors", b"w" * 10)):
+        blob = folder / "blobs" / hashlib.sha256(name.encode()).hexdigest()
+        blob.write_bytes(data)
+        (snapshot / name).symlink_to(os.path.relpath(blob, snapshot))
+    return snapshot
+
+
+def _local_selection_with_draft(repo_id: str, draft: Path) -> None:
+    """Splash's selection for a local model whose family has this draft, as `prepare` leaves
+    it: an assembly whose draft files link into the draft's snapshot."""
+    root = splash_models_dir()
+    assembly = root / ".resolved" / hashlib.sha256(repo_id.encode()).hexdigest()
+    assembly.mkdir(parents=True, exist_ok=True)
+    record = {
+        "model": repo_id,
+        "family": "Qwen3.8-27B",
+        "sources": {"draft": {"repo": DRAFT, "revision": draft.name}},
+        "files": {
+            f"draft/{name}": {"path": str(draft / name), "bytes": 1}
+            for name in ("config.json", "model.safetensors")
+        },
+    }
+    (assembly / "model.json").write_text(json.dumps(record))
+    owner, repo = repo_id.split("/")
+    (root / owner).mkdir(parents=True, exist_ok=True)
+    (root / owner / repo).unlink(missing_ok=True)
+    (root / owner / repo).symlink_to(assembly)
+
+
+async def test_replacing_a_local_file_keeps_its_draft(
+    harness_factory: Callable[..., Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dropping the old registration keeps the family's draft: nothing else pins it, but the
+    replacement is registered from it, so it must not be deleted and downloaded again."""
+    h = harness_factory(installed=())
+    models_dir = h.state.settings.models_dir()
+    snapshot = _draft_in_hub(models_dir)
+    blobs = [p.resolve() for p in snapshot.iterdir()]
+    local = h.state.models.local
+    path = models_dir / "a.gguf"
+    path.write_bytes(b"GGUF" + b"\0" * 60)
+
+    async def classify(items: list[Candidate]) -> dict[str, dict[str, Any]]:
+        return {str(item.path): SUPPORTED for item in items}
+
+    async def prepare(
+        repo_id: str, revision: str, *, language_only: bool, must: bool = False
+    ) -> bool:
+        _local_selection_with_draft(repo_id, snapshot)
+        return True
+
+    monkeypatch.setattr(local, "_classify", classify)
+    monkeypatch.setattr(local, "_prepare", prepare)
+    assert await local.scan() == []
+    assert await local.scan() == ["local/a-GGUF"]
+
+    path.write_bytes(b"GGUF" + b"\1" * 100)
+    assert await local.scan() == [], "the new size settles on the next pass"
+    assert await local.scan() == ["local/a-GGUF"]
+    assert all(blob.is_file() for blob in blobs), "the draft's blobs are kept"
+    assert not h.state.downloads.active_model(DRAFT), "and the draft is not queued again"
+    assert local.last["a.gguf"]["draft"] == DRAFT

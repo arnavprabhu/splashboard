@@ -356,7 +356,7 @@ def test_the_shim_path_is_not_written_without_being_asked(app, tmp_path, monkeyp
         # above looked at the right files.
         assert client.post("/api/admin/cli/shim", json={"add_to_path": True}).status_code == 200
     assert BEGIN in zprofile.read_text()
-    assert {p.name for p in calls} == {".zprofile", ".bash_profile"}
+    assert {p.name for p in calls} == {".zprofile", ".zshrc", ".bash_profile", ".bashrc"}
 
 
 def test_the_generated_shim_carries_the_discovery_marker(paths, tmp_path):

@@ -413,13 +413,6 @@ export function curlSample(origin: string, model: string, withKey: boolean): str
   return lines.join('\n');
 }
 
-/** The PATH block SPEC §12.1 describes, as one pasteable command (no manager route yet). */
-export const PATH_COMMAND = [
-  'for f in ~/.zprofile ~/.bash_profile; do',
-  "  grep -q '# >>> splash-gui >>>' \"$f\" 2>/dev/null || printf '\\n# >>> splash-gui >>>\\nexport PATH=\"$HOME/.splash/bin:$PATH\"\\n# <<< splash-gui <<<\\n' >> \"$f\"",
-  'done',
-].join('\n');
-
 /** The origin the manager will answer on after a port change (W2 redirect). */
 export function movedOrigin(current: string, port: number): string {
   const url = new URL(current);

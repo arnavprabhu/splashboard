@@ -574,3 +574,192 @@ def test_a_download_that_does_not_fit_on_disk_is_refused_up_front(hub_harness, m
     assert response.status_code == 507, response.text
     assert response.json()["error"]["code"] == "disk_full"
     assert harness.client.get("/api/admin/downloads").json()["items"] == []
+
+
+# --- Cancel removes what the job created (SPEC §9.4) -------------------------------
+
+REPO_DIR = "models--o--r"
+
+
+def _snapshot(harness, repo: str, rev: str, name: str, digest: str) -> tuple[Path, Path]:
+    """A complete blob and the relative snapshot link to it, as huggingface_hub writes them."""
+    import os
+
+    folder = harness.state.settings.models_dir() / ("models--" + repo.replace("/", "--"))
+    blob = folder / "blobs" / digest
+    blob.parent.mkdir(parents=True, exist_ok=True)
+    blob.write_bytes(b"weights")
+    link = folder / "snapshots" / rev / name
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(os.path.relpath(blob, link.parent))
+    return blob, link
+
+
+def _job(harness, dl: str, files: list[tuple[str, str]], digests, preexisting=()) -> None:
+    from splash_gui.schemas import DownloadFile, DownloadItem
+
+    downloads = harness.state.downloads
+    downloads.items[dl] = DownloadItem(
+        id=dl,
+        model="o/r",
+        state="paused",
+        created_at="2026-10-07T00:00:00Z",
+        files=[DownloadFile(name=name, repo_id=repo) for repo, name in files],
+    )
+    downloads.blobs[dl] = {f"{repo}/{name}": digests[name] for repo, name in files}
+    downloads.preexisting[dl] = [str(p) for p in preexisting]
+
+
+def test_cancel_removes_the_snapshot_links_and_blobs_the_job_created(hub_harness):
+    harness = hub_harness()
+    blob, link = _snapshot(harness, "o/r", "c" * 40, "model.safetensors", "a" * 64)
+    _job(harness, "dl", [("o/r", "model.safetensors")], {"model.safetensors": "a" * 64})
+    response = harness.client.delete("/api/admin/downloads/dl")
+    assert response.status_code == 204, response.text
+    assert not link.is_symlink() and not blob.exists()
+    assert not (blob.parent.parent / "snapshots" / ("c" * 40)).exists(), (
+        "an emptied snapshot folder goes"
+    )
+
+
+def test_keep_files_keeps_the_snapshot_files(hub_harness):
+    harness = hub_harness()
+    blob, link = _snapshot(harness, "o/r", "c" * 40, "model.safetensors", "a" * 64)
+    _job(harness, "dl", [("o/r", "model.safetensors")], {"model.safetensors": "a" * 64})
+    response = harness.client.delete("/api/admin/downloads/dl?keep_files=true")
+    assert response.status_code == 204
+    assert link.is_symlink() and blob.exists()
+
+
+def test_cancel_keeps_what_existed_before_queueing_or_is_shared(hub_harness, monkeypatch):
+    """Four blobs the job fetched or claims, each kept for a different reason: it was
+    there before the job (preexisting), another repository links it, another unfinished
+    download claims it, or an installed model uses it. Only the fifth goes."""
+    from splash_gui.downloads import service as downloads_service
+
+    harness = hub_harness()
+    old = _snapshot(harness, "o/r", "c" * 40, "old.bin", "1" * 64)
+    other_repo = _snapshot(harness, "o/r", "c" * 40, "mirror.bin", "2" * 64)
+    # Another repository's snapshot linking the same blob (the draft is shared this way).
+    import os
+
+    mirror = harness.state.settings.models_dir() / "models--p--q" / "snapshots" / ("d" * 40)
+    mirror.mkdir(parents=True)
+    (mirror / "mirror.bin").symlink_to(os.path.relpath(other_repo[0], mirror))
+    claimed = _snapshot(harness, "o/r", "c" * 40, "claimed.bin", "3" * 64)
+    installed = _snapshot(harness, "o/r", "c" * 40, "installed.bin", "4" * 64)
+    gone = _snapshot(harness, "o/r", "c" * 40, "gone.bin", "5" * 64)
+    files = [
+        ("o/r", "old.bin"),
+        ("o/r", "mirror.bin"),
+        ("o/r", "claimed.bin"),
+        ("o/r", "installed.bin"),
+        ("o/r", "gone.bin"),
+    ]
+    digests = {
+        "old.bin": "1" * 64,
+        "mirror.bin": "2" * 64,
+        "claimed.bin": "3" * 64,
+        "installed.bin": "4" * 64,
+        "gone.bin": "5" * 64,
+    }
+    _job(harness, "dl", files, digests, preexisting=[old[0]])
+    _job(harness, "dl2", [("o/r", "claimed.bin")], {"claimed.bin": "3" * 64})
+    harness.state.downloads.items["dl2"].state = "queued"
+
+    class Selection:
+        def real_paths(self):
+            return {installed[0]}
+
+    monkeypatch.setattr(downloads_service, "read_all", lambda root: [Selection()])
+    response = harness.client.delete("/api/admin/downloads/dl")
+    assert response.status_code == 204, response.text
+    for blob, link in (old, other_repo, claimed, installed):
+        assert blob.exists() and link.is_symlink(), f"{blob.name} must survive"
+    assert not gone[0].exists() and not gone[1].is_symlink(), "only the job's own file goes"
+
+
+def test_a_job_with_no_record_of_its_files_removes_no_snapshot(hub_harness):
+    harness = hub_harness()
+    blob, link = _snapshot(harness, "o/r", "c" * 40, "model.safetensors", "a" * 64)
+    _job(harness, "dl", [("o/r", "model.safetensors")], {"model.safetensors": "a" * 64})
+    del harness.state.downloads.preexisting["dl"]
+    harness.client.delete("/api/admin/downloads/dl")
+    assert link.is_symlink() and blob.exists(), "queued before the record existed: keep"
+
+
+async def test_a_persisted_blob_id_that_is_not_a_hub_hash_is_dropped_on_load(hub_harness, caplog):
+    """SPEC §9.4: cancel joins a persisted blob ID into the blobs folder and unlinks what it
+    finds, so an ID such as `../../x` (written before the Hub's answer was checked) would
+    remove `models/x`. Load drops such an entry and logs it; its file has no blob to remove."""
+    import json
+    import logging
+
+    from splash_gui.downloads.service import Downloads
+
+    harness = hub_harness()
+    models = harness.state.settings.models_dir()
+    models.mkdir(parents=True, exist_ok=True)
+    victim = models / "x"  # what models--o--r/blobs/../../x names
+    victim.write_bytes(b"not a blob")
+    good = "b" * 64
+    harness.state.paths.downloads_file.write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "id": "dl",
+                        "model": "o/r",
+                        "state": "paused",
+                        "created_at": "2026-10-07T00:00:00Z",
+                        "files": [
+                            {"name": "model.safetensors", "repo_id": "o/r", "resumable": True},
+                            {"name": "config.json", "repo_id": "o/r"},
+                        ],
+                    }
+                ],
+                "blobs": {"dl": {"o/r/model.safetensors": "../../x", "o/r/config.json": good}},
+                "preexisting": {"dl": []},
+            }
+        )
+    )
+
+    revived = Downloads(harness.state)
+    revived.stopping = True
+    with caplog.at_level(logging.WARNING, logger="splash_gui.downloads.service"):
+        await revived.start()
+
+    assert revived.blobs == {"dl": {"o/r/config.json": good}}
+    assert "'../../x' is not a Hub blob ID" in caplog.text
+    assert revived.items["dl"].files[0].resumable is False
+    await revived.cancel("dl", keep_files=False)
+    assert victim.read_bytes() == b"not a blob", "cancel must not unlink outside the blobs folder"
+
+
+def test_a_local_draft_is_a_queue_item_that_fetches_only_its_repo(hub_harness):
+    """SPEC §9.6, D68: the drop-in's draft is an ordinary Downloads item of kind `draft`.
+    It fetches the draft repo's JSON and weights, runs no installer, and leaves a cache
+    the drop-in reads as complete."""
+    from splash_gui.hubcache import repo_folder
+    from splash_gui.models.local import LocalModels
+
+    harness = hub_harness()
+    draft = "incoai/Qwen3.6-35B-A3B-DFlash2"
+    queued = harness.client.portal.call(harness.state.downloads.queue_draft, draft)
+    assert queued.kind == "draft" and queued.verify is False
+    done = wait_for(harness, queued.id, "done")
+    assert done["kind"] == "draft" and done["model"] == draft
+    assert {f["repo_id"] for f in done["files"]} == {draft}, done["files"]
+    assert any(f["name"].endswith(".safetensors") for f in done["files"])
+    folder = repo_folder(harness.state.settings.models_dir(), draft)
+    assert LocalModels._draft_complete(folder)
+    assert not harness.state.downloads.active_model(draft)
+    assert not any("--model" in line for line in done["log_tail"]), (
+        "a draft never goes through Splash's installer"
+    )
+
+
+def test_a_model_download_still_reports_its_kind(hub_harness):
+    harness = hub_harness()
+    started = queue(harness, MLX)
+    assert started["kind"] == "model"

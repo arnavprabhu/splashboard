@@ -640,6 +640,17 @@ FIELDS: tuple[FieldMeta, ...] = (
         choices=("light", "dark", "system"),
     ),
     FieldMeta("wizard.completed", "Wizard completed", "", "hidden", "toggle"),
+    FieldMeta("wizard.step", "Wizard step", "", "hidden", "number"),
+    FieldMeta("wizard.pending_port", "Wizard pending port", "", "hidden", "number"),
+    FieldMeta(
+        "wizard.use_case",
+        "Wizard use case",
+        "",
+        "hidden",
+        "select",
+        choices=("coding", "chat", "speed"),
+    ),
+    FieldMeta("wizard.model", "Wizard model", "", "hidden", "text"),
     FieldMeta(
         "wizard.preset",
         "Wizard preset",

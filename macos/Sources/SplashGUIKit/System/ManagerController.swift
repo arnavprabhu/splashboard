@@ -67,12 +67,14 @@ public final class ManagerController {
     private let paths: HomePaths
     private let repo: RepoLocator
     private let agent: AppService?
+    private let bundled: BundledRuntime
     private let launcher: ProcessLaunching
     private let sleep: @Sendable (Double) async -> Void
     private var child: LaunchedProcess?
 
     public init(
         api: AdminAPI, paths: HomePaths, repo: RepoLocator, agent: AppService?,
+        bundled: BundledRuntime = BundledRuntime(),
         launcher: ProcessLaunching = FoundationProcessLauncher(),
         sleep: @escaping @Sendable (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) }
     ) {
@@ -80,6 +82,7 @@ public final class ManagerController {
         self.paths = paths
         self.repo = repo
         self.agent = agent
+        self.bundled = bundled
         self.launcher = launcher
         self.sleep = sleep
     }
@@ -125,7 +128,13 @@ public final class ManagerController {
             }
             return .failure(.timedOut(log: paths.managerLaunchLog))
         }
-        guard let command = repo.managerCommand() else {
+        // Packaged app: the bundled interpreter, no uv, no repo (PKG-4). Development: uv run in the repo.
+        let command: [String]
+        if let bundledCommand = bundled.managerCommand() {
+            command = bundledCommand
+        } else if let repoCommand = repo.managerCommand() {
+            command = repoCommand
+        } else {
             if repo.uvURL() == nil { return .failure(.uvMissing) }
             return .failure(.repoMissing)
         }

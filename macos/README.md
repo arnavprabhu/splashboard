@@ -15,7 +15,7 @@ cd macos
 swift build
 swift test
 swift run SplashGUI          # dev: no bundle, so notifications use osascript and there are no login items
-scripts/bundle.sh            # → build/Splash GUI.app (release, ad-hoc signed)
+scripts/bundle.sh [--variant verify]  # → build/Splash GUI.app (release, ad-hoc signed; identity from packaging/identity.env)
 open "build/Splash GUI.app"
 ```
 
@@ -25,8 +25,8 @@ Packaging is deferred (D30), so the app runs the manager from this checkout: `uv
 
 - **Address.** The app reads `server.host` and `server.port` from `$SPLASH_GUI_HOME/settings.json` (default `~/.splash`, 127.0.0.1:8000), then follows `GET /api/admin/settings`.
 - **Auth.** Every admin call sends `Authorization: Bearer $(cat ~/.splash/run/cli.token)`.
-- **Startup order.** If `GET /health` already answers, the app uses that manager and never stops it. Inside a bundle, it registers the LaunchAgent `ai.splashgui.manager` through `SMAppService.agent`; the plist is in `Contents/Library/LaunchAgents/` with the repo path baked in. If neither works, it spawns a child process, logging to `~/.splash/logs/manager.launch.log`.
-- **Repo path.** In priority order: `SPLASH_GUI_REPO`, `defaults write ai.splashgui.app SplashGUIRepoPath <path>`, Info.plist `SplashGUIRepoPath`, the directories above the executable, then `~/Desktop/Projects/Splash-GUI`.
+- **Startup order.** If `GET /health` already answers, the app uses that manager and never stops it. Inside a bundle, it registers the LaunchAgent named by Info.plist `SplashGUIAgentLabel` (`ai.splashgui.manager` by default) through `SMAppService.agent`; the plist is in `Contents/Library/LaunchAgents/` with the repo path baked in. If neither works, it spawns a child process, logging to `~/.splash/logs/manager.launch.log`.
+- **Repo path.** In priority order: `SPLASH_GUI_REPO`, `defaults write <bundle id> SplashGUIRepoPath <path>` (the bundle id from `packaging/identity.env`), Info.plist `SplashGUIRepoPath`, the directories above the executable, then `~/Desktop/Projects/Splash-GUI`.
 - **Finding uv.** PATH, then `/opt/homebrew/bin`, then `~/.local/bin`.
 
 ## Live data

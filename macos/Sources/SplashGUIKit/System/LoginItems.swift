@@ -44,8 +44,22 @@ public struct SMAppServiceWrapper: AppService, @unchecked Sendable {
 }
 
 public enum ManagerAgent {
-    public static let label = "ai.splashgui.manager"
-    public static let plistName = "ai.splashgui.manager.plist"
+    /// Info.plist key that scripts/bundle.sh writes from packaging/identity.env (PKG-1).
+    public static let labelInfoKey = "SplashGUIAgentLabel"
+    /// The label when the bundle does not carry one (`swift run`, `swift test`).
+    public static let fallbackLabel = "ai.splashgui.manager"
+
+    /// The agent label from an Info.plist dictionary, or the fallback when the key is missing or empty.
+    public static func resolveLabel(info: [String: Any]?) -> String {
+        if let value = info?[labelInfoKey] as? String, !value.isEmpty { return value }
+        return fallbackLabel
+    }
+
+    /// The agent plist name that scripts/bundle.sh writes: `<label>.plist`.
+    public static func plistName(forLabel label: String) -> String { "\(label).plist" }
+
+    public static let label: String = resolveLabel(info: Bundle.main.infoDictionary)
+    public static let plistName: String = plistName(forLabel: label)
 
     /// True when the running app bundle carries the agent plist (scripts/bundle.sh writes it).
     public static func plistInBundle(_ bundle: Bundle = .main) -> Bool {

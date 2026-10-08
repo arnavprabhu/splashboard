@@ -42,6 +42,7 @@ from .logs.api import router as logs_router
 from .mcp.api import router as mcp_router
 from .metrics.api import router as metrics_router
 from .models.api import router as models_router
+from .packaged import bundle_root
 from .paths import Paths
 from .proxy.router import router as proxy_router
 from .schemas import SSE_MODELS
@@ -83,9 +84,14 @@ ADMIN_ROUTERS: tuple[tuple[str, APIRouter], ...] = (
 
 
 def default_web_dist() -> Path:
+    """The web admin's built files: the env override, then the bundle's own copy when
+    this runs from `Splash GUI.app` (PKG-3), then the source tree's `web/dist`."""
     override = os.environ.get(WEB_DIST_ENV)
     if override:
         return Path(override).expanduser()
+    root = bundle_root()
+    if root is not None:
+        return root / "Contents" / "Resources" / "web"
     return Path(__file__).resolve().parents[2] / "web" / "dist"
 
 

@@ -1,4 +1,4 @@
-"""Byte-level resumable downloads of large Hub files (SPEC §9.4, D61; Q24 option c).
+"""Byte-level resumable downloads of large Hub files (SPEC §9.4, D61, D84; Q24 option c).
 
 Splash's installer (`install/models.py prepare`, huggingface_hub 1.28) starts a file
 it did not finish from byte 0 in a new `<etag>.<uuid8>.incomplete`. For LFS/Xet files
@@ -8,31 +8,43 @@ HTTP Range requests into the same Hub cache first, and then runs `prepare` as be
 
 Data shape, per file (next to the blob it becomes, in `models--O--R/blobs/`):
 
-- **partial** `<etag>.splashgui.incomplete`: the file's first N bytes; its size N is
-  the bytes done.
-- **sidecar** `<etag>.splashgui.json`: `PartialState`, what those bytes belong to
-  (repo, path, commit, etag = the sha256 that names the blob, expected size, Xet hash,
-  the CDN's validator).
+- **partial** `<etag>.splashgui.incomplete`. Version 2 (D84) is preallocated to the
+  file's full size, a sparse file, and filled by `RANGE_SEGMENTS` Range streams at
+  once, each at its own offsets. Version 1 is one stream whose size is the bytes done.
+- **sidecar** `<etag>.splashgui.json` (`PartialState`): what the bytes belong to (repo,
+  path, commit, etag = the sha256 that names the blob, size, Xet hash, the CDN's
+  validator) and, for version 2, each segment's `[start, end)` and `verified_end`:
+  the bytes below `verified_end` are in the partial. A sidecar without `version` is
+  version 1 (everything written before D84). The sidecar is one 4 KiB record,
+  rewritten in place after every chunk, so a hard kill loses at most the chunk in
+  flight for each segment and never re-fetches a verified byte.
 - **lock** `../.locks/models--O--R/<etag>.lock`: `flock`, the lock huggingface_hub
   holds while it writes that blob.
 
 How the Downloader's job maps onto it (`downloads/service.py`):
 
-- **Progress and speed** are the partial's size (`hubcache.blob_partials`), sampled
+- **Progress and speed** are `partial_progress`: a version 2 partial's verified bytes
+  from the sidecar (its file size is the full size), a version 1 partial's size. Read
   every 500 ms like Splash's own partials.
-- **Pause** cancels the job's task: the stream stops, the lock is released, the
+- **Pause** cancels the job's task: the streams stop, the lock is released, the
   partial and sidecar stay.
 - **Resume**, and a manager restart (the queue comes back `queued`), run the job
   again: the file is resolved again, and a sidecar that matches the Hub's etag, size
-  and Xet hash continues with `Range: bytes=N-`. Anything else starts at 0.
+  and Xet hash continues every segment from its `verified_end` (or a version 1 partial
+  from its size). Anything else starts again.
 - **Cancel** deletes the partial and its sidecar (`hubcache.remove_partial`).
 - **Done**: the sha256 of every byte is checked before the atomic rename to
   `blobs/<etag>`; then the `snapshots/<commit>/<path>` link and `refs/<branch>` are
   written the way huggingface_hub writes them.
-- **Any problem** (a hash mismatch, an unexpected status or `Content-Range`, missing
-  metadata, a lock held for `LOCK_TIMEOUT_S`, repeated network errors) raises
-  `Fallback`, and the job leaves that file to Splash's `prepare`: the worst case is
-  the per-file behaviour Splash has anyway. A hash mismatch also deletes the partial.
+- **One stream instead** (D84): a segment that gets `200` for its Range, a
+  `Content-Range` that does not start at its verified end or runs past its end, a
+  changed validator, or more bytes than its `Content-Range` restarts the file as one
+  stream from byte 0. The job log says so. A shorter answer than asked is fine: the
+  segment asks for the rest.
+- **Any other problem** (a hash mismatch, an unexpected status, missing metadata, a
+  lock held for `LOCK_TIMEOUT_S`, repeated network errors) raises `Fallback`, and the
+  job leaves that file to Splash's `prepare`: the worst case is the per-file behaviour
+  Splash has anyway. A hash mismatch also deletes the partial.
 
 The token goes only to the Hub's own host (`hf.endpoint`), never to the CDN that
 `Location` points at; redirects are followed by hand. Logged URLs drop their query
@@ -53,14 +65,22 @@ import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urljoin, urlsplit
 
 import httpx
 
-from ..hubcache import range_partial, range_sidecar, remove_partial, repo_folder
+from ..hubcache import (
+    RANGE_PARTIAL,
+    RANGE_SIDECAR_SUFFIX,
+    range_partial,
+    range_sidecar,
+    remove_partial,
+    repo_folder,
+)
 
 log = logging.getLogger(__name__)
 
@@ -68,6 +88,12 @@ log = logging.getLogger(__name__)
 # not a setting: every supported GGUF and most MLX shards are above it, and the
 # small files are cheap to restart.
 RANGE_MIN_BYTES = 1_000_000_000
+# Parallel Range streams per file (D84), each into its own part of the partial. A
+# constant, not a setting. Measured live (Q40, 2026-10-07, build/verify/q40/results.txt):
+# median 37.7 MB/s with 1 segment, 53.0 with 4, 56.5 with 8; 4 stays.
+RANGE_SEGMENTS = 4
+# The sidecar is one fixed-size record, rewritten in place after every chunk (D84).
+SIDECAR_BYTES = 4096
 # How long to wait for another writer of the same blob (Splash's own installer, or a
 # second download sharing a draft) before leaving the file to `prepare`, which waits on
 # the same lock and then finds the blob.
@@ -82,6 +108,16 @@ _CONTENT_RANGE = re.compile(r"^bytes (\d+)-(\d+)/(\d+|\*)$")
 
 class Fallback(Exception):
     """This file is left to Splash's `prepare`; the message says why, in plain words."""
+
+
+class _Mismatch(Exception):
+    """The server did not answer a segment the way the segmented plan needs. The file
+    starts again as one stream (D84); the message says what was wrong."""
+
+
+class _Expired(Exception):
+    def __init__(self, status: int) -> None:
+        super().__init__(f"the download URL answered {status} (expired)")
 
 
 @dataclass(frozen=True)
@@ -99,8 +135,19 @@ class Remote:
 
 
 @dataclass
+class Segment:
+    """One Range stream of a version 2 partial: bytes `[start, end)`, of which
+    `[start, verified_end)` are in the partial."""
+
+    start: int
+    end: int
+    verified_end: int
+
+
+@dataclass
 class PartialState:
-    """The sidecar: what the bytes in the partial belong to."""
+    """The sidecar: what the bytes in the partial belong to, and (version 2) how far
+    each segment has got."""
 
     repo: str
     path: str
@@ -109,6 +156,24 @@ class PartialState:
     size: int
     xet_hash: str | None
     validator: str | None  # the CDN's ETag, sent back as If-Range
+    version: int = 1  # 1: one stream, the partial's size is the bytes done; 2: segments
+    segments: list[Segment] = field(default_factory=list)
+
+    @classmethod
+    def for_remote(
+        cls, remote: Remote, *, version: int, segments: list[Segment] | None = None
+    ) -> PartialState:
+        return cls(
+            remote.repo,
+            remote.path,
+            remote.commit,
+            remote.etag,
+            remote.size,
+            remote.xet_hash,
+            None,
+            version,
+            segments or [],
+        )
 
     def matches(self, remote: Remote) -> bool:
         return (self.etag, self.size, self.xet_hash) == (remote.etag, remote.size, remote.xet_hash)
@@ -130,10 +195,26 @@ def _etag(value: str | None) -> str | None:
     return value.removeprefix("W/").strip('"') if value else None
 
 
+def _encode(state: PartialState) -> bytes:
+    """The sidecar's bytes: JSON padded with spaces to `SIDECAR_BYTES`, so a version 2
+    record can be rewritten in place with the same length."""
+    data = json.dumps(asdict(state)).encode()
+    if len(data) > SIDECAR_BYTES:
+        raise ValueError("the download sidecar does not fit its record")
+    return data.ljust(SIDECAR_BYTES)
+
+
 def _read_state(path: Path) -> PartialState | None:
+    """The sidecar, or None when it is missing, unreadable or of a version this build
+    does not know. Sidecars written before D84 have no `version` and are one stream."""
     try:
-        return PartialState(**json.loads(path.read_text()))
-    except (OSError, ValueError, TypeError):
+        raw = json.loads(path.read_text())
+        version = raw.pop("version", 1)
+        segments = [Segment(**segment) for segment in raw.pop("segments", [])]
+        if version not in (1, 2):
+            return None
+        return PartialState(version=version, segments=segments, **raw)
+    except (OSError, ValueError, TypeError, AttributeError):
         return None
 
 
@@ -149,6 +230,66 @@ def _umask() -> int:
     mask = os.umask(0)
     os.umask(mask)
     return mask
+
+
+def partial_progress(partial: Path) -> int:
+    """The bytes a manager partial holds that a resume keeps: the verified bytes of a
+    version 2 sidecar, the size of a version 1 partial, and 0 when no sidecar claims
+    the partial. A version 2 partial's file size is the full size, so progress never
+    reads it (D84)."""
+    try:
+        size = partial.stat().st_size
+    except OSError:
+        return 0
+    match = RANGE_PARTIAL.match(partial.name)
+    if match is None:
+        return size
+    state = _read_state(partial.with_name(match.group("digest") + RANGE_SIDECAR_SUFFIX))
+    if state is None:
+        return 0
+    if state.version == 2:
+        return sum(segment.verified_end - segment.start for segment in state.segments)
+    return size
+
+
+def _plan_segments(size: int) -> list[Segment]:
+    """`RANGE_SEGMENTS` equal ranges of `size` bytes, none empty, nothing verified."""
+    bounds = [size * index // RANGE_SEGMENTS for index in range(RANGE_SEGMENTS + 1)]
+    return [Segment(start, end, start) for start, end in pairwise(bounds) if end > start]
+
+
+def _covers(state: PartialState, size: int) -> bool:
+    """Whether the segments tile `[0, size)` in order and each is within its bounds."""
+    segments = state.segments
+    if not segments or segments[0].start != 0 or segments[-1].end != size:
+        return False
+    if any(not (s.start < s.end and s.start <= s.verified_end <= s.end) for s in segments):
+        return False
+    return all(a.end == b.start for a, b in pairwise(segments))
+
+
+def _check_range(header: str | None, segment: Segment, size: int) -> int:
+    """The answer to a segment's Range must start where the segment's verified bytes end
+    and stay inside the segment. It may stop short of the segment's end (a server that
+    caps each answer); the rest is asked for again. Returns the answer's last byte."""
+    match = _CONTENT_RANGE.match(header or "")
+    if (
+        match is None
+        or int(match.group(1)) != segment.verified_end
+        or not segment.verified_end <= int(match.group(2)) <= segment.end - 1
+        or match.group(3) not in ("*", str(size))
+    ):
+        raise _Mismatch(f"the server answered Content-Range {header!r}, not the range asked for")
+    return int(match.group(2))
+
+
+def _preallocate(partial: Path, size: int) -> None:
+    """An empty partial of `size` bytes (sparse): the segments write into their ranges."""
+    fd = os.open(partial, os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o666)
+    try:
+        os.ftruncate(fd, size)
+    finally:
+        os.close(fd)
 
 
 def link_snapshot(folder: Path, remote: Remote) -> None:
@@ -183,6 +324,61 @@ def _hash_prefix(path: Path, length: int) -> Any:
 def _sync(path: Path) -> None:
     with path.open("rb") as handle:
         os.fsync(handle.fileno())
+
+
+class _Journal:
+    """A version 2 partial and its sidecar, open while the segments run. A chunk is
+    written at its offset first and the sidecar's record of it after, so the record
+    never claims a byte that is not in the partial."""
+
+    def __init__(self, partial: Path, sidecar: Path, state: PartialState) -> None:
+        self.state = state
+        self._data = os.open(partial, os.O_RDWR)
+        try:
+            self._record = os.open(sidecar, os.O_RDWR)
+        except OSError:
+            os.close(self._data)
+            raise
+
+    def write(self, offset: int, chunk: bytes) -> None:
+        view = memoryview(chunk)
+        while view:
+            written = os.pwrite(self._data, view, offset)
+            view = view[written:]
+            offset += written
+
+    def checkpoint(self) -> None:
+        os.pwrite(self._record, _encode(self.state), 0)
+
+    def close(self) -> None:
+        for fd in (self._data, self._record):
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
+
+@dataclass
+class _Link:
+    """The CDN URL the segments share. A signed URL expires; the first segment that
+    sees it expire replaces it for the others."""
+
+    url: str
+
+
+async def _join(tasks: list[asyncio.Task[None]]) -> None:
+    """Wait for every segment. The first failure cancels the rest and is raised."""
+    try:
+        pending = set(tasks)
+        while pending:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_EXCEPTION)
+            failed: list[BaseException] = [
+                error for task in done if not task.cancelled() and (error := task.exception())
+            ]
+            if failed:
+                raise failed[0]
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 class RangeDownloader:
@@ -306,8 +502,8 @@ class RangeDownloader:
             os.close(fd)
 
     async def download(self, client: httpx.AsyncClient, remote: Remote) -> Path:
-        """Fetch `remote` into `blobs/<etag>` (continuing a matching partial), then
-        link it into the snapshot. Raises `Fallback`; cancellation keeps the partial."""
+        """Fetch `remote` into `blobs/<etag>` (continuing a matching partial), then link
+        it into the snapshot. Raises `Fallback`; cancellation keeps the partial."""
         folder = repo_folder(self.models_dir, remote.repo)
         blob = folder / "blobs" / remote.etag
         blob.parent.mkdir(parents=True, exist_ok=True)
@@ -318,33 +514,32 @@ class RangeDownloader:
                 self.note(f"{remote.path} is already in the models folder.")
                 return blob
             partial, sidecar = range_partial(blob), range_sidecar(blob)
-            state = _read_state(sidecar)
-            offset = partial.stat().st_size if partial.is_file() else 0
-            if offset and (state is None or not state.matches(remote) or offset > remote.size):
-                log.info("range restart %s: the partial does not match the Hub", remote.path)
-                self.note(
-                    f"{remote.path}: the partial file does not match the Hub's file; "
-                    "starting it again."
+            state = self._plan(remote, partial, sidecar)
+            hasher: Any = None  # set when the bytes were hashed as they arrived
+            if state.version == 2:
+                try:
+                    await self._segmented(client, remote, partial, sidecar, state)
+                    offset = remote.size
+                except _Mismatch as error:
+                    self.note(f"{remote.path}: {error}; continuing as one stream from byte 0.")
+                    log.info("range restart %s as one stream: %s", remote.path, error)
+                    state = PartialState.for_remote(remote, version=1)
+                    _replace(sidecar, _encode(state))
+                    offset, hasher = await self._stream(
+                        client, remote, partial, sidecar, state, 0, hashlib.sha256()
+                    )
+            else:
+                offset = partial.stat().st_size
+                hasher = await asyncio.to_thread(_hash_prefix, partial, offset)
+                offset, hasher = await self._stream(
+                    client, remote, partial, sidecar, state, offset, hasher
                 )
-                offset, state = 0, None
-            if state is None:
-                state = PartialState(
-                    remote.repo,
-                    remote.path,
-                    remote.commit,
-                    remote.etag,
-                    remote.size,
-                    remote.xet_hash,
-                    None,
-                )
-                partial.write_bytes(b"")
-                _replace(sidecar, json.dumps(asdict(state)).encode())
-            # Hash what is on disk, then keep hashing the stream.
-            hasher = await asyncio.to_thread(_hash_prefix, partial, offset)
-            offset, hasher = await self._stream(
-                client, remote, partial, sidecar, state, offset, hasher
-            )
             await asyncio.to_thread(_sync, partial)
+            if hasher is None:
+                # The segments wrote every byte; the file is hashed as a whole. The
+                # progress bar reads 100% meanwhile, so the job log says what it is doing.
+                self.note(f"{remote.path}: checking the sha256.")
+                hasher = await asyncio.to_thread(_hash_prefix, partial, offset)
             digest = hasher.hexdigest()
             if offset != remote.size or digest != remote.etag:
                 remove_partial(partial)
@@ -365,6 +560,124 @@ class RangeDownloader:
             log.info("range done %s sha256 %s ok, %d bytes", remote.path, digest, remote.size)
             return blob
 
+    def _plan(self, remote: Remote, partial: Path, sidecar: Path) -> PartialState:
+        """What this run continues. A sidecar that matches the Hub's file, with the
+        partial it describes, continues as it was: version 2 from each segment's
+        `verified_end`, version 1 from the partial's size. Anything else starts again
+        as version 2, with the partial preallocated and the sidecar written here."""
+        state = _read_state(sidecar)
+        if state is not None and state.matches(remote) and partial.is_file():
+            size = partial.stat().st_size
+            if state.version == 1 and size <= remote.size:
+                return state
+            if state.version == 2 and size == remote.size and _covers(state, remote.size):
+                return state
+        if partial.is_file():
+            log.info("range restart %s: the partial does not match the Hub", remote.path)
+            self.note(
+                f"{remote.path}: the partial file does not match the Hub's file; starting it again."
+            )
+        state = PartialState.for_remote(remote, version=2, segments=_plan_segments(remote.size))
+        _preallocate(partial, remote.size)
+        _replace(sidecar, _encode(state))
+        return state
+
+    async def _segmented(
+        self,
+        client: httpx.AsyncClient,
+        remote: Remote,
+        partial: Path,
+        sidecar: Path,
+        state: PartialState,
+    ) -> None:
+        """Fetch every segment that is not verified yet, all at once. Raises `_Mismatch`
+        when the server does not answer as the plan needs, `Fallback` on any other
+        problem. Cancellation keeps each segment's `verified_end` in the sidecar."""
+        done = sum(segment.verified_end - segment.start for segment in state.segments)
+        todo = [i for i, segment in enumerate(state.segments) if segment.verified_end < segment.end]
+        if not todo:
+            return
+        streams = len(state.segments)
+        self.note(
+            f"{remote.path}: resuming in {streams} ranges from {done} bytes."
+            if done
+            else f"{remote.path}: downloading in {streams} ranges."
+        )
+        journal = _Journal(partial, sidecar, state)
+        try:
+            link = _Link(remote.location)
+            await _join(
+                [
+                    asyncio.create_task(self._segment(client, remote, link, journal, index))
+                    for index in todo
+                ]
+            )
+        finally:
+            journal.close()
+
+    async def _segment(
+        self,
+        client: httpx.AsyncClient,
+        remote: Remote,
+        link: _Link,
+        journal: _Journal,
+        index: int,
+    ) -> None:
+        """One Range stream: from the segment's `verified_end` to its end, with the same
+        retries as a single stream."""
+        state = journal.state
+        segment = state.segments[index]
+        failures = 0
+        while segment.verified_end < segment.end:
+            before = segment.verified_end
+            headers = self._headers(link.url)
+            headers["Range"] = f"bytes={segment.verified_end}-{segment.end - 1}"
+            if state.validator:
+                headers["If-Range"] = f'"{state.validator}"'
+            try:
+                async with client.stream("GET", link.url, headers=headers) as response:
+                    status = response.status_code
+                    log.info(
+                        "range GET %s Range: %s -> %s Content-Range: %s",
+                        redact_url(link.url),
+                        headers["Range"],
+                        status,
+                        response.headers.get("content-range", "-"),
+                    )
+                    if status in (401, 403, 410) and "Authorization" not in headers:
+                        # A signed CDN URL expired (xet-bridge URLs last an hour).
+                        raise _Expired(status)
+                    if status == 200:
+                        raise _Mismatch("the server ignored Range")
+                    if status != 206:
+                        raise Fallback(f"the download server answered {status}")
+                    last = _check_range(response.headers.get("content-range"), segment, remote.size)
+                    validator = _etag(response.headers.get("etag"))
+                    if validator and validator != state.validator:
+                        if state.validator is not None:
+                            raise _Mismatch("the file changed while it was downloading")
+                        state.validator = validator
+                        journal.checkpoint()
+                    async for chunk in response.aiter_bytes():
+                        if segment.verified_end + len(chunk) > last + 1:
+                            raise _Mismatch("the server sent more bytes than its Content-Range")
+                        journal.write(segment.verified_end, chunk)
+                        segment.verified_end += len(chunk)
+                        journal.checkpoint()
+                if segment.verified_end == before:
+                    raise httpx.RemoteProtocolError("the server sent no bytes for the range")
+                failures = 0
+            except (_Expired, httpx.TransportError, httpx.DecodingError) as error:
+                failures += 1
+                reason = self._clean(str(error) or type(error).__name__)
+                log.warning(
+                    "range retry %s at byte %d: %s", remote.path, segment.verified_end, reason
+                )
+                if failures > RETRIES:
+                    raise Fallback(f"{remote.path}: {reason}") from None
+                await asyncio.sleep(min(30.0, RETRY_DELAY_S * 2 ** (failures - 1)))
+                link.url = await self._fresh_location(client, remote, link.url)
+
     async def _stream(
         self,
         client: httpx.AsyncClient,
@@ -375,8 +688,9 @@ class RangeDownloader:
         offset: int,
         hasher: Any,
     ) -> tuple[int, Any]:
-        """Append the rest of the file to the partial; returns the bytes written in all
-        and the hasher (a new one if the server ignored Range and the file restarted)."""
+        """Append the rest of the file to the partial (version 1); returns the bytes
+        written in all and the hasher (a new one if the server ignored Range and the
+        file restarted)."""
         location, failures = remote.location, 0
         first = True
         with partial.open("r+b") as out:
@@ -432,7 +746,7 @@ class RangeDownloader:
                         validator = _etag(response.headers.get("etag"))
                         if validator and validator != state.validator:
                             state.validator = validator
-                            _replace(sidecar, json.dumps(asdict(state)).encode())
+                            _replace(sidecar, _encode(state))
                         async for chunk in response.aiter_bytes():
                             if offset + len(chunk) > remote.size:
                                 raise Fallback(f"the server sent more than {remote.size} bytes")
@@ -461,8 +775,3 @@ class RangeDownloader:
         if not (again.etag == remote.etag and again.size == remote.size):
             raise Fallback(f"{remote.path} changed on the Hub while it was downloading")
         return again.location
-
-
-class _Expired(Exception):
-    def __init__(self, status: int) -> None:
-        super().__init__(f"the download URL answered {status} (expired)")
