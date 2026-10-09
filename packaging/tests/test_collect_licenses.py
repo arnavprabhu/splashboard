@@ -113,11 +113,11 @@ def test_writes_app_then_cpython_then_one_section_per_distribution(
 
     text = out.read_text(encoding="utf-8")
     assert text.startswith(
-        "Splash GUI (Apache-2.0)\n" + "=" * len("Splash GUI (Apache-2.0)") + "\n"
+        "Splashboard (Apache-2.0)\n" + "=" * len("Splashboard (Apache-2.0)") + "\n"
     )
     titles = section_titles(text)
     assert titles == [
-        "Splash GUI (Apache-2.0)",
+        "Splashboard (Apache-2.0)",
         "CPython 3.13 (PSF-2.0)",
         "alpha 1.0 (MIT)",
         "beta 2.0",
@@ -127,7 +127,7 @@ def test_writes_app_then_cpython_then_one_section_per_distribution(
     assert len(titles) == 3 + 2
     assert "alpha license" in text
     assert "--- LICENSE-APACHE ---" in text and "beta mit" in text
-    assert "Part of Splash GUI" in text
+    assert "Part of Splashboard" in text
     assert not list(out.parent.glob("*.partial"))
 
 

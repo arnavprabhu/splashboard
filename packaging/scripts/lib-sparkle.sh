@@ -5,7 +5,7 @@
 #
 # Copies BIN_DIR/Sparkle.framework into APP/Contents/Frameworks with ditto (its Versions/Current symlinks must
 # survive), removes the framework's XPC services, and adds the @executable_path/../Frameworks rpath to the main
-# executable (SwiftPM links it with @loader_path only). The XPC services exist for sandboxed apps; Splash GUI is not
+# executable (SwiftPM links it with @loader_path only). The XPC services exist for sandboxed apps; Splashboard is not
 # sandboxed, and Sparkle's documentation allows removing them ([docs] https://sparkle-project.org/documentation/sandboxing/).
 # Must run before signing: install_name_tool invalidates a signature, and sign.sh then signs the framework's
 # helpers (Autoupdate, Updater.app) inside out.

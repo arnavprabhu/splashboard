@@ -1,5 +1,5 @@
 /**
- * Settings → Data & privacy (docs/ui/05 §3.15, SPEC D27): what Splash GUI keeps, with sizes,
+ * Settings → Data & privacy (docs/ui/05 §3.15, SPEC D27): what Splashboard keeps, with sizes,
  * and the manual clear. Every confirmation states the size it deletes.
  */
 import { useState } from 'preact/hooks';

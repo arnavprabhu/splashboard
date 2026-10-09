@@ -108,10 +108,10 @@ public enum Presentation {
         }
     }
 
-    /// "Splash GUI: Ready" (10-menubar §2.1).
+    /// "Splashboard: Ready" (10-menubar §2.1).
     public static func accessibilityLabel(_ engine: EngineView?, manager: ManagerPhase) -> String {
-        if manager != .running { return "Splash GUI: Offline" }
-        return "Splash GUI: \(chipLabel(engine))"
+        if manager != .running { return "Splashboard: Offline" }
+        return "Splashboard: \(chipLabel(engine))"
     }
 
     /// Sub-state text while starting (00-foundations §5.1).
@@ -127,12 +127,12 @@ public enum Presentation {
     /// The header line (10-menubar §3.1–3.2).
     public static func header(engine: EngineView?, manager: ManagerPhase, liveTps: Double?) -> String {
         switch manager {
-        case .unknown, .down: return "Splash GUI is not running"
-        case .starting: return "Starting Splash GUI…"
-        case .failedToStart: return "Splash GUI failed to start"
+        case .unknown, .down: return "Splashboard is not running"
+        case .starting: return "Starting Splashboard…"
+        case .failedToStart: return "Splashboard failed to start"
         case .running: break
         }
-        guard let engine else { return "Splash GUI is not running" }
+        guard let engine else { return "Splashboard is not running" }
         let name = Format.shortModelName(engine.model) ?? "model"
         switch engine.state {
         case .stopped, .unknown:

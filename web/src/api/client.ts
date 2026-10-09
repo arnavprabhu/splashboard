@@ -159,7 +159,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     res = await fetch(buildUrl(path, query), init);
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === 'AbortError') throw cause;
-    throw new ApiError(0, { message: 'Cannot reach Splash GUI. Is the manager running?', type: 'network_error', code: 'network' }, cause);
+    throw new ApiError(0, { message: 'Cannot reach Splashboard. Is the manager running?', type: 'network_error', code: 'network' }, cause);
   }
   if (!res.ok) {
     const error = await errorFromResponse(res);

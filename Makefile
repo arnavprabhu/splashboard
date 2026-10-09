@@ -1,12 +1,12 @@
-# Splash GUI developer tasks. Everything runs from the source tree (packaging is deferred, D30).
+# Splashboard developer tasks. Everything runs from the source tree (packaging is deferred, D30).
 #
 #   make dev        manager + Vite dev server (FAKE=1 uses the fake engine and a throwaway home)
 #   make manager    run the manager on 127.0.0.1:$(PORT) serving web/dist
 #   make web        build the web admin (web/dist)
 #   make macos      build the menu bar app (swift build)
-#   make bundle     build "macos/build/Splash GUI.app" (ad-hoc signed)
+#   make bundle     build "macos/build/Splashboard.app" (ad-hoc signed)
 #   make runtime    build the bundled Python runtime, build/package/manager/python (PKG-2)
-#   make app        build the self-contained build/package/Splash GUI.app (PKG-4: web, runtime, menu bar app)
+#   make app        build the self-contained build/package/Splashboard.app (PKG-4: web, runtime, menu bar app)
 #   make dmg        build build/package/<Name>-<version>.dmg from that app (PKG-7)
 #   make notarize   TARGET=<app or dmg> ARGS="--keychain-profile NAME": notarize and staple (PKG-8; needs Developer ID)
 #   make test       unit and integration tests: manager, fake engine, packaging scripts, web (vitest + Playwright), macOS

@@ -6,9 +6,12 @@ A macOS app for serving, monitoring and chatting with models on the [Splash](htt
 - **One active model, quick switching.** Install supported Qwen3.8-27B / Qwen3.6-35B-A3B builds (MLX 4-bit group 64, or GGUF), load one, switch from the menu bar or the admin.
 - **Everything in the GUI.** Welcome wizard (Homebrew, Splash, storage, presets, first model), live status and usage history, model downloads with compatibility checks, settings for every `splash serve` option with Splash's own validation, chat with tools and MCP, a playground, tokenizer, judgments and benchmarks, session-only agent launchers (`splash launch claude`) and desktop-app integrations.
 
-> Repository: <https://github.com/arnavprabhu/splash-gui> (private for now) · [issues](https://github.com/arnavprabhu/splash-gui/issues).
->
-> Status: v1 is built and run **from the source tree**. Packaging (signed app bundle, DMG, Sparkle, Homebrew cask) is on the [roadmap](docs/roadmap.md) (D30).
+> Repository: <https://github.com/arnavprabhu/splash-gui> · [issues](https://github.com/arnavprabhu/splash-gui/issues) · [releases](https://github.com/arnavprabhu/splash-gui/releases).
+
+## Install
+Download `Splashboard-<version>.dmg` from the [latest release](https://github.com/arnavprabhu/splash-gui/releases/latest) and drag Splashboard to Applications. Updates arrive through **Check for Updates…** in the menu.
+
+Splashboard is signed ad hoc and **not notarized**, so macOS blocks the first open. Open System Settings → Privacy & Security and click **Open Anyway** next to "Splashboard" (or run `xattr -dr com.apple.quarantine /Applications/Splashboard.app`). You only do this once.
 
 ## Requirements
 - An Apple-silicon Mac with an **M3 or newer** and **macOS 26.4+** (Splash's own requirements).
@@ -25,8 +28,8 @@ The first visit opens the welcome wizard. Data lives in `~/.splash` (models, cac
 
 Menu bar app:
 ```sh
-make bundle       # builds "macos/build/Splash GUI.app" (ad-hoc signed)
-open "macos/build/Splash GUI.app"
+make bundle       # builds "macos/build/Splashboard.app" (ad-hoc signed)
+open "macos/build/Splashboard.app"
 ```
 The app starts the manager from this checkout with `uv run --project manager splash-gui-manager` (the repository path is configurable; see `macos/README.md`).
 

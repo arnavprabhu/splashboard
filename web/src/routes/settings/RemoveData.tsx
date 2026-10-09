@@ -1,5 +1,5 @@
 /**
- * Settings → About → Remove Splash GUI data… (SPEC §19, D72; docs/ui/05; PKG-12).
+ * Settings → About → Remove Splashboard data… (SPEC §19, D72; docs/ui/05; PKG-12).
  *
  * The sheet loads `POST /uninstall/plan`, lists the steps and the data folder's size, and asks
  * about models and cache separately (both unchecked; either one needs a typed DELETE). Remove calls

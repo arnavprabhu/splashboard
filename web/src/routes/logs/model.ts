@@ -4,9 +4,10 @@
  * buffer (L2), level / Requests / search filters (L3, L5) and backfill merging.
  *
  * Session dividers are pattern-matched from text until `LogLine.kind` exists (docs/ui/README
- * §3.1 gap 4): the supervisor writes `=== Splash GUI: engine session started · <model> ·
- * <command>` and `=== Splash GUI: engine session ended · <reason> · exit <code>`
- * (manager/splash_gui/logging_setup.py SESSION_START / SESSION_END).
+ * §3.1 gap 4): the supervisor writes `=== Splashboard: engine session started · <model> ·
+ * <command>` and `=== Splashboard: engine session ended · <reason> · exit <code>`
+ * (manager/splash_gui/logging_setup.py SESSION_START / SESSION_END). Logs written before the D62
+ * rename say `Splash GUI:` and still match.
  */
 
 import type { LogLine } from '../../api/models';
@@ -49,8 +50,8 @@ export interface Row {
 // eslint-disable-next-line no-control-regex
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b[@-_]/g;
 const CLOCK = /^(\d\d:\d\d:\d\d) /;
-const START = /^=+ Splash GUI: engine session started(?: · (.*))?$/;
-const STOP = /^=+ Splash GUI: engine session ended(?: · (.*))?$/;
+const START = /^=+ (?:Splashboard|Splash GUI): engine session started(?: · (.*))?$/;
+const STOP = /^=+ (?:Splashboard|Splash GUI): engine session ended(?: · (.*))?$/;
 /** docs/ui/06 §3, first match wins, applied to engine lines only (L9). */
 const ENGINE_ERROR = /engine_failed|Traceback|fatal|metal_failure|crash trace/i;
 const ENGINE_REQ = /^(Done|Cancelled) · /;

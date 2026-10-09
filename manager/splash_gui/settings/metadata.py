@@ -138,7 +138,7 @@ FIELDS: tuple[FieldMeta, ...] = (
     FieldMeta(
         "server.allowed_hosts",
         "Allowed hosts",
-        "Extra Host names to accept, such as mymac.local. Enforced by Splash GUI.",
+        "Extra Host names to accept, such as mymac.local. Enforced by Splashboard.",
         "server_network",
         "tags",
         flag="--allowed-host",
@@ -207,7 +207,7 @@ FIELDS: tuple[FieldMeta, ...] = (
     FieldMeta(
         "engine.extra_flags",
         "Other engine options",
-        "Options this version of Splash GUI doesn't know yet, passed to splash serve as written.",
+        "Options this version of Splashboard doesn't know yet, passed to splash serve as written.",
         "advanced",
         "flags",
         applies="restart",
@@ -529,7 +529,7 @@ FIELDS: tuple[FieldMeta, ...] = (
     FieldMeta(
         "lifecycle.launch_at_login",
         "Launch at login",
-        "Start Splash GUI when you log in.",
+        "Start Splashboard when you log in.",
         "lifecycle",
         "toggle",
     ),
@@ -550,7 +550,7 @@ FIELDS: tuple[FieldMeta, ...] = (
     FieldMeta(
         "lifecycle.idle_unload",
         "Idle unload",
-        "Splash GUI stops the engine process after Idle minutes with no API requests, "
+        "Splashboard stops the engine process after Idle minutes with no API requests, "
         "freeing all its memory; a later request loads the model again when auto-load "
         "is on. Memory & context → Release weights when idle is the other timer: Splash "
         "frees only the weights and keeps the process.",
@@ -560,7 +560,7 @@ FIELDS: tuple[FieldMeta, ...] = (
     FieldMeta(
         "lifecycle.idle_unload_minutes",
         "Idle minutes",
-        "Minutes without requests before Splash GUI stops the engine process.",
+        "Minutes without requests before Splashboard stops the engine process.",
         "lifecycle",
         "number",
         min=5,
@@ -612,7 +612,7 @@ FIELDS: tuple[FieldMeta, ...] = (
     FieldMeta(
         "notifications.update_available",
         "Update available",
-        "Notify when a Splash or Splash GUI update is available.",
+        "Notify when a Splash or Splashboard update is available.",
         "notifications",
         "toggle",
     ),

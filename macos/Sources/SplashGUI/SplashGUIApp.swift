@@ -2,7 +2,7 @@ import AppKit
 import SplashGUIKit
 import SwiftUI
 
-/// Splash GUI menu bar app (SPEC §13, docs/ui/10-menubar.md).
+/// Splashboard menu bar app (SPEC §13, docs/ui/10-menubar.md).
 @main
 struct SplashGUIApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate

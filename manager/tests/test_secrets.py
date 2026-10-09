@@ -71,7 +71,7 @@ def test_file_backend_is_private(paths: Paths) -> None:
     backend = FileBackend(paths.run_dir / "secrets.json")
     backend.set(SecretName.HF_TOKEN, "hf_token_value")
     assert mode(backend.path) == 0o600
-    assert json.loads(backend.path.read_text()) == {"ai.splashgui.hf": "hf_token_value"}
+    assert json.loads(backend.path.read_text()) == {SecretName.HF_TOKEN.value: "hf_token_value"}
     assert backend.get(SecretName.HF_TOKEN) == "hf_token_value"
     backend.delete(SecretName.HF_TOKEN)
     assert backend.get(SecretName.HF_TOKEN) is None
@@ -116,10 +116,11 @@ def test_keychain_backend_never_puts_secrets_on_argv(fake_security: tuple[Path, 
     argv_lines = [line for line in lines if line.startswith("ARGV")]
     assert all("sk-splash-secret123" not in line for line in argv_lines)
     assert any(
-        line.startswith('STDIN add-generic-password -U -s "ai.splashgui.apikey"') for line in lines
+        line.startswith(f'STDIN add-generic-password -U -s "{SecretName.API_KEY.value}"')
+        for line in lines
     )
     assert any(
-        "find-generic-password -s ai.splashgui.apikey -a splash-gui -w" in line
+        "find-generic-password -s io.github.arnavprabhu.splashboard.apikey -a splash-gui -w" in line
         for line in argv_lines
     )
 

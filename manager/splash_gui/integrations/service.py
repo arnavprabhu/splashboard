@@ -194,7 +194,7 @@ class IntegrationsService:
         self.state.alerts.raise_alert(
             "unclean_integration_shutdown",
             f"{labels} still connected after an unclean shutdown",
-            "Splash GUI stopped without restoring the app's configuration. Reconnect, or "
+            "Splashboard stopped without restoring the app's configuration. Reconnect, or "
             "restore the original configuration now.",
             source="integrations",
             actions=[
@@ -668,7 +668,7 @@ class IntegrationsService:
             backups = self.state.paths.integrations_backups / name
             raise ApiError(
                 409,
-                "This app's configuration already points at Splash GUI but there is no "
+                "This app's configuration already points at Splashboard but there is no "
                 "restore record (state.json was lost or unreadable). Restore it from "
                 f"{backups} or remove the Splash keys, then connect.",
                 "foreign_connection_state",
@@ -863,7 +863,7 @@ class IntegrationsService:
 
             return ProxyError(
                 503,
-                "Splash GUI: no model loaded",
+                "Splashboard: no model loaded",
                 "engine_unavailable",
                 headers={"Retry-After": "5"},
             ).response(anthropic=True)

@@ -9,23 +9,23 @@ struct ManagerAgentTests {
     }
 
     @Test func fallsBackWithoutTheKey() {
-        #expect(ManagerAgent.resolveLabel(info: nil) == "ai.splashgui.manager")
-        #expect(ManagerAgent.resolveLabel(info: ["CFBundleName": "Splash GUI"]) == "ai.splashgui.manager")
+        #expect(ManagerAgent.resolveLabel(info: nil) == "io.github.arnavprabhu.splashboard.manager")
+        #expect(ManagerAgent.resolveLabel(info: ["CFBundleName": "Splashboard"]) == "io.github.arnavprabhu.splashboard.manager")
     }
 
     @Test func fallsBackOnAnEmptyOrWrongTypedValue() {
-        #expect(ManagerAgent.resolveLabel(info: [ManagerAgent.labelInfoKey: ""]) == "ai.splashgui.manager")
-        #expect(ManagerAgent.resolveLabel(info: [ManagerAgent.labelInfoKey: 42]) == "ai.splashgui.manager")
+        #expect(ManagerAgent.resolveLabel(info: [ManagerAgent.labelInfoKey: ""]) == "io.github.arnavprabhu.splashboard.manager")
+        #expect(ManagerAgent.resolveLabel(info: [ManagerAgent.labelInfoKey: 42]) == "io.github.arnavprabhu.splashboard.manager")
     }
 
     @Test func plistNameIsTheLabelWithPlistSuffix() {
         #expect(ManagerAgent.plistName(forLabel: "ai.splashgui.app.verify.manager") == "ai.splashgui.app.verify.manager.plist")
-        #expect(ManagerAgent.plistName(forLabel: ManagerAgent.fallbackLabel) == "ai.splashgui.manager.plist")
+        #expect(ManagerAgent.plistName(forLabel: ManagerAgent.fallbackLabel) == "io.github.arnavprabhu.splashboard.manager.plist")
     }
 
     @Test func staticLabelMatchesTheTestBundle() {
         // `swift test` runs from the xctest bundle, which has no SplashGUIAgentLabel key.
         #expect(ManagerAgent.label == ManagerAgent.fallbackLabel)
-        #expect(ManagerAgent.plistName == "ai.splashgui.manager.plist")
+        #expect(ManagerAgent.plistName == "io.github.arnavprabhu.splashboard.manager.plist")
     }
 }

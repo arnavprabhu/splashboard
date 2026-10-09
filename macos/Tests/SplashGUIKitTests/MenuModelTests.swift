@@ -6,11 +6,11 @@ import Testing
 struct MenuModelTests {
     static let tail = [
         "---", "Open Admin Panel ⌘O", "Chat ⌘K", "Integrations ▸", "---",
-        "Preferences… ⌘,", "Check for Updates…", "About Splash GUI", "Quit Splash GUI ⌘Q",
+        "Preferences… ⌘,", "Check for Updates…", "About Splashboard", "Quit Splashboard ⌘Q",
     ]
     static let tailDisabled = [
         "---", "[x] Open Admin Panel ⌘O", "[x] Chat ⌘K", "[x] Integrations ▸", "---",
-        "[x] Preferences… ⌘,", "Check for Updates…", "About Splash GUI", "Quit Splash GUI ⌘Q",
+        "[x] Preferences… ⌘,", "Check for Updates…", "About Splashboard", "Quit Splashboard ⌘Q",
     ]
     static let models = [
         InstalledModel(id: "mlx-community/Qwen3.8-27B-4bit", format: "mlx", sizeBytes: 22_870_000_000),
@@ -30,18 +30,18 @@ struct MenuModelTests {
     }
 
     @Test func managerDown() {
-        #expect(snap(MenuInput(manager: .down)) == ["[x] Splash GUI is not running", "Start Splash GUI"] + Self.tailDisabled)
+        #expect(snap(MenuInput(manager: .down)) == ["[x] Splashboard is not running", "Start Splashboard"] + Self.tailDisabled)
         let prefs = MenuModel.build(MenuInput(manager: .down)).compactMap { entry -> MenuItem? in
             if case .button(let b) = entry, b.title == "Preferences…" { return b }
             return nil
         }.first
-        #expect(prefs?.help == "Start Splash GUI first")
+        #expect(prefs?.help == "Start Splashboard first")
     }
 
     @Test func managerStartingAndFailed() {
-        #expect(snap(MenuInput(manager: .starting)) == ["[x] Starting Splash GUI…", "[x] Starting…"] + Self.tailDisabled)
+        #expect(snap(MenuInput(manager: .starting)) == ["[x] Starting Splashboard…", "[x] Starting…"] + Self.tailDisabled)
         #expect(snap(MenuInput(manager: .failedToStart("x")))
-            == ["[x] Splash GUI failed to start", "Show Log", "Try Again"] + Self.tailDisabled)
+            == ["[x] Splashboard failed to start", "Show Log", "Try Again"] + Self.tailDisabled)
     }
 
     @Test func stoppedShowsStartServerSubmenuEvenWithoutSwitcher() {
@@ -195,7 +195,7 @@ struct MenuModelTests {
             var s = AppSettings()
             s.stopOnQuit = stop
             return MenuModel.build(MenuInput(manager: .down, settings: s)).compactMap { e -> MenuItem? in
-                if case .button(let b) = e, b.title == "Quit Splash GUI" { return b }
+                if case .button(let b) = e, b.title == "Quit Splashboard" { return b }
                 return nil
             }.first
         }

@@ -161,7 +161,7 @@ test.describe('integrations deep link', () => {
     await page.route('**/v1/models', (r) => r.fulfill({ json: V1_MODELS }));
     await page.goto('/admin/integrations?connect=claude-desktop');
     const sheet = page.getByRole('dialog', { name: 'Connect Claude Desktop.' });
-    await expect(sheet).toContainText('Claude Desktop will restart. Your previous configuration is backed up and restored when you disconnect or quit Splash GUI.');
+    await expect(sheet).toContainText('Claude Desktop will restart. Your previous configuration is backed up and restored when you disconnect or quit Splashboard.');
     await expect(sheet).toContainText('Unsaved work in Claude Desktop will be lost.');
     await sheet.getByRole('button', { name: /Quit, connect and reopen/ }).click();
     await expect.poll(() => calls).toContain('POST /integrations/claude-desktop/connect');
@@ -298,7 +298,7 @@ test.describe('chat', () => {
         return r.fulfill({
           status: 503,
           headers: { 'Retry-After': '10' },
-          json: { error: { message: 'Splash GUI is serving x; switching models while requests are in flight is disabled', type: 'overloaded_error', code: 'model_switch_busy' } },
+          json: { error: { message: 'Splashboard is serving x; switching models while requests are in flight is disabled', type: 'overloaded_error', code: 'model_switch_busy' } },
         });
       return r.fulfill({ headers: { 'content-type': 'text/event-stream' }, body: `data: ${JSON.stringify({ choices: [{ delta: { content: 'ok' }, index: 0, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n` });
     });

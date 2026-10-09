@@ -32,7 +32,7 @@ final class WelcomeWindowController: NSObject, NSWindowDelegate, WKNavigationDel
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 920, height: 680),
                          styleMask: [.titled, .closable, .miniaturizable, .resizable],
                          backing: .buffered, defer: false)
-        w.title = "Welcome to Splash GUI"
+        w.title = "Welcome to Splashboard"
         w.minSize = NSSize(width: 720, height: 560)
         w.isReleasedWhenClosed = false
         w.center()
@@ -149,8 +149,8 @@ final class WelcomeWindowController: NSObject, NSWindowDelegate, WKNavigationDel
         panel.allowsMultipleSelection = false
         panel.prompt = "Choose"
         switch target {
-        case "models": panel.message = "Choose where Splash GUI keeps models."
-        case "cache": panel.message = "Choose where Splash GUI keeps the SSD cache."
+        case "models": panel.message = "Choose where Splashboard keeps models."
+        case "cache": panel.message = "Choose where Splashboard keeps the SSD cache."
         default: panel.message = "Choose a folder."
         }
         if let current, !current.isEmpty {

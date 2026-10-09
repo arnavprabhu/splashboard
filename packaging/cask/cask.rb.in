@@ -16,6 +16,12 @@ cask "@TOKEN@" do
 
   app "@APP_NAME@.app"
 
+  # D102: ad hoc signed, not notarized. Q48 decides whether postflight clears the quarantine instead.
+  caveats <<~EOS
+    @APP_NAME@ is not notarized, so macOS blocks its first open. Open System Settings,
+    then Privacy & Security, and click Open Anyway next to "@APP_NAME@".
+  EOS
+
   uninstall launchctl:  "@AGENT_LABEL@",
             quit:       "@BUNDLE_ID@",
             login_item: "@APP_NAME@"

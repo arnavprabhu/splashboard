@@ -52,7 +52,7 @@ def instance_lock(paths: Paths) -> Iterator[None]:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             pid = paths.manager_pid.read_text().strip() if paths.manager_pid.exists() else "?"
-            raise StartupError(f"Splash GUI manager is already running (PID {pid})") from None
+            raise StartupError(f"Splashboard manager is already running (PID {pid})") from None
         write_atomic(paths.manager_pid, f"{os.getpid()}\n".encode())
         try:
             yield
@@ -290,7 +290,7 @@ class ManagerRunner:
                     return
                 self._server, self._target = server, None
             self.state.bound = (self.host, self.port)
-            log.info("Splash GUI manager %s listening on %s:%s", __version__, self.host, self.port)
+            log.info("Splashboard manager %s listening on %s:%s", __version__, self.host, self.port)
             await server.serve()
             target = self._finish()
             if target is None:
@@ -311,7 +311,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--log-level", default="info", choices=("debug", "info", "warning", "error")
     )
     parser.add_argument("--console", action="store_true", help="also log to stderr")
-    parser.add_argument("--version", action="version", version=f"Splash GUI {__version__}")
+    parser.add_argument("--version", action="version", version=f"Splashboard {__version__}")
     return parser.parse_args(argv)
 
 

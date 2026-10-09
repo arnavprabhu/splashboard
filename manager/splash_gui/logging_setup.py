@@ -101,8 +101,8 @@ def engine_output_logger() -> logging.LoggerAdapter[logging.Logger]:
     return logging.LoggerAdapter(logging.getLogger(ENGINE_LOGGER), {"stream": "stdout"})
 
 
-SESSION_START = "=== Splash GUI: engine session started"
-SESSION_END = "=== Splash GUI: engine session ended"
+SESSION_START = "=== Splashboard: engine session started"
+SESSION_END = "=== Splashboard: engine session ended"
 
 
 class EngineLogWriter:

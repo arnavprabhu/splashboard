@@ -55,7 +55,7 @@ class SettingsError(RuntimeError):
 
 
 class SettingsReadOnlyError(SettingsError):
-    """settings.json was written by a newer Splash GUI; saving would lose its fields."""
+    """settings.json was written by a newer Splashboard; saving would lose its fields."""
 
 
 def normalize(data: dict[str, Any]) -> dict[str, Any]:
@@ -202,7 +202,7 @@ class SettingsStore:
             if newer:
                 self.read_only = True
                 self.load_warnings.append(
-                    f"settings.json version {raw.get('version')} is newer than this Splash GUI "
+                    f"settings.json version {raw.get('version')} is newer than this Splashboard "
                     f"({SETTINGS_VERSION}); settings are read-only"
                 )
             doc, dropped = repair(data)

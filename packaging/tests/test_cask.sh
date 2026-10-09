@@ -65,14 +65,14 @@ check "the token is the app name in lower case with hyphens" grep -q '^cask "fix
 check "the version comes from the app" grep -q '^  version "2.3.4"' <<<"$CASK"
 check "the sha256 is the DMG's" grep -q "^  sha256 \"$(shasum -a 256 "$DMG" | cut -d' ' -f1)\"" <<<"$CASK"
 check "the URL is the releases repo path with #{version}" \
-  grep -q 'url "https://github.com/arnavprabhu/splash-gui-releases/releases/download/v#{version}/Fixture-Board-#{version}.dmg"' <<<"$CASK"
+  grep -q 'url "https://github.com/arnavprabhu/splash-gui/releases/download/v#{version}/Fixture-Board-#{version}.dmg"' <<<"$CASK"
 check "uninstall names the agent label, the bundle id and the login item" \
   bash -c 'grep -q "launchctl:  \"io.example.fixtureboard.manager\"" <<<"$1" && grep -q "quit:       \"io.example.fixtureboard\"" <<<"$1" && grep -q "login_item: \"Fixture Board\"" <<<"$1"' _ "$CASK"
 check "depends on the Splash formula" grep -q 'depends_on formula: "incoai/tap/splash"' <<<"$CASK"
 check "zap keeps models and cache (D72)" bash -c '! grep -Eq "\"~/.splash/(models|cache)" <<<"$1"' _ "$CASK"
 check "zap removes settings, chats and the usage database" \
   bash -c 'grep -q "~/.splash/settings.json" <<<"$1" && grep -q "~/.splash/chats" <<<"$1" && grep -q "~/.splash/usage.db" <<<"$1"' _ "$CASK"
-check "zap deletes the Keychain services from SecretName" grep -q '"ai.splashgui.apikey"' <<<"$CASK"
+check "zap deletes the Keychain services from SecretName" grep -q '"io.github.arnavprabhu.splashboard.apikey"' <<<"$CASK"
 check "no placeholder is left" bash -c '! grep -q "@[A-Z_0-9]*@" <<<"$1"' _ "$CASK"
 check "the cask parses as Ruby" ruby -c "$TMP/cask.rb"
 

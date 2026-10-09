@@ -55,7 +55,7 @@ export function loginRedirect(expired = false, base = BASE): void {
 function BareHeader() {
   return (
     <header class="navband">
-      <span class="navband-mark">Splash GUI</span>
+      <span class="navband-mark">Splashboard</span>
       <span style={{ flex: '1 1 auto' }} />
       <ThemeToggle />
     </header>

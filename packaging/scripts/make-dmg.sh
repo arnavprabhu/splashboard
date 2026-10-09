@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds the distributable DMG from a signed app (docs/plans/packaging.md, PKG-7).
 #
-#   packaging/scripts/make-dmg.sh                                  # build/package/Splash GUI.app → build/package/<Name>-<version>.dmg
+#   packaging/scripts/make-dmg.sh                                  # build/package/Splashboard.app → build/package/<Name>-<version>.dmg
 #   packaging/scripts/make-dmg.sh --app PATH --out DIR             # another app, another output folder
 #   packaging/scripts/make-dmg.sh --identity "Apple Development: <name> (<id>)"  # also sign the DMG
 #   make dmg                                                       # the default build, through the Makefile
@@ -18,7 +18,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-APP="$REPO/build/package/Splash GUI.app"
+APP="$REPO/build/package/Splashboard.app"
 OUT_DIR="$REPO/build/package"
 IDENTITY=""
 

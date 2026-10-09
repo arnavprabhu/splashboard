@@ -7,7 +7,7 @@ struct MigrationTests {
     static let devPrint = """
     gui/501/ai.splashgui.manager = {
     \tactive count = 1
-    \tpath = /Applications/Splash GUI.app/Contents/Library/LaunchAgents/ai.splashgui.manager.plist
+    \tpath = /Applications/Splashboard.app/Contents/Library/LaunchAgents/ai.splashgui.manager.plist
     \tprogram = /opt/homebrew/bin/uv
     \targuments = {
     \t\t/opt/homebrew/bin/uv

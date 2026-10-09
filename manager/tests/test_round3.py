@@ -181,7 +181,7 @@ def test_keychain_backend_names_and_encoding(tmp_path: Path) -> None:
     store = SecretStore(KeychainBackend(security=str(fake)))
     store.set_text(secret_name("web", "headers", "Authorization"), HEADER)
     written = log.read_text()
-    assert "ai.splashgui.mcp." in written and "b64:" in written
+    assert "io.github.arnavprabhu.splashboard.mcp." in written and "b64:" in written
     assert "spaces" not in written and '"with"' not in written
 
 

@@ -1,5 +1,5 @@
 """Where the manager runs from: a source checkout, or the bundled runtime inside
-`Splash GUI.app` (SPEC §19, docs/plans/packaging.md PKG-3).
+`Splashboard.app` (SPEC §19, docs/plans/packaging.md PKG-3).
 
 The packaged app keeps its Python at `<App>/Contents/Resources/manager/python/bin/python3`
 and its web admin at `<App>/Contents/Resources/web`. Anything else (a checkout, `uv run`,

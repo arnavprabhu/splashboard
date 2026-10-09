@@ -19,7 +19,7 @@ struct BundledLicensesTests {
         let folder = resources.appendingPathComponent("licenses", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let file = folder.appendingPathComponent("THIRD_PARTY.txt")
-        try "Splash GUI (Apache-2.0)\n".write(to: file, atomically: true, encoding: .utf8)
+        try "Splashboard (Apache-2.0)\n".write(to: file, atomically: true, encoding: .utf8)
 
         let found = try #require(BundledLicenses.thirdPartyFile(in: resources))
         #expect(found.path == file.path)

@@ -20,7 +20,7 @@ final class AboutWindowController: NSObject, NSWindowDelegate {
             let view = AboutView(model: model, rerunWizard: { [weak self] in self?.host?.showWelcome() })
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 560),
                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
-            w.title = "About Splash GUI"
+            w.title = "About Splashboard"
             w.contentView = NSHostingView(rootView: view)
             w.isReleasedWhenClosed = false
             w.center()
@@ -73,7 +73,7 @@ struct AboutView: View {
             .padding(.top, 20)
             HStack(spacing: 12) {
                 SquareButton("Re-run Welcome Wizard", action: rerunWizard).disabled(!running)
-                SquareButton("Remove Splash GUI Data…") { Task { await model.removeData() } }.disabled(!running)
+                SquareButton("Remove Splashboard Data…") { Task { await model.removeData() } }.disabled(!running)
                 SquareButton("Licenses", action: showLicenses)
             }
             .padding(.top, 10)

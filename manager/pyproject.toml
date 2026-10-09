@@ -1,11 +1,11 @@
 [project]
 name = "splash-gui"
-version = "0.1.0"
-description = "Splash GUI manager: supervises the Splash engine, proxies its API and serves the web admin."
+version = "0.2.0"
+description = "Splashboard manager: supervises the Splash engine, proxies its API and serves the web admin."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12"
-authors = [{ name = "Splash GUI contributors" }]
+authors = [{ name = "Splashboard contributors" }]
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",

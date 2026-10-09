@@ -404,7 +404,7 @@ class ProxyPipeline:
                 raise self._not_found(name)
             else:
                 raise unavailable(
-                    "No model is loaded. Load one in Splash GUI or set a default model "
+                    "No model is loaded. Load one in Splashboard or set a default model "
                     "(routing.default_model with routing.unknown_model_fallback)."
                 )
         # An installed model that is not active (or the engine is stopped).
@@ -457,7 +457,7 @@ class ProxyPipeline:
             if not wait:
                 raise ProxyError(
                     503,
-                    f"Splash GUI is serving {sup.model}; switching models while requests are "
+                    f"Splashboard is serving {sup.model}; switching models while requests are "
                     "in flight is disabled",
                     "model_switch_busy",
                     headers={"Retry-After": "10"},
@@ -467,7 +467,7 @@ class ProxyPipeline:
             if not ok:
                 raise ProxyError(
                     503,
-                    f"Splash GUI is still serving {sup.model}",
+                    f"Splashboard is still serving {sup.model}",
                     "model_switch_busy",
                     headers={"Retry-After": "10"},
                 )
@@ -484,7 +484,7 @@ class ProxyPipeline:
                 # An auto-load never stops a download in progress (Q24); retry later.
                 raise ProxyError(
                     503,
-                    f"Splash GUI is downloading files for {sup.model}; retry when it is ready",
+                    f"Splashboard is downloading files for {sup.model}; retry when it is ready",
                     "install_in_progress",
                     headers={"Retry-After": "30"},
                 ) from None
@@ -499,7 +499,7 @@ class ProxyPipeline:
             if sup.active_model() not in (None, model):
                 raise ProxyError(
                     503,
-                    f"Splash GUI switched to {sup.active_model()} while loading {model}; retry",
+                    f"Splashboard switched to {sup.active_model()} while loading {model}; retry",
                     "model_switch_busy",
                     headers={"Retry-After": "10"},
                 )
@@ -544,7 +544,7 @@ class ProxyPipeline:
             # model (review R32): never forward to the wrong model.
             return ProxyError(
                 503,
-                f"Splash GUI switched to {self.sup.active_model() or 'another model'} while "
+                f"Splashboard switched to {self.sup.active_model() or 'another model'} while "
                 f"this request waited for {route.model}; retry",
                 "model_switch_busy",
                 headers={"Retry-After": "10"},
@@ -997,10 +997,10 @@ class ProxyPipeline:
 
         sup = self.sup
         lines = [
-            "# HELP splash_gui_up Splash GUI manager is running.",
+            "# HELP splash_gui_up Splashboard manager is running.",
             "# TYPE splash_gui_up gauge",
             "splash_gui_up 1",
-            "# HELP splash_gui_info Splash GUI and engine versions.",
+            "# HELP splash_gui_info Splashboard and engine versions.",
             "# TYPE splash_gui_info gauge",
         ]
         engine = self.state.engine_cached()

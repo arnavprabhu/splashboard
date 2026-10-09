@@ -1,5 +1,5 @@
 // swift-tools-version: 6.2
-// Splash GUI menu bar app (SPEC §13, docs/ui/10-menubar.md).
+// Splashboard menu bar app (SPEC §13, docs/ui/10-menubar.md).
 // SwiftPM package + scripts/bundle.sh instead of an .xcodeproj (docs/spec-drift.md #1).
 import PackageDescription
 

@@ -49,7 +49,7 @@ def _start_session(state: ManagerState, response: Response) -> AuthState:
         cookie = state.auth.issue_session()
     except ValueError:
         raise ApiError(
-            503, "There is no API key to sign in with; restart Splash GUI", "api_key_missing"
+            503, "There is no API key to sign in with; restart Splashboard", "api_key_missing"
         ) from None
     response.set_cookie(
         SESSION_COOKIE,

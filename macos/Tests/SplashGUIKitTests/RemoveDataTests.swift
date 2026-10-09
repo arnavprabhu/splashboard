@@ -3,7 +3,7 @@ import Testing
 @testable import SplashGUIKit
 
 @MainActor
-@Suite("Remove Splash GUI Data… (PKG-12)")
+@Suite("Remove Splashboard Data… (PKG-12)")
 struct RemoveDataTests {
     static let plan: JSONValue = [
         "home": "/Users/u/.splash", "data_bytes": 2048, "models_bytes": 61_200_000_000, "cache_bytes": 9_600_000_000,

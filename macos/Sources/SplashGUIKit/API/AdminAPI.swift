@@ -30,8 +30,8 @@ public enum APIError: Error, Sendable, Equatable, CustomStringConvertible {
     public var description: String {
         switch self {
         case .http(let status, let code, let message, _): return "\(message) (\(status) \(code))"
-        case .unreachable(let why): return "Splash GUI is not reachable: \(why)"
-        case .invalidResponse: return "Unexpected response from Splash GUI"
+        case .unreachable(let why): return "Splashboard is not reachable: \(why)"
+        case .invalidResponse: return "Unexpected response from Splashboard"
         }
     }
 
@@ -55,7 +55,7 @@ public enum APIError: Error, Sendable, Equatable, CustomStringConvertible {
 
 /// What answers `GET /health` on the manager's port.
 public enum HealthProbe: Sendable, Equatable {
-    /// A Splash GUI manager (`{"status":"ok","service":"splash-gui-manager"}`).
+    /// A Splashboard manager (`{"status":"ok","service":"splash-gui-manager"}`).
     case manager
     /// Something else is listening there (oMLX, another app): never talk to it as the manager.
     case foreign

@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 
-/// One menu bar app per user (QA row 24): a second copy of `Splash GUI.app`, e.g. another build
+/// One menu bar app per user (QA row 24): a second copy of `Splashboard.app`, e.g. another build
 /// path, activates the running one and exits instead of adding a second status item.
 public enum SingleInstance {
     public struct Candidate: Sendable, Equatable {

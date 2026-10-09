@@ -296,7 +296,7 @@ export function diskCheck(bytes: number | null | undefined, freeBytes: number | 
 
 // ---------- titles ----------
 
-/** `42% · Models` while a download runs (docs/ui/01 §10); the shell appends " — Splash GUI". */
+/** `42% · Models` while a download runs (docs/ui/01 §10); the shell appends " — Splashboard". */
 export function pageTitle(page: string, progress: number | null): string {
   return progress === null ? page : `${percent(progress)} · ${page}`;
 }

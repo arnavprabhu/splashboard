@@ -107,7 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarHost {
             }
             return .terminateLater
         }
-        // Quit from outside the menu (e.g. `osascript -e 'quit app "Splash GUI"'`): same flow as ⌘Q.
+        // Quit from outside the menu (e.g. `osascript -e 'quit app "Splashboard"'`): same flow as ⌘Q.
         Task {
             let outcome = await model.quitCoordinator.quit(
                 stopServer: model.settings.stopOnQuit, requestsInFlight: model.engine?.requestsInFlight ?? 0)
@@ -162,12 +162,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarHost {
         alert.runModal()
     }
 
-    /// The Remove Splash GUI Data… sheet (SPEC §19, docs/ui/10 §8; PKG-12): the steps, two unticked
+    /// The Remove Splashboard Data… sheet (SPEC §19, docs/ui/10 §8; PKG-12): the steps, two unticked
     /// boxes with sizes, and a typed DELETE when either is ticked. Nil when the user cancels.
     func chooseRemoval(_ plan: UninstallSummary) async -> RemovalChoice? {
         NSApp.activate()
         let alert = NSAlert()
-        alert.messageText = "Remove Splash GUI data?"
+        alert.messageText = "Remove Splashboard data?"
         var info = plan.steps.map { "· \($0)" }.joined(separator: "\n")
         info += "\n\nData folder \(plan.home): \(Format.bytes(plan.dataBytes))."
         for path in plan.kept { info += "\nKept: \(path) is outside the data folder." }

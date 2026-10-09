@@ -40,7 +40,7 @@ RC_FILES = (".zprofile", ".zshrc", ".bash_profile", ".bashrc")
 RC_MODE = 0o644
 SHIM_MODE = 0o700
 MOVED_OR_DELETED = (
-    "Splash GUI.app was moved or deleted. Reinstall it, or run the engine directly with: "
+    "Splashboard.app was moved or deleted. Reinstall it, or run the engine directly with: "
     "command splash"
 )
 NO_ENGINE = "splash: Splash is not installed. Run: brew install incoai/tap/splash"
@@ -49,7 +49,7 @@ NO_ENGINE = "splash: Splash is not installed. Run: brew install incoai/tap/splas
 def interpreter_command(project: Path | None = None) -> list[str]:
     """The argv that runs this package's `splash` entry point.
 
-    From `Splash GUI.app` the shim runs the bundled interpreter in isolated mode, so
+    From `Splashboard.app` the shim runs the bundled interpreter in isolated mode, so
     nothing is read from the environment and no bytecode is written into the signed
     bundle (PKG-3). From a source checkout it is `uv run --project <repo>/manager`,
     the same form the menu bar app uses (D30). `_ensure_shim` rewrites the shim on
@@ -76,7 +76,7 @@ def render(launch: list[str]) -> bytes:
     quoted = " ".join(_shell_quote(part) for part in launch)
     header = (
         "#!/bin/sh\n"
-        "# splash - Splash GUI CLI. Generated; edits are overwritten.\n"
+        "# splash - Splashboard CLI. Generated; edits are overwritten.\n"
         "# Our commands are handled here; anything else is exec'd to the real\n"
         "# Splash engine, found by skipping this script on PATH.\n"
         f"# {SHIM_MARKER}: engine discovery skips any file carrying this marker.\n"
@@ -305,7 +305,7 @@ def on_path(bin_dir: Path | None = None) -> bool:
 def shim_is_ours(paths: Paths) -> bool:
     """Whether `~/.splash/bin/splash` is the script we generated."""
     try:
-        return paths.shim.read_text().startswith("#!/bin/sh\n# splash - Splash GUI CLI")
+        return paths.shim.read_text().startswith("#!/bin/sh\n# splash - Splashboard CLI")
     except (FileNotFoundError, UnicodeDecodeError):
         return False
 
@@ -321,7 +321,7 @@ def self_test(paths: Paths, home: Path | None = None) -> list[str]:
         problems.append(f"{paths.bin_dir} is not first on PATH")
     for entry in rc_report(home):
         if not entry["managed"]:
-            problems.append(f"{entry['file']} has no Splash GUI PATH block")
+            problems.append(f"{entry['file']} has no Splashboard PATH block")
     return problems
 
 

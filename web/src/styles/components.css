@@ -32,7 +32,8 @@
 
 .navband-item {
   display: inline-flex;
-  align-items: center;
+  /* A wrapped model ID keeps its trailing separator on its last line. */
+  align-items: last baseline;
   gap: 10px;
   min-width: 0;
 }

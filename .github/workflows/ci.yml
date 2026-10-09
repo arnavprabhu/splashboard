@@ -1,4 +1,4 @@
-# CI for Splash GUI (SPEC §20.3, ci part; release.yml is deferred to docs/roadmap.md by D30).
+# CI for Splashboard (SPEC §20.3, ci part; release.yml is deferred to docs/roadmap.md by D30).
 # Two jobs, to spend as few macOS minutes as possible (GitHub bills macOS runners at 10x Linux):
 #   checks  ubuntu-latest: lint, types and the pure Node/Python steps (ruff, mypy with
 #           --platform darwin, typecheck, vitest, build, bundle size). None of them touch the OS.

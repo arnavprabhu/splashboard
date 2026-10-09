@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Assembles the self-contained Splash GUI.app (docs/plans/packaging.md, PKG-4).
+# Assembles the self-contained Splashboard.app (docs/plans/packaging.md, PKG-4).
 #
-#   packaging/scripts/build-app.sh                              # default identity → build/package/Splash GUI.app, ad hoc signed
+#   packaging/scripts/build-app.sh                              # default identity → build/package/Splashboard.app, ad hoc signed
 #   packaging/scripts/build-app.sh --out build/x/Splash\ GUI.app # a .app under build/ (absolute or repo-relative)
 #   packaging/scripts/build-app.sh --identity "Apple Development: <name> (<id>)"  # signed with a certificate (PKG-6)
 #   SPLASH_GUI_VERIFY_HOME=/abs/build/verify/<run>/home packaging/scripts/build-app.sh --variant verify \
@@ -40,7 +40,7 @@ TEMPLATE="$REPO/packaging/launchagent.plist.in"
 IDENTITY="$REPO/packaging/identity.env"
 SIGN="$REPO/packaging/scripts/sign.sh"
 SIGN_IDENTITY="${SPLASH_GUI_SIGN_IDENTITY:--}"
-OUT="$PKG_DIR/Splash GUI.app"
+OUT="$PKG_DIR/Splashboard.app"
 VARIANT="default"
 STAGE=""
 SUCCESS=0
@@ -84,7 +84,7 @@ esac
 [[ "$OUT" == /* ]] || OUT="$PWD/$OUT"
 [[ "$OUT" == *.app ]] || die "--out must end in .app (got $OUT)"
 # The script deletes $OUT before it moves the new bundle in, so $OUT must be a .app under build/, with no ..
-# and no symlink that leads out. The owner's /Applications/Splash GUI.app is never a target (package.sh guards
+# and no symlink that leads out. The owner's /Applications/Splashboard.app is never a target (package.sh guards
 # the same way, SKILL.md).
 case "$OUT" in
   *"/../"*|*/..) die "--out must not contain .. (got $OUT)" ;;
@@ -234,16 +234,16 @@ cat > "$STAGE/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>$EXECUTABLE</string>
   <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-  <key>CFBundleName</key><string>Splash GUI</string>
-  <key>CFBundleDisplayName</key><string>Splash GUI</string>
+  <key>CFBundleName</key><string>Splashboard</string>
+  <key>CFBundleDisplayName</key><string>Splashboard</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$BUILD</string>
   <key>LSMinimumSystemVersion</key><string>26.4</string>
   <key>LSUIElement</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
-  <key>NSHumanReadableCopyright</key><string>Copyright © 2026 Splash GUI contributors. Apache-2.0. Splash GUI is not an inco.ai product.</string>
-  <key>NSAppleEventsUsageDescription</key><string>Splash GUI opens Terminal to run the Homebrew installer you asked for.</string>
+  <key>NSHumanReadableCopyright</key><string>Copyright © 2026 Splashboard contributors. Apache-2.0. Splashboard is not an inco.ai product.</string>
+  <key>NSAppleEventsUsageDescription</key><string>Splashboard opens Terminal to run the Homebrew installer you asked for.</string>
   <key>NSAppTransportSecurity</key>
   <dict><key>NSAllowsLocalNetworking</key><true/></dict>
   <key>SplashGUIAgentLabel</key><string>$AGENT_LABEL</string>

@@ -439,7 +439,7 @@ class Supervisor:
         if self._holds:
             raise ApiError(
                 503,
-                f"Splash GUI is busy ({self._holds[0].replace('_', ' ')}); try again shortly",
+                f"Splashboard is busy ({self._holds[0].replace('_', ' ')}); try again shortly",
                 "engine_held",
                 headers={"Retry-After": "5"},
             )
@@ -479,7 +479,7 @@ class Supervisor:
             if self._run is not None and self.busy() and not force:
                 raise ApiError(
                     409,
-                    f"Splash GUI is serving {self.model}; switching models while requests are in "
+                    f"Splashboard is serving {self.model}; switching models while requests are in "
                     "flight is disabled",
                     "model_switch_busy",
                     details={"active": self.model, "requests_in_flight": self.in_flight},

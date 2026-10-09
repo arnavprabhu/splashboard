@@ -1,4 +1,4 @@
-# Splash GUI — menu bar app
+# Splashboard — menu bar app
 
 SwiftUI `MenuBarExtra` app for macOS 26.4+ (SPEC §13, `docs/ui/10-menubar.md`). A SwiftPM package plus a bundle script, with no `.xcodeproj` (`docs/spec-drift.md` #1). Swift 6 language mode.
 
@@ -15,8 +15,8 @@ cd macos
 swift build
 swift test
 swift run SplashGUI          # dev: no bundle, so notifications use osascript and there are no login items
-scripts/bundle.sh [--variant verify]  # → build/Splash GUI.app (release, ad-hoc signed; identity from packaging/identity.env)
-open "build/Splash GUI.app"
+scripts/bundle.sh [--variant verify]  # → build/Splashboard.app (release, ad-hoc signed; identity from packaging/identity.env)
+open "build/Splashboard.app"
 ```
 
 ## Finding the manager

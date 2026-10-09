@@ -132,7 +132,7 @@ struct ManagerControllerTests {
         #expect(launcher.launches.value.isEmpty)
         #expect(agent.registerCount.value == 0)
         #expect(mc.ownership == nil)
-        if case .failure(let error) = result { #expect(error.description.contains("not Splash GUI")) }
+        if case .failure(let error) = result { #expect(error.description.contains("not Splashboard")) }
     }
 
     @Test func healthClassification() {
@@ -398,7 +398,7 @@ struct ViewModelTests {
         let (vm, _) = make(api: api)
         await vm.refreshEngine()
         #expect(vm.manager == .down)
-        #expect(vm.menu.first?.snapshot == "[x] Splash GUI is not running")
+        #expect(vm.menu.first?.snapshot == "[x] Splashboard is not running")
     }
 
     @Test func welcomeShownWhenWizardIncomplete() async {

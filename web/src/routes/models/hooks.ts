@@ -7,7 +7,7 @@ import { useApi } from '../../lib/use-api';
 import { listModels } from './api';
 import { pageTitle } from './logic';
 
-/** `42% · Models — Splash GUI` while a download runs, updated at most once per second (01 §10). */
+/** `42% · Models — Splashboard` while a download runs, updated at most once per second (01 §10). */
 export function useModelsTitle(page: string): void {
   const progress = downloadProgress.value;
   const last = useRef(0);

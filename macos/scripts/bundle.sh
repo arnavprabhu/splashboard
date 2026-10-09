@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds `macos/build/Splash GUI.app` for development (packaging proper is deferred, D30).
+# Builds `macos/build/Splashboard.app` for development (packaging proper is deferred, D30).
 #
 #   macos/scripts/bundle.sh                              # default variant, release build, ad-hoc signed
 #   macos/scripts/bundle.sh --variant verify             # .verify ids, baked to a throwaway home
@@ -21,7 +21,7 @@ set -euo pipefail
 MACOS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO="${SPLASH_GUI_REPO:-$(cd "$MACOS_DIR/.." && pwd)}"
 BUILD_DIR="$MACOS_DIR/build"
-APP="$BUILD_DIR/Splash GUI.app"
+APP="$BUILD_DIR/Splashboard.app"
 EXECUTABLE="SplashGUI"
 
 VARIANT="default"
@@ -38,7 +38,7 @@ case "$VARIANT" in
 esac
 
 if [[ ! -f "$REPO/manager/pyproject.toml" ]]; then
-  echo "error: $REPO does not look like the Splash GUI repo (no manager/pyproject.toml)" >&2
+  echo "error: $REPO does not look like the Splashboard repo (no manager/pyproject.toml)" >&2
   exit 1
 fi
 
@@ -135,16 +135,16 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>$EXECUTABLE</string>
   <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-  <key>CFBundleName</key><string>Splash GUI</string>
-  <key>CFBundleDisplayName</key><string>Splash GUI</string>
+  <key>CFBundleName</key><string>Splashboard</string>
+  <key>CFBundleDisplayName</key><string>Splashboard</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$BUILD</string>
   <key>LSMinimumSystemVersion</key><string>26.4</string>
   <key>LSUIElement</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
-  <key>NSHumanReadableCopyright</key><string>Copyright © 2026 Splash GUI contributors. Apache-2.0. Splash GUI is not an inco.ai product.</string>
-  <key>NSAppleEventsUsageDescription</key><string>Splash GUI opens Terminal to run the Homebrew installer you asked for.</string>
+  <key>NSHumanReadableCopyright</key><string>Copyright © 2026 Splashboard contributors. Apache-2.0. Splashboard is not an inco.ai product.</string>
+  <key>NSAppleEventsUsageDescription</key><string>Splashboard opens Terminal to run the Homebrew installer you asked for.</string>
   <key>NSAppTransportSecurity</key>
   <dict><key>NSAllowsLocalNetworking</key><true/></dict>
   <key>SplashGUIRepoPath</key><string>$REPO_XML</string>

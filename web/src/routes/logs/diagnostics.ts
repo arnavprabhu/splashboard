@@ -55,7 +55,7 @@ export function bundleText(b: DiagnosticsBundle): string {
   out.push(t('logs.bundle.header', { time: b.generated_at }));
   out.push('');
   out.push(`== ${t('logs.bundle.versions')}`);
-  out.push(line(`Splash GUI ${v?.gui ?? '—'}`, v?.manager && `manager ${v.manager}`, v?.python && `Python ${v.python}`));
+  out.push(line(`Splashboard ${v?.gui ?? '—'}`, v?.manager && `manager ${v.manager}`, v?.python && `Python ${v.python}`));
   out.push(
     e?.found
       ? line(`Splash ${e.version ?? '—'}`, e.support, e.source && `${t('logs.bundle.source')} ${e.source}`, e.cli)

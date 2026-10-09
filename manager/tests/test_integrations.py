@@ -953,7 +953,7 @@ async def test_claude_desktop_rewrites_while_connected_are_kept(service, monkeyp
 
 
 async def test_manager_shutdown_restores_desktop_apps(service, monkeypatch):
-    """Quitting Splash GUI restores every connection (SPEC §4.2 option A, §11.4)."""
+    """Quitting Splashboard restores every connection (SPEC §4.2 option A, §11.4)."""
     monkeypatch.setattr(service, "start_gateway", _noop_gateway())
     config = service.home / ".codex" / "config.toml"
     config.parent.mkdir(parents=True)
@@ -1306,7 +1306,7 @@ def test_gateway_auto_loads_or_says_no_model(harness_factory, fake_home, monkeyp
         assert reply.status_code == 503
         assert reply.json() == {
             "type": "error",
-            "error": {"type": "overloaded_error", "message": "Splash GUI: no model loaded"},
+            "error": {"type": "overloaded_error", "message": "Splashboard: no model loaded"},
         }
         h.patch_settings({"global": {"routing": {"default_model": MODEL}}})
         reply = httpx.post(base + "/v1/messages", json=body, timeout=60)
@@ -1319,7 +1319,7 @@ def test_gateway_auto_loads_or_says_no_model(harness_factory, fake_home, monkeyp
 def test_quitting_the_manager_restores_byte_for_byte(
     paths: Any, secrets: Any, web_dist: Path, fake_home: Path
 ) -> None:
-    """SPEC §21: connected apps are restored byte for byte when Splash GUI quits
+    """SPEC §21: connected apps are restored byte for byte when Splashboard quits
     (the manager's lifespan shutdown), not only on Disconnect."""
     from fastapi.testclient import TestClient
 

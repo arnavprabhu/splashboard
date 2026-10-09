@@ -187,7 +187,7 @@ class Client:
         if foreground:
             os.execv(sys.executable, argv)  # noqa: S606 — fixed Python and argv, no shell
         if note:
-            print("Starting Splash GUI…", file=sys.stderr)
+            print("Starting Splashboard…", file=sys.stderr)
         with self.paths.manager_log.open("ab") as log:
             proc = subprocess.Popen(
                 argv, stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True
@@ -200,7 +200,7 @@ class Client:
                 break
             time.sleep(0.2)
         raise CliError(
-            "Splash GUI did not start.", fix="check " + home_relative(self.paths.manager_log)
+            "Splashboard did not start.", fix="check " + home_relative(self.paths.manager_log)
         )
 
     def installed(self) -> list[dict[str, Any]]:
@@ -215,7 +215,7 @@ def env_port() -> int | None:
 
 
 def is_manager_health(response: httpx.Response) -> bool:
-    """A Splash GUI manager's `/health`: 200 with `service: splash-gui-manager`."""
+    """A Splashboard manager's `/health`: 200 with `service: splash-gui-manager`."""
     if response.status_code != 200:
         return False
     try:
@@ -227,16 +227,16 @@ def is_manager_health(response: httpx.Response) -> bool:
 
 def foreign_server_message(port: int) -> str:
     return (
-        f"another server (not Splash GUI) is answering on port {port}. "
-        "Pass --port with the Splash GUI manager's port, or move one of them "
-        "(Splash GUI: Settings → Server & network → Port)."
+        f"another server (not Splashboard) is answering on port {port}. "
+        "Pass --port with the Splashboard manager's port, or move one of them "
+        "(Splashboard: Settings → Server & network → Port)."
     )
 
 
 def manager_down(port: int | None) -> CliError:
     where = f" on port {port}" if port else ""
     return CliError(
-        f"Splash GUI is not running{where}. Start it with: splash start",
+        f"Splashboard is not running{where}. Start it with: splash start",
         exit_code=EXIT_MANAGER_DOWN,
         code="manager_not_running",
     )
@@ -316,7 +316,7 @@ def parser() -> argparse.ArgumentParser:
             sub.add_argument("--yes", action="store_true")
         if name == "doctor":
             sub.add_argument(
-                "--uninstall", action="store_true", help="remove Splash GUI data (SPEC §19)"
+                "--uninstall", action="store_true", help="remove Splashboard data (SPEC §19)"
             )
             sub.add_argument("--yes", action="store_true", help="do not ask before removing")
             sub.add_argument("--delete-models", action="store_true", help="also delete models")
@@ -375,12 +375,12 @@ def engine_commands() -> tuple[str, ...]:
 def help_text(engine: Sequence[str] = ENGINE_COMMANDS_FALLBACK) -> str:
     """`splash --help` (docs/ui/11 §3)."""
     passthrough_list = ", ".join([*engine, "--version", "-h"])
-    return f"""Splash GUI — run, monitor and chat with Splash models
+    return f"""Splashboard — run, monitor and chat with Splash models
 
 Usage: splash [--json] [--color auto|always|never] [--port N] [--quiet] <command> [options]
 
 Serving
-  start              Start the Splash GUI manager
+  start              Start the Splashboard manager
   stop               Stop the manager, the engine and restore integrations
   restart            Restart the manager
   status             Manager and engine state, model, endpoints, memory, tok/s
@@ -632,7 +632,7 @@ def status_lines(data: dict[str, Any], style: Style) -> list[str]:
         "running",
         m["url"],
         f"pid {m['pid']}" if m.get("pid") else None,
-        f"Splash GUI {m['version']}" if m.get("version") else None,
+        f"Splashboard {m['version']}" if m.get("version") else None,
         f"up {fmt_duration(m['uptime_s'])}" if m.get("uptime_s") is not None else None,
     ]
     lines = ["Manager    " + " · ".join(p for p in manager if p)]
@@ -895,7 +895,7 @@ def cmd_version(ctx: Ctx, client: Client) -> int:
         else "Splash not found"
     )
     parts = [
-        f"Splash GUI {data['gui']}",
+        f"Splashboard {data['gui']}",
         f"manager {data['manager']}" if data["manager"] else "manager not running",
         engine_text,
         f"status schema {data['status_schema']}" if data["status_schema"] is not None else None,
@@ -1052,8 +1052,8 @@ def cmd_doctor(ctx: Ctx, client: Client) -> int:
                 doctor_checks.Check(
                     "manager",
                     "fail",
-                    f"Another server (not Splash GUI) answers on port {client.port}",
-                    fix=["move one of them, or pass --port with Splash GUI's port"],
+                    f"Another server (not Splashboard) answers on port {client.port}",
+                    fix=["move one of them, or pass --port with Splashboard's port"],
                 )
             )
         else:
@@ -1091,7 +1091,7 @@ def agent_label() -> str:
             label = info.get("SplashGUIAgentLabel")
             if isinstance(label, str) and label:
                 return label
-    return "ai.splashgui.manager"
+    return "io.github.arnavprabhu.splashboard.manager"
 
 
 def agent_pid(label: str) -> int | None:
@@ -1120,9 +1120,9 @@ def cmd_uninstall(ctx: Ctx, client: Client) -> int:
     plan = client.request("POST", "/uninstall/plan")
     interactive = sys.stdin.isatty()
     if not args.yes and not interactive:
-        raise CliError("Remove Splash GUI data? Pass --yes to confirm.", exit_code=EXIT_USAGE)
+        raise CliError("Remove Splashboard data? Pass --yes to confirm.", exit_code=EXIT_USAGE)
     summary = sys.stderr if ctx.json else sys.stdout  # --json keeps stdout for the result
-    print(f"Splash GUI data in {plan['home']}:", file=summary)
+    print(f"Splashboard data in {plan['home']}:", file=summary)
     print(f"  data (settings, chats, usage, logs)  {fmt_bytes(plan['data_bytes'])}", file=summary)
     print(f"  models                               {fmt_bytes(plan['models_bytes'])}", file=summary)
     print(f"  cache                                {fmt_bytes(plan['cache_bytes'])}", file=summary)
@@ -1137,7 +1137,7 @@ def cmd_uninstall(ctx: Ctx, client: Client) -> int:
         if not delete_cache and plan["cache_bytes"]:
             answer = input(f"Also delete the cache ({fmt_bytes(plan['cache_bytes'])})? [y/N] ")
             delete_cache = answer.strip().lower() == "y"
-        if input("Remove Splash GUI data now? [y/N] ").strip().lower() != "y":
+        if input("Remove Splashboard data now? [y/N] ").strip().lower() != "y":
             ctx.note("Nothing was removed.")
             return EXIT_FAILED
     label = agent_label()
@@ -1169,7 +1169,7 @@ def cmd_uninstall(ctx: Ctx, client: Client) -> int:
     print(f"Deleted {len(result['deleted'])} items ({fmt_bytes(result['freed_bytes'])}); kept:")
     for kept in result["kept"]:
         print(f"  {kept}")
-    print("The manager has stopped. Drag Splash GUI.app to the Trash to finish.")
+    print("The manager has stopped. Drag Splashboard.app to the Trash to finish.")
     return 0
 
 
@@ -1345,7 +1345,7 @@ def connect_desktop(ctx: Ctx, client: Client, name: str) -> int:
     try:
         answer = input(
             f"{label} will restart. Your previous configuration is backed up and restored "
-            "when you disconnect or quit Splash GUI. Continue? [y/N] "
+            "when you disconnect or quit Splashboard. Continue? [y/N] "
         )
     except EOFError:
         answer = ""
@@ -1433,7 +1433,7 @@ def launch(ctx: Ctx, client: Client, passthrough_args: list[str]) -> int:
         launcher = f"Splash {engine_info.version} launcher" if engine_info.version else "Splash"
         print(f"# splash launch {args.client} --print  ({launcher}, session only)")
         if loaded is None or (model != loaded and not str(model).startswith(f"{loaded}:")):
-            print(f"# {model} is not loaded now; Splash GUI loads it on the first request")
+            print(f"# {model} is not loaded now; Splashboard loads it on the first request")
         sys.stdout.flush()
     else:
         record_launch(client.paths, args.client, model)
@@ -1667,7 +1667,7 @@ def warn_if_port_taken(arguments: list[str]) -> None:
     if up:
         style = make_style("auto", sys.stderr)
         print(
-            f"{style.warning('!')} Splash GUI's manager is already listening on {port}; "
+            f"{style.warning('!')} Splashboard's manager is already listening on {port}; "
             "`splash serve` will fail to bind. Use --port 9999, or stop the manager: splash stop",
             file=sys.stderr,
         )
@@ -1721,7 +1721,7 @@ def shut_down(client: Client) -> None:
     while not manager_exited(client.paths):
         if time.monotonic() >= deadline:
             raise CliError(
-                "Splash GUI is still shutting down.",
+                "Splashboard is still shutting down.",
                 fix="check " + home_relative(client.paths.manager_log),
             )
         time.sleep(0.2)
@@ -1733,7 +1733,7 @@ def dispatch(ctx: Ctx, client: Client, rest: list[str]) -> int:
         return launch(ctx, client, rest)
     if name == "start":
         client.start(ctx.args.foreground, note=not ctx.quiet)
-        ctx.ok(f"Splash GUI running at {client.url} (admin: /admin)")
+        ctx.ok(f"Splashboard running at {client.url} (admin: /admin)")
         return 0
     if name == "restart":
         if client.running():
@@ -1743,9 +1743,9 @@ def dispatch(ctx: Ctx, client: Client, rest: list[str]) -> int:
     if name == "stop":
         if client.running():
             shut_down(client)
-            ctx.ok("Splash GUI stopped")
+            ctx.ok("Splashboard stopped")
         else:
-            ctx.note("Splash GUI is not running.")
+            ctx.note("Splashboard is not running.")
         return 0
     if name == "open":
         client.start(note=not ctx.quiet)
@@ -1801,7 +1801,7 @@ def main(argv: list[str] | None = None) -> int:
     except CliError as error:
         return fail(error)
     except httpx.HTTPError as error:
-        return fail(CliError(f"Could not talk to Splash GUI: {error}"))
+        return fail(CliError(f"Could not talk to Splashboard: {error}"))
     except (OSError, ValueError) as error:
         if args.verbose:
             raise

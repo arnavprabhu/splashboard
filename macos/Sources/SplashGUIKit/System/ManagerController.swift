@@ -197,7 +197,7 @@ public final class ManagerController {
         case failed(String)
     }
 
-    /// Remove Splash GUI data (PKG-12): unregisters the manager's LaunchAgent whatever started the
+    /// Remove Splashboard data (PKG-12): unregisters the manager's LaunchAgent whatever started the
     /// manager, so launchd forgets it. The status is read again afterwards, so a failure is reported.
     public func unregisterAgentForRemoval() -> AgentRemoval {
         guard let agent, agent.status == .enabled || agent.status == .requiresApproval else { return .notRegistered }
@@ -208,7 +208,7 @@ public final class ManagerController {
         return .unregistered
     }
 
-    /// `launchctl kickstart gui/<uid>/ai.splashgui.manager` for a registered but stopped agent.
+    /// `launchctl kickstart gui/<uid>/io.github.arnavprabhu.splashboard.manager` for a registered but stopped agent.
     nonisolated static func kickstartAgent() {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/launchctl")
@@ -225,18 +225,18 @@ public enum ManagerStartError: Error, Sendable, Equatable, CustomStringConvertib
     case launchFailed(String)
     case exited(log: URL)
     case timedOut(log: URL)
-    /// Another server (not Splash GUI) answers on the manager's port.
+    /// Another server (not Splashboard) answers on the manager's port.
     case portTaken
 
     public var description: String {
         switch self {
         case .uvMissing: return "uv was not found (PATH, /opt/homebrew/bin, ~/.local/bin)."
-        case .repoMissing: return "The Splash GUI source checkout was not found. Set SPLASH_GUI_REPO."
+        case .repoMissing: return "The Splashboard source checkout was not found. Set SPLASH_GUI_REPO."
         case .launchFailed(let why): return "Couldn't start the manager: \(why)"
         case .exited(let log): return "The manager exited during startup. See \(log.path)."
         case .timedOut: return "The manager did not answer within 20 s."
         case .portTaken:
-            return "Another server (not Splash GUI) is using the manager's port. Quit it, or change "
+            return "Another server (not Splashboard) is using the manager's port. Quit it, or change "
                 + "server.port in ~/.splash/settings.json."
         }
     }

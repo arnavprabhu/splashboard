@@ -138,7 +138,7 @@ export const welcomeStrings = {
   "welcome.engine.shell_ok": "No conflicting splash command found.",
   "welcome.engine.shell_unknown": "Shell configuration has not been checked.",
   "welcome.engine.shell_what":
-    "A shell function or alias can hide the Splash GUI command.",
+    "A shell function or alias can hide the Splashboard command.",
   "welcome.engine.splash_command": "Splash install command",
   "welcome.engine.splash_failed": "Splash installation failed.",
   "welcome.engine.splash_install": "Install Splash",
@@ -152,7 +152,7 @@ export const welcomeStrings = {
   // stop states (docs/ui/04 §7): this Mac cannot run Splash, shown in place of the steps
   "welcome.stop.chip.title": "This Mac can’t run Splash.",
   "welcome.stop.chip.lead": "Splash needs an Apple M3 or newer. This Mac has {chip}.",
-  "welcome.stop.chip.body": "Splash GUI stays installed, but it cannot serve models on this Mac.",
+  "welcome.stop.chip.body": "Splashboard stays installed, but it cannot serve models on this Mac.",
   "welcome.stop.chip.requirements": "Requirements",
   "welcome.stop.mac.title": "macOS is too old.",
   "welcome.stop.mac.lead": "Splash needs macOS 26.4 or later. This Mac runs {macos}.",

@@ -109,7 +109,7 @@ export const settingsApi = {
   checkEngineUpdate: () => api.post<UpdateInfo>('/engine/check-update'),
   /** Native Sparkle check through the menu bar app (docs/ui/05 §3.17; 409 when the app is not connected). */
   checkAppUpdate: () => api.post<unknown>('/app/check-updates'),
-  /** Remove Splash GUI data (SPEC §19, PKG-12). */
+  /** Remove Splashboard data (SPEC §19, PKG-12). */
   uninstallPlan: () => api.post<UninstallPlan>('/uninstall/plan'),
   uninstall: (body: { delete_data: boolean; delete_models: boolean; delete_cache: boolean; stop: boolean }) =>
     api.post<UninstallResult>('/uninstall', body),

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Signs a Splash GUI.app inside out with the hardened runtime (docs/plans/packaging.md, PKG-6; D86).
+# Signs a Splashboard.app inside out with the hardened runtime (docs/plans/packaging.md, PKG-6; D86).
 #
 #   packaging/scripts/sign.sh --identity - --app PATH                                  # ad hoc (CI, quick builds)
 #   packaging/scripts/sign.sh --identity "Apple Development: <name> (<id>)" --app PATH  # local lanes

@@ -1,5 +1,5 @@
 /**
- * Real-manager fixtures for Playwright (SPEC §20.2): each test gets its own Splash GUI manager
+ * Real-manager fixtures for Playwright (SPEC §20.2): each test gets its own Splashboard manager
  * (`uv run --project ../manager splash-gui-manager`) on a free port, with a fresh temporary
  * SPLASH_GUI_HOME, in-memory secrets, and the fake engine (`scripts/fake_splash`) as the
  * Splash CLI. The manager serves the built SPA from web/dist, so `pnpm build` must run first

@@ -320,7 +320,7 @@ def test_main_errors_are_reported_without_a_traceback(monkeypatch, capsys):
     assert "Traceback" not in err
     assert cli_module.main(["ls"]) == 3
     err = capsys.readouterr().err
-    assert "Splash GUI is not running" in err and "splash start" in err
+    assert "Splashboard is not running" in err and "splash start" in err
     assert "Traceback" not in err
 
 

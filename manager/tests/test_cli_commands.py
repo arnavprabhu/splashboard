@@ -197,7 +197,7 @@ def test_serve_passthrough_warns_when_the_manager_has_the_port(
     with pytest.raises(SystemExit):
         cli_module.main(["serve", "--model", "x", "--port=9999"])
     assert "warning" not in capsys.readouterr().err
-    # Another server's /health (oMLX on :8000) is not Splash GUI.
+    # Another server's /health (oMLX on :8000) is not Splashboard.
     monkeypatch.setattr(httpx, "get", lambda *a, **k: httpx.Response(200, json={"status": "ok"}))
     with pytest.raises(SystemExit):
         cli_module.main(["serve", "--model", "x"])
@@ -236,7 +236,7 @@ def test_another_server_on_the_port_is_not_mistaken_for_the_manager(
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: spawned.append(a))
     code, _, err = run(capsys, *argv)
     assert code == 1
-    assert "not Splash GUI" in err and "port 8000" in err and "--port" in err
+    assert "not Splashboard" in err and "port 8000" in err and "--port" in err
     assert seen == ["/health"], "no admin call (or CLI token) may reach another server"
     assert spawned == []
 
@@ -330,7 +330,7 @@ def test_a_real_foreign_server_on_the_port_is_never_trusted(
 ) -> None:
     """acceptance-real.md "Port caution": without --port the CLI uses the settings port,
     and oMLX answers /health there with a 200. Over a real socket, the CLI must see that
-    it isn't Splash GUI: no admin call, no CLI token, no browser, a clear error."""
+    it isn't Splashboard: no admin call, no CLI token, no browser, a clear error."""
     port, seen = foreign_server
     opened: list[str] = []
     monkeypatch.setattr("webbrowser.open", opened.append)
@@ -338,7 +338,7 @@ def test_a_real_foreign_server_on_the_port_is_never_trusted(
     assert code == 1
     # --json prints the error object on stdout; the human layout uses stderr.
     message = json.loads(out)["error"]["message"] if "--json" in argv else err
-    assert "not Splash GUI" in message and f"port {port}" in message, message
+    assert "not Splashboard" in message and f"port {port}" in message, message
     assert seen == [("/health", "")], "only an anonymous /health may reach another server"
     assert opened == []
 
@@ -348,5 +348,5 @@ def test_doctor_reports_a_real_foreign_server_as_a_port_conflict(
 ) -> None:
     port, seen = foreign_server
     _, out, _ = run(capsys, "doctor")
-    assert f"Another server (not Splash GUI) answers on port {port}" in out
+    assert f"Another server (not Splashboard) answers on port {port}" in out
     assert seen == [("/health", "")]

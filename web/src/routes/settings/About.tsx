@@ -13,7 +13,7 @@ import { settingsApi } from './api';
 import { RemoveData } from './RemoveData';
 
 export const LINKS = {
-  /** Splash GUI itself (D40; private for now, D26). */
+  /** Splashboard itself (D40; private for now, D26). */
   guiRepo: 'https://github.com/arnavprabhu/splash-gui',
   guiIssues: 'https://github.com/arnavprabhu/splash-gui/issues',
   /** The engine. */

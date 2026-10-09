@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Writes THIRD_PARTY.txt for the packaged Splash GUI.app (docs/plans/packaging.md, PKG-5).
+"""Writes THIRD_PARTY.txt for the packaged Splashboard.app (docs/plans/packaging.md, PKG-5).
 
     python3 -I -B packaging/scripts/collect-licenses.py \\
         --runtime Contents/Resources/manager/python \\
@@ -29,7 +29,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-APP_HEADER = "Splash GUI (Apache-2.0)"
+APP_HEADER = "Splashboard (Apache-2.0)"
 # Normalized name of the app's own wheel. Its license is the app section, not a file in the wheel.
 APP_DISTRIBUTION = "splash-gui"
 LICENSE_FILE = re.compile(r"^(licen[cs]e|copying|notice)([._-].*)?$", re.IGNORECASE)
@@ -89,7 +89,7 @@ def distribution_section(dist_dir: Path) -> Section:
         title += f" ({expression})"
     if normalize(name) == APP_DISTRIBUTION:
         return Section(
-            title, "Part of Splash GUI. Its license is the one in the first section.\n"
+            title, "Part of Splashboard. Its license is the one in the first section.\n"
         )
     files = license_files(dist_dir)
     if not files:

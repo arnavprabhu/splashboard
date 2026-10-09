@@ -37,3 +37,6 @@ build/package/
 
 # Claude Code agent worktrees
 .claude/worktrees/
+
+# The spec is private (D104): kept on the owner's Mac, never committed
+/SPEC.md

@@ -18,7 +18,7 @@ from .fakeengine import MODEL, EngineHarness
 
 OVERLOADED = {
     "type": "error",
-    "error": {"type": "overloaded_error", "message": "Splash GUI: no model loaded"},
+    "error": {"type": "overloaded_error", "message": "Splashboard: no model loaded"},
 }
 BODY = {"model": "claude-opus-5", "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]}
 

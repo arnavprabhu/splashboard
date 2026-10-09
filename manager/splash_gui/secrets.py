@@ -28,11 +28,11 @@ SECURITY_TIMEOUT_S = 10
 REDACTED = "••••••"
 
 
-# The Keychain service prefix (D62: it follows the bundle id). PKG-16 switches it to
-# io.github.arnavprabhu.splashboard and adds the old one to LEGACY_PREFIXES, so the next start
-# copies every item over (`migrate_prefix`). packaging/identity.env names the same prefix.
-KEYCHAIN_PREFIX = "ai.splashgui"
-LEGACY_PREFIXES: tuple[str, ...] = ()
+# The Keychain service prefix (D62: it follows the bundle id). The placeholder `ai.splashgui` is
+# in LEGACY_PREFIXES, so the first start after the switch copies every item over
+# (`migrate_prefix`, PKG-16). packaging/identity.env names the same prefix.
+KEYCHAIN_PREFIX = "io.github.arnavprabhu.splashboard"
+LEGACY_PREFIXES: tuple[str, ...] = ("ai.splashgui",)
 
 
 class SecretName(StrEnum):
@@ -196,7 +196,7 @@ class KeychainBackend:
         value = _check_value(value)
         command = (
             f'add-generic-password -U -s "{name}" -a "{self.account}" '
-            f'-l "Splash GUI" -w "{value}"\n'
+            f'-l "Splashboard" -w "{value}"\n'
         )
         result = self._run(["-i"], stdin=command)
         if result.returncode != 0:

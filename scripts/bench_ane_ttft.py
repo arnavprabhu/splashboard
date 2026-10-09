@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Cold-prompt TTFT with and without Splash's Neural Engine FFN split, through the manager.
 
-Drives a running Splash GUI manager (normally a `verify-splash-gui` real-mode run) the
+Drives a running Splashboard manager (normally a `verify-splash-gui` real-mode run) the
 way a user does: per-model `serve.disable_ane` through `PUT /settings`, then a stop and
 a load of the engine, then streamed `/v1/chat/completions` requests with `max_tokens` 1.
 

@@ -15,7 +15,7 @@ const SCHEMA = {
 };
 
 test.describe('D40 repository links', () => {
-  test('About links the Splash GUI repository and issues', async ({ page }) => {
+  test('About links the Splashboard repository and issues', async ({ page }) => {
     await mockManager(page, { extra: (_m, path) => (path === '/settings/schema' ? { json: SCHEMA } : undefined) });
     await page.goto('/admin/settings/about');
     const links = page.getByTestId('about-gui-links');

@@ -175,7 +175,10 @@ test('row 9: header separators never start a line', async ({ page }, info) => {
     els.filter((dot) => {
       const prev = dot.previousElementSibling;
       if (!prev) return true;
-      return Math.abs(prev.getBoundingClientRect().top - dot.getBoundingClientRect().top) > 8;
+      // The dot shares a line with the text before it (which may wrap, docs/ui/01 §1.1).
+      const p = prev.getBoundingClientRect();
+      const d = dot.getBoundingClientRect();
+      return d.top < p.top - 8 || d.bottom > p.bottom + 8 || d.left < p.left;
     }).length,
   );
   expect(orphans).toBe(0);

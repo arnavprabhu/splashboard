@@ -88,7 +88,7 @@ ADMIN_ROUTERS: tuple[tuple[str, APIRouter], ...] = (
 
 def default_web_dist() -> Path:
     """The web admin's built files: the env override, then the bundle's own copy when
-    this runs from `Splash GUI.app` (PKG-3), then the source tree's `web/dist`."""
+    this runs from `Splashboard.app` (PKG-3), then the source tree's `web/dist`."""
     override = os.environ.get(WEB_DIST_ENV)
     if override:
         return Path(override).expanduser()
@@ -118,6 +118,9 @@ def build_state(config: AppConfig) -> ManagerState:
         secrets=secrets,
         web_dist=config.web_dist or default_web_dist(),
     )
+    # PKG-16: move items from the old prefix first, or ensure_api_key would create a new key
+    # beside the user's old one and the migration would keep the new one.
+    _migrate_keychain_prefix(state)
     state.auth.ensure_cli_token()
     state.auth.ensure_api_key()  # D58: sign-in needs a key from the first start
     attach_core(state)
@@ -173,7 +176,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await asyncio.to_thread(state.engine)
     _read_engine_options_in_background(state)
     _ensure_shim(state)
-    _migrate_keychain_prefix(state)
     _migrate_mcp_secrets(state)
     core = [state.proxy, state.supervisor, state.metrics]
     services = subsystem_services(state)
@@ -210,7 +212,8 @@ def _read_engine_options_in_background(state: ManagerState) -> None:
 
 def _migrate_keychain_prefix(state: ManagerState) -> None:
     """PKG-16 (D62): move Keychain items from an earlier service prefix to KEYCHAIN_PREFIX, before
-    anything reads them. A no-op until LEGACY_PREFIXES names one."""
+    anything reads them (build_state runs it before ensure_api_key). A no-op without
+    LEGACY_PREFIXES."""
     from .mcp.secrets import _current_values, secret_name
     from .secrets import KEYCHAIN_PREFIX, LEGACY_PREFIXES, SecretName, migrate_prefix, suffix_of
 
@@ -264,7 +267,7 @@ def _ensure_shim(state: ManagerState) -> None:
 
 def _not_built(dist: Path) -> HTMLResponse:
     return HTMLResponse(
-        "<!doctype html><title>Splash GUI</title><p>The web admin is not built. "
+        "<!doctype html><title>Splashboard</title><p>The web admin is not built. "
         f"Run <code>pnpm build</code> in <code>web/</code> (looked in {dist}).</p>",
         status_code=503,
     )
@@ -300,7 +303,7 @@ def spa_response(dist: Path | None, path: str) -> Response:
 def create_app(config: AppConfig | None = None) -> FastAPI:
     state = build_state(config or AppConfig())
     app = FastAPI(
-        title="Splash GUI manager",
+        title="Splashboard manager",
         version=__version__,
         openapi_url=f"{ADMIN_PREFIX}/openapi.json",
         # Swagger UI loads its scripts from a CDN onto the admin origin; the schema stays.

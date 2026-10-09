@@ -1,4 +1,4 @@
-"""The shim's place on PATH and its fallback when Splash GUI.app is gone (PKG-11, SPEC §12.1).
+"""The shim's place on PATH and its fallback when Splashboard.app is gone (PKG-11, SPEC §12.1).
 
 The shell checks run the real zsh and bash with a cleared environment and a throwaway HOME.
 `brew_shellenv` writes the PATH line that `brew shellenv` prints, for a fake prefix, so the
@@ -151,7 +151,7 @@ def test_the_moved_app_shim_says_why_our_commands_cannot_run(tmp_path: Path) -> 
     for args in (["status"], ["--json", "status"], ["--port", "8000", "doctor"]):
         result = run_sh(script, *args, env={"PATH": CLEAN_PATH})
         assert result.returncode == 1, args
-        assert "Splash GUI.app was moved or deleted" in result.stderr
+        assert "Splashboard.app was moved or deleted" in result.stderr
         assert "command splash" in result.stderr
         assert result.stdout == "", "our commands print nothing to stdout when they cannot run"
 

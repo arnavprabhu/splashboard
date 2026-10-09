@@ -194,6 +194,6 @@ public enum TerminalCommandPolicy {
 
     /// Body of a `.command` file (fallback when Automation permission for Terminal is denied).
     public static func commandFile(for command: String) -> String {
-        "#!/bin/zsh\n# Opened by Splash GUI\n\(command)\n"
+        "#!/bin/zsh\n# Opened by Splashboard\n\(command)\n"
     }
 }

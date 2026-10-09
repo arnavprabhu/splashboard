@@ -55,7 +55,7 @@ def test_yes_removes_the_data_and_keeps_models(
     code, out, err = run(capsys, "doctor", "--uninstall", "--yes", "--json")
     assert code == 0, out
     result = json.loads(out)
-    assert "Splash GUI data in" in err  # the sizes go to stderr under --json
+    assert "Splashboard data in" in err  # the sizes go to stderr under --json
     assert result["shim_removed"] in (True, False) and result["freed_bytes"] > 0
     assert not any(path.endswith("/models") for path in result["deleted"])
     assert any(path.endswith("/models") for path in result["kept"])
@@ -69,7 +69,7 @@ def test_the_sizes_and_steps_are_shown(
     assert code == 0
     assert "data (settings, chats, usage, logs)" in out and "models " in out and "cache " in out
     assert "· Restore Claude Desktop" in out
-    assert "Drag Splash GUI.app to the Trash" in out
+    assert "Drag Splashboard.app to the Trash" in out
 
 
 def test_without_a_terminal_it_needs_yes(
@@ -104,7 +104,7 @@ def test_a_manager_run_by_its_agent_is_booted_out_not_stopped(
     assert code == 0
     assert sent and sent[0]["stop"] is False
     assert calls and calls[0][:2] == ["/bin/launchctl", "bootout"]
-    assert calls[0][2].endswith("/ai.splashgui.manager")
+    assert calls[0][2].endswith("/io.github.arnavprabhu.splashboard.manager")
 
 
 def test_another_installs_agent_is_never_touched(

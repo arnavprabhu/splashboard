@@ -1,4 +1,4 @@
-# Splash GUI manager
+# Splashboard manager
 
 Python package `splash_gui`: the manager service, the admin API and the `splash` CLI shim.
 See `../SPEC.md` §4 and `../docs/api.md`.

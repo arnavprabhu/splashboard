@@ -141,7 +141,7 @@ public enum MenuModel {
                 entries.append(.button(MenuItem("Show Log", .showManagerLog)))
                 entries.append(.button(MenuItem("Try Again", .startManager)))
             default:
-                entries.append(.button(MenuItem("Start Splash GUI", .startManager)))
+                entries.append(.button(MenuItem("Start Splashboard", .startManager)))
             }
             entries += tail(input, managerUp: false)
             return entries
@@ -225,7 +225,7 @@ public enum MenuModel {
     static func tail(_ input: MenuInput, managerUp: Bool) -> [MenuEntry] {
         let stop = input.settings.stopOnQuit
         let quit = MenuItem(
-            "Quit Splash GUI", .quit(stopServer: stop), shortcut: "q",
+            "Quit Splashboard", .quit(stopServer: stop), shortcut: "q",
             alternate: MenuAlternate(title: stop ? "Quit and Keep Running" : "Quit and Stop Server",
                                      command: .quit(stopServer: !stop)))
         return [
@@ -235,9 +235,9 @@ public enum MenuModel {
             .submenu(title: "Integrations", enabled: managerUp, entries: managerUp ? integrations(input) : []),
             .separator,
             .button(MenuItem("Preferences…", .openAdmin("/admin/settings"), enabled: managerUp, shortcut: ",",
-                               help: managerUp ? nil : "Start Splash GUI first")),
+                               help: managerUp ? nil : "Start Splashboard first")),
             .button(MenuItem("Check for Updates…", .checkForUpdates)),
-            .button(MenuItem("About Splash GUI", .about)),
+            .button(MenuItem("About Splashboard", .about)),
             .button(quit),
         ]
     }

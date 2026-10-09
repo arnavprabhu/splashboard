@@ -7,6 +7,7 @@ import { searchFields } from '../src/routes/settings';
 import { consequence, sizeText } from '../src/routes/settings/DataPrivacy';
 import { updateLine } from '../src/routes/settings/About';
 import { traceTime } from '../src/routes/logs-diagnostics';
+import { parseDivider } from '../src/routes/logs/model';
 import { fingerprintRows } from '../src/routes/model-settings';
 import { piecesFor } from '../src/routes/tools-tokenizer';
 import type { SchemaField } from '../src/api/models';
@@ -185,5 +186,14 @@ describe('tokenizer pieces (POST /tokenizer/pieces)', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(json(503, { error: { message: 'x', type: 'x', code: 'pieces_unavailable' } }));
     const out = await piecesFor([1, 2], undefined);
     expect(out).toEqual({ ok: false, tokens: [{ id: 1, piece: null, special: false }, { id: 2, piece: null, special: false }] });
+  });
+});
+
+describe('engine session dividers', () => {
+  it('reads the current marker and the one written before the D62 rename', () => {
+    for (const name of ['Splashboard', 'Splash GUI']) {
+      expect(parseDivider(`=== ${name}: engine session started · a/b · splash serve`)).toMatchObject({ kind: 'start', model: 'a/b', command: 'splash serve' });
+      expect(parseDivider(`=== ${name}: engine session ended · stopped · exit 0`)).toMatchObject({ kind: 'stop', reason: 'stopped', exit: '0' });
+    }
   });
 });

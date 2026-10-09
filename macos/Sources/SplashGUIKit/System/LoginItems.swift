@@ -47,7 +47,7 @@ public enum ManagerAgent {
     /// Info.plist key that scripts/bundle.sh writes from packaging/identity.env (PKG-1).
     public static let labelInfoKey = "SplashGUIAgentLabel"
     /// The label when the bundle does not carry one (`swift run`, `swift test`).
-    public static let fallbackLabel = "ai.splashgui.manager"
+    public static let fallbackLabel = "io.github.arnavprabhu.splashboard.manager"
 
     /// The agent label from an Info.plist dictionary, or the fallback when the key is missing or empty.
     public static func resolveLabel(info: [String: Any]?) -> String {
@@ -103,7 +103,7 @@ public final class LoginItemController: Sendable {
 
     public var status: AppServiceStatus { mainApp.status }
 
-    /// Remove Splash GUI data (PKG-12): the app no longer opens at login, whatever the setting says.
+    /// Remove Splashboard data (PKG-12): the app no longer opens at login, whatever the setting says.
     /// Returns nil when no login item is left, else why it could not be removed (re-read after the call).
     public func unregisterForRemoval() -> String? {
         guard mainApp.status == .enabled || mainApp.status == .requiresApproval else { return nil }

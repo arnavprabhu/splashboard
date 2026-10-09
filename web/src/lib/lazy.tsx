@@ -41,7 +41,7 @@ export function lazyRoute<P extends object>(load: Loader<P>): LazyComponent<P> {
       return (
         <section class="band">
           <ErrorState
-            error={new Error('This page failed to load. Splash GUI may have been updated; reload the page.')}
+            error={new Error('This page failed to load. Splashboard may have been updated; reload the page.')}
             onRetry={() => {
               setError(null);
               setAttempt(attempt + 1);

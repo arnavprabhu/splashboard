@@ -2,7 +2,7 @@
 
 D58: requests for a Splash model need a credential. Connect writes
 `/api/codex/t/<router token>/v1` as the Codex app's `openai_base_url`; the token is in
-the Keychain (`ai.splashgui.codexrouter`) and Disconnect/Restore delete it. The plain
+the Keychain (`<prefix>.codexrouter`) and Disconnect/Restore delete it. The plain
 `/api/codex/v1` path (configs written before D58) needs the API key for Splash models.
 Requests for the app's own models go upstream with the caller's own credentials.
 """

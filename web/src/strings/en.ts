@@ -43,7 +43,7 @@ export const en = {
   'common.not_available': 'Not available',
   'common.typed_confirm': 'Type {word} to confirm',
   'common.couldnt_load': 'Couldn’t load {thing}.',
-  'common.not_implemented': 'This part of Splash GUI is not built into the manager yet.',
+  'common.not_implemented': 'This part of Splashboard is not built into the manager yet.',
 
   // nav and shell
   'nav.main': 'Main',
@@ -74,18 +74,18 @@ export const en = {
   'nav.theme_to_dark': 'Switch to dark theme',
   'nav.theme_to_light': 'Switch to light theme',
   'shell.skip': 'Skip to content',
-  'shell.title': '{page} — Splash GUI',
-  'shell.title_bare': 'Splash GUI',
-  'shell.connected': 'Connected to Splash GUI.',
-  'shell.offline.title': 'Splash GUI is not running.',
-  'shell.offline.starting': 'Starting Splash GUI…',
+  'shell.title': '{page} — Splashboard',
+  'shell.title_bare': 'Splashboard',
+  'shell.connected': 'Connected to Splashboard.',
+  'shell.offline.title': 'Splashboard is not running.',
+  'shell.offline.starting': 'Starting Splashboard…',
   'shell.offline.body': 'Start it from the menu bar icon, or run {cmd} in a terminal. This page reconnects by itself.',
   'shell.offline.lan': 'If you changed the bind address or port, open the new URL.',
   'shell.offline.retry_in': 'Retrying in {s} s',
   'shell.offline.retrying': 'Retrying…',
   'shell.offline.last_seen': 'Last seen',
   'shell.offline.page_title': 'Not running',
-  'shell.settings_offline': 'Splash GUI is not running. Your changes are kept until it is back.',
+  'shell.settings_offline': 'Splashboard is not running. Your changes are kept until it is back.',
   'shell.action_failed': '{action} failed: {why}',
   'shell.shortcuts.title': 'Keyboard shortcuts.',
   'shell.shortcuts.goto': 'Go to {page}',
@@ -128,8 +128,8 @@ export const en = {
 
   // errors (headline in plain English, API text verbatim after it)
   'error.generic': 'Something went wrong.',
-  'error.network': 'Cannot reach Splash GUI. Is the manager running?',
-  'error.page_load': 'This page failed to load. Splash GUI may have been updated; reload the page.',
+  'error.network': 'Cannot reach Splashboard. Is the manager running?',
+  'error.page_load': 'This page failed to load. Splashboard may have been updated; reload the page.',
   'error.engine_unavailable': 'The engine is not running.',
 
   // confirm sheet

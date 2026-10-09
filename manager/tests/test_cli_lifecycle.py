@@ -136,7 +136,7 @@ def test_splash_stop_returns_only_after_the_manager_has_restored_and_exited(
         code = cli_module.main(["stop", "--port", str(port)])
         out, err = capsys.readouterr()
         assert code == 0, err
-        assert "Splash GUI stopped" in out
+        assert "Splashboard stopped" in out
         # The lock is free only after the lifespan shutdown, so the restore has run.
         assert marker.read_text() == "restored"
         assert process.wait(timeout=10) == 0

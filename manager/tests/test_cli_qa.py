@@ -304,7 +304,7 @@ def test_doctor_layout_and_no_fix_for_ok_checks(
     make()
     _, out, _ = run(capsys, "doctor")
     lines = out.splitlines()
-    assert lines[0].startswith("Splash GUI doctor · ")
+    assert lines[0].startswith("Splashboard doctor · ")
     assert "OK" not in out.split() and "WARN" not in out.split()
     assert "Storage" in lines and "Shell" in lines
     assert any(line.startswith("  ✓ ") for line in lines)
@@ -483,7 +483,7 @@ def test_version_is_human_readable_unless_json(
     make()
     code, out, _ = run(capsys, "version")
     assert code == 0 and not out.lstrip().startswith("{")
-    assert out.startswith(f"Splash GUI {__version__} · manager {__version__} · Splash 1.3.0")
+    assert out.startswith(f"Splashboard {__version__} · manager {__version__} · Splash 1.3.0")
     code, out, _ = run(capsys, "version", "--json")
     assert set(json.loads(out)) == {"gui", "manager", "engine", "engine_path", "status_schema"}
 
@@ -586,7 +586,7 @@ def test_long_help_is_ours(
     monkeypatch.setattr(cli_module, "engine_commands", lambda: ("serve", "claude", "newcmd"))
     code, out, _ = run(capsys, "--help")
     assert code == 0
-    assert out.startswith("Splash GUI — run, monitor and chat with Splash models")
+    assert out.startswith("Splashboard — run, monitor and chat with Splash models")
     for heading in ("Serving", "Models", "Use", "Maintenance", "Options"):
         assert heading in out.splitlines()
     assert "--port N" in out and "--json" in out
@@ -742,7 +742,7 @@ def test_read_only_commands_never_start_the_manager(
     for argv in (["ps"], ["ls"], ["logs"], ["config", "get"], ["unload"], ["rm", "a/b", "--yes"]):
         code, out, err = run(capsys, *argv)
         assert code == 3, argv
-        assert err.startswith("✗ Splash GUI is not running") and "splash start" in err
+        assert err.startswith("✗ Splashboard is not running") and "splash start" in err
     code, out, _ = run(capsys, "status", "--json")
     assert code == 3 and json.loads(out)["manager"]["running"] is False
 

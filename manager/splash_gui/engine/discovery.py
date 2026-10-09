@@ -224,7 +224,7 @@ def discover(
                 notes.append(f"{source} engine path {cli} is not an executable file")
             continue
         if is_shim(cli, shim_paths):
-            notes.append(f"skipped Splash GUI's own shim at {cli}")
+            notes.append(f"skipped Splashboard's own shim at {cli}")
             continue
         return _inspect(cli, source, resolved_prefix, runner, tuple(notes))
     return EngineInfo(

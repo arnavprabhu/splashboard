@@ -13,8 +13,8 @@ export const chatStrings = {
   'chat.list_sheet_title': 'Chats.',
   'chat.panel_sheet_title': 'Panel.',
   'chat.thread_label': 'Conversation',
-  'chat.home': 'Splash GUI',
-  'chat.home_label': 'Splash GUI: back to the admin',
+  'chat.home': 'Splashboard',
+  'chat.home_label': 'Splashboard: back to the admin',
   'chat.side.label': 'Chats and admin links',
   'chat.side.hide': 'Hide',
   'chat.side.hide_label': 'Hide conversations',
@@ -399,7 +399,7 @@ export const chatStrings = {
   'chat.output.reason_stopped': 'the reply was cut off',
 
   // errors (07 §10)
-  'chat.error.unreachable': 'Splash GUI’s manager isn’t reachable.',
+  'chat.error.unreachable': 'Splashboard’s manager isn’t reachable.',
   'chat.error.unreachable_body': 'Chats can’t be saved or sent until it is back.',
   'chat.error.not_loaded': 'No model is loaded.',
   'chat.error.not_loaded_body': 'Load {model} to start chatting.',

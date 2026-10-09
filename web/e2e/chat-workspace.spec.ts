@@ -44,7 +44,7 @@ test('the wordmark returns to the admin page this tab came from', async ({ page 
   await expect(page).toHaveURL(/\/admin\/chat$/);
   const home = page.getByTestId('chat-home');
   await expect(home).toHaveAttribute('href', '/admin/logs');
-  await expect(home).toHaveAccessibleName('Splash GUI: back to the admin');
+  await expect(home).toHaveAccessibleName('Splashboard: back to the admin');
   // Opening a conversation keeps the target: chat routes never count.
   await page.goto('/admin/chat/c1');
   await expect(page.getByTestId('chat-home')).toHaveAttribute('href', '/admin/logs');

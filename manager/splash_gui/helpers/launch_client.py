@@ -62,7 +62,7 @@ def reasoning_env(client: str, effort: str | None, environ: dict[str, str]) -> d
 
 
 def session_args(client: str, args: list[str], effort: str | None = None) -> list[str]:
-    """The client arguments plus Splash GUI's own session overrides. Ours go
+    """The client arguments plus Splashboard's own session overrides. Ours go
     first: Splash keeps user `-c` overrides in order after its defaults
     (install/clients.py _codex_config_args), so a user's own
     `-c features.apps=true` still wins."""
@@ -128,7 +128,7 @@ def main() -> None:
         secret = os.environ.get("SPLASH_API_KEY")
         if secret and secret in changed.values():
             print("# The API key is required: export SPLASH_API_KEY=<your key> first")
-            print("# (Settings → Security in Splash GUI shows and copies it).")
+            print("# (Settings → Security in Splashboard shows and copies it).")
         for key in sorted(changed):
             value = changed[key]
             if secret and value == secret:

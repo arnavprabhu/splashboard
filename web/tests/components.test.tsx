@@ -43,11 +43,11 @@ describe('NavBand', () => {
   it('renders the wordmark, meta, links and marks the active link', () => {
     setTheme('light');
     withRouter(<NavBand engineVersion="1.2.0" model="mlx-community/Qwen3.8-27B-4bit" state="busy" />, '/tools/tokenizer');
-    expect(screen.getByText('Splash GUI')).toBeTruthy();
+    expect(screen.getByText('Splashboard')).toBeTruthy();
     expect(screen.getByText('Splash 1.2.0')).toBeTruthy();
     expect(screen.getByText('Generating', { exact: false })).toBeTruthy();
     const links = screen.getAllByRole('link').map((a) => a.textContent);
-    expect(links).toEqual(['Splash GUI', 'Status', 'Models', 'Chat', 'Tools', 'Integrations', 'Logs', 'Settings']);
+    expect(links).toEqual(['Splashboard', 'Status', 'Models', 'Chat', 'Tools', 'Integrations', 'Logs', 'Settings']);
     expect(screen.getByText('Tools').getAttribute('aria-current')).toBe('page');
     expect(screen.getByText('Status').getAttribute('aria-current')).toBeNull();
     expect(screen.queryByText('Log out')).toBeNull();

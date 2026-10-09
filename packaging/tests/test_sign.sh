@@ -146,14 +146,14 @@ check "no --identity is refused" \
 check "an unknown option is refused" \
   refuses "unknown option" "$SIGN" --identity - --bogus
 check "a path under /Applications is refused, as written and not read" \
-  refuses "refusing to sign" "$SIGN" --identity - --app "/Applications/Splash GUI.app"
+  refuses "refusing to sign" "$SIGN" --identity - --app "/Applications/Splashboard.app"
 check "a missing path under /Applications is refused too" \
   refuses "refusing to sign" "$SIGN" --identity - --app "/Applications/Nope-sign-test.app"
 check "a path under ~/Applications is refused" \
   refuses "refusing to sign" "$SIGN" --identity - --app "$HOME/Applications/Nope.app"
 # --dry-run on these two: if the refusal ever regressed, the test could not sign the owner's installed copy.
 check "a lowercase /applications path is refused too (APFS ignores letter case)" \
-  refuses "refusing to sign" "$SIGN" --identity - --dry-run --app "/applications/Splash GUI.app"
+  refuses "refusing to sign" "$SIGN" --identity - --dry-run --app "/applications/Splashboard.app"
 check "a lowercase ~/applications path is refused" \
   refuses "refusing to sign" "$SIGN" --identity - --dry-run --app "$HOME/applications/Nope.app"
 check "a missing bundle is refused" \

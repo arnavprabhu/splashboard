@@ -12,7 +12,7 @@ public protocol MenuBarHost: AnyObject {
     func showAbout()
     func showWelcome()
     func terminate()
-    /// The Remove Splash GUI Data… sheet (PKG-12): nil when the user cancels.
+    /// The Remove Splashboard Data… sheet (PKG-12): nil when the user cancels.
     func chooseRemoval(_ plan: UninstallSummary) async -> RemovalChoice?
 }
 
@@ -500,7 +500,7 @@ public final class MenuBarViewModel {
         if manager == .running { await openAdminSignedIn("/admin/settings/about") } else { host?.showAbout() }
     }
 
-    /// About → Remove Splash GUI Data… (SPEC §19, PKG-12). The manager restores the integrations and
+    /// About → Remove Splashboard Data… (SPEC §19, PKG-12). The manager restores the integrations and
     /// removes the PATH block, the shim and the chosen folders (`stop: false`); a failed restore stops
     /// here with nothing removed (D36). Then the app unregisters its login item and the manager's
     /// LaunchAgent, which only it can do (unregistering the agent stops a running manager), stops a
@@ -521,12 +521,12 @@ public final class MenuBarViewModel {
         do {
             _ = try await api.post("/api/admin/uninstall", body: body)
         } catch {
-            host?.showError(title: "Couldn’t remove Splash GUI data", message: error.localizedDescription)
+            host?.showError(title: "Couldn’t remove Splashboard data", message: error.localizedDescription)
             return
         }
         var problems: [String] = []
         if let error = loginItems?.unregisterForRemoval() {
-            problems.append("The login item could not be removed (\(error)). Remove Splash GUI in System Settings → General → Login Items.")
+            problems.append("The login item could not be removed (\(error)). Remove Splashboard in System Settings → General → Login Items.")
         }
         switch managerController?.unregisterAgentForRemoval() ?? .notRegistered {
         case .unregistered:
@@ -545,7 +545,7 @@ public final class MenuBarViewModel {
         // A login item or agent that is still registered could start the app or manager again and recreate the data:
         // keep the app open and say what is left instead of quitting as if the removal were complete.
         guard problems.isEmpty else {
-            host?.showError(title: "Splash GUI data was removed, but not everything", message: problems.joined(separator: "\n\n"))
+            host?.showError(title: "Splashboard data was removed, but not everything", message: problems.joined(separator: "\n\n"))
             return
         }
         host?.terminate()
@@ -645,9 +645,9 @@ public final class MenuBarViewModel {
             await call { try await body($0, true) }
             return
         } catch let e as APIError {
-            host?.showError(title: "Splash GUI", message: e.userMessage)
+            host?.showError(title: "Splashboard", message: e.userMessage)
         } catch {
-            host?.showError(title: "Splash GUI", message: error.localizedDescription)
+            host?.showError(title: "Splashboard", message: error.localizedDescription)
         }
         await refreshEngine()
     }
@@ -691,9 +691,9 @@ public final class MenuBarViewModel {
         do {
             _ = try await body(api)
         } catch let e as APIError {
-            host?.showError(title: "Splash GUI", message: e.userMessage)
+            host?.showError(title: "Splashboard", message: e.userMessage)
         } catch {
-            host?.showError(title: "Splash GUI", message: error.localizedDescription)
+            host?.showError(title: "Splashboard", message: error.localizedDescription)
         }
         await refreshEngine()
     }

@@ -1,14 +1,14 @@
 import Foundation
 
-/// Finds the Splash GUI source checkout and `uv` for the development bundle (D30: the app runs
+/// Finds the Splashboard source checkout and `uv` for the development bundle (D30: the app runs
 /// the manager from the source tree with `uv run --project <repo>/manager splash-gui-manager`).
 /// The packaged app never gets here: `BundledRuntime` (PKG-4) runs the manager from inside the bundle first.
 ///
 /// Repo resolution order:
 /// 1. env `SPLASH_GUI_REPO`
 /// 2. UserDefaults `SplashGUIRepoPath` (`defaults write <bundle id> SplashGUIRepoPath /path`; the
-///    defaults domain is the app's bundle id, from packaging/identity.env, e.g. `ai.splashgui.app`
-///    or `ai.splashgui.app.verify` for the verify variant)
+///    defaults domain is the app's bundle id, from packaging/identity.env, e.g. `io.github.arnavprabhu.splashboard`
+///    or `io.github.arnavprabhu.splashboard.verify` for the verify variant)
 /// 3. Info.plist `SplashGUIRepoPath` (baked in by scripts/bundle.sh)
 /// 4. walking up from the executable (works for `swift run`, `.build/…`, and `macos/build/*.app`)
 /// 5. `~/Desktop/Projects/Splash-GUI`
@@ -93,7 +93,7 @@ public struct RepoLocator: Sendable {
     }
 }
 
-/// The Python runtime that `Splash GUI.app` carries (PKG-4, docs/plans/packaging.md):
+/// The Python runtime that `Splashboard.app` carries (PKG-4, docs/plans/packaging.md):
 /// `Contents/Resources/manager/python/bin/python3`, beside `Contents/Resources/web`.
 /// When it exists the manager starts with it, and neither `uv` nor the repo is consulted.
 public struct BundledRuntime: Sendable, Equatable {

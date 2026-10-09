@@ -7,7 +7,7 @@
 # Everything the cask names comes from the app inside the DMG (mounted read-only, -nobrowse): the app name, the
 # bundle id, the version and the agent label (SplashGUIAgentLabel), so the identity switch (PKG-16) needs no edit
 # here. The token is the app name in lower case with hyphens (`splash-gui`, later `splashboard`). The URL is
-# <prefix><DMG file name>; the default prefix is the public releases repo's download path for this version (D70).
+# <prefix><DMG file name>; the default prefix is the source repo's release download path for this version (D103).
 # The Keychain services for zap come from the manager's SecretName.
 #
 # --pull-request clones the tap (TAP_REPO, default arnavprabhu/homebrew-tap) with gh, writes Casks/<token>.rb on a
@@ -17,7 +17,7 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TEMPLATE="$REPO/packaging/cask/cask.rb.in"
-RELEASES_REPO="${RELEASES_REPO:-arnavprabhu/splash-gui-releases}"
+RELEASES_REPO="${RELEASES_REPO:-arnavprabhu/splash-gui}"
 TAP_REPO="${TAP_REPO:-arnavprabhu/homebrew-tap}"
 DMG=""
 PREFIX=""

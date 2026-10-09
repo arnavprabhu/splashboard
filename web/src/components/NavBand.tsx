@@ -63,8 +63,8 @@ export function NavBand({ engineVersion, model, state, authEnabled, onLogout, to
   const items = linksHidden ? [] : engineMissing ? NAV_ITEMS.filter((i) => i.href === '/settings') : NAV_ITEMS;
   return (
     <header class="navband">
-      <Link href="/status" class="navband-mark" aria-label="Splash GUI, status">
-        Splash GUI
+      <Link href="/status" class="navband-mark" aria-label="Splashboard, status">
+        Splashboard
       </Link>
       <div class="navband-meta meta" aria-label="Engine">
         {/* Each separator trails its item inside one group, so a wrapped line never starts with "·". */}

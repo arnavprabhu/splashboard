@@ -215,7 +215,7 @@ def shell_check(paths: Paths, home: Path, runner: Runner = run_shell) -> Check:
             path, line, _ = found
             fix = [
                 f"the `brew shellenv` at {home_relative(path)}:{line} puts Homebrew ahead of "
-                f"{shim_text}. Remove that line, or keep it above every Splash GUI PATH block, "
+                f"{shim_text}. Remove that line, or keep it above every Splashboard PATH block, "
                 "then open a new terminal"
             ]
         return Check(
@@ -287,7 +287,7 @@ def permissions_check(paths: Paths) -> Check:
         "permissions",
         "warn",
         title,
-        detail=["Other users on this Mac can read Splash GUI's private files."],
+        detail=["Other users on this Mac can read Splashboard's private files."],
         fix=[" && ".join(f"chmod {wanted:o} {home_relative(p)}" for p, wanted in loose)],
     )
 
@@ -302,7 +302,7 @@ def engine_check(info: Any) -> Check:
             detail=[str(info.error)] if info.error else [],
             fix=["brew install incoai/tap/splash"],
         )
-    title = f"Splash {info.version} · {info.cli}   (Splash GUI supports ≥ 1.3.0, < 1.4.0)"
+    title = f"Splash {info.version} · {info.cli}   (Splashboard supports ≥ 1.3.0, < 1.4.0)"
     if info.support == "supported":
         return Check("engine", "ok", title)
     status = "fail" if info.support == "too_old" else "warn"
@@ -351,7 +351,7 @@ def summary(checks: list[Check]) -> dict[str, int]:
 
 def render(checks: list[Check], style: Style, now: datetime | None = None) -> list[str]:
     now = now or datetime.now()
-    lines = [style.bold(f"Splash GUI doctor · {now:%Y-%m-%d %H:%M}")]
+    lines = [style.bold(f"Splashboard doctor · {now:%Y-%m-%d %H:%M}")]
     titles = dict(GROUPS)
     for group, _ in GROUPS:
         members = [c for c in checks if c.group == group]

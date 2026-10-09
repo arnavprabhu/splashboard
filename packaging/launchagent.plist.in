@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  LaunchAgent template for the packaged Splash GUI.app (docs/plans/packaging.md, PKG-4).
+  LaunchAgent template for the packaged Splashboard.app (docs/plans/packaging.md, PKG-4).
   packaging/scripts/build-app.sh fills the @...@ placeholders and writes the result to
   Contents/Library/LaunchAgents/<agent label>.plist, where SMAppService.agent(plistName:) finds it.
 

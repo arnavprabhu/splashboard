@@ -51,8 +51,8 @@ public enum DevAgentMigration {
         return actions
     }
 
-    /// Labels of earlier identities. Empty until the D62 switch, which adds `ai.splashgui.manager`.
-    public static let legacyLabels: [String] = []
+    /// Labels of earlier identities: the placeholder before the D62 switch (PKG-16).
+    public static let legacyLabels: [String] = ["ai.splashgui.manager"]
 
     /// `launchctl print gui/<uid>/<label>`, or nil when launchd has no such job.
     public static func launchctlPrint(_ label: String) -> String? {

@@ -1,5 +1,5 @@
-Splash GUI
-Copyright 2026 The Splash GUI authors
+Splashboard
+Copyright 2026 The Splashboard authors
 
 This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 
@@ -15,4 +15,4 @@ The runtime's native code is not covered by THIRD_PARTY.txt either: OpenSSL 3.5.
 expat 2.8.5, bzip2 1.0.8, libmpdec, libffi, HACL*, SQLite, liblzma, and Tcl and Tk
 9.0.4 with their itcl and thread extensions. Their license texts are not in the app
 yet (SPEC.md Q39).
-Splash GUI is not an official inco.ai product.
+Splashboard is not an official inco.ai product.

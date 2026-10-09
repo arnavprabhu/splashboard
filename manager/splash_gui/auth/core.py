@@ -1,7 +1,7 @@
 """Admin sessions and the CLI token (SPEC §8.2 security.admin_requires_key, §14, §17).
 
 - **Session cookie** `splash_gui_session`: `v1.<expiry>.<nonce>.<signature>`, signed with
-  HMAC-SHA256 under the session secret (Keychain `ai.splashgui.session`) and bound to a
+  HMAC-SHA256 under the session secret (Keychain `<prefix>.session`) and bound to a
   fingerprint of the current API key, so rotating the key logs every browser out.
   Sessions survive manager restarts; logout revokes the nonce until it would expire,
   and the revocation is kept in `run/revoked-sessions.json` (D58) so it survives too.

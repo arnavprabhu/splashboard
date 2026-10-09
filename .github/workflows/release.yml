@@ -1,16 +1,14 @@
-# Release Splash GUI (SPEC §19, §20.3; docs/plans/packaging.md PKG-13).
+# Release Splashboard (SPEC §19, §20.3; docs/plans/packaging.md PKG-13).
 #
-# On a `v*` tag: build the web admin, the bundled runtime and the app, sign it with Developer ID inside out,
-# notarize and staple the app, build and sign the DMG, notarize and staple the DMG, write the Sparkle appcast,
-# publish the DMG and the appcast as a GitHub Release in the public releases repo (D70), and open the cask PR (PKG-14).
+# On a `v*` tag: build the web admin, the bundled runtime and the app, sign it ad hoc inside out (D102: no Developer
+# ID, no notarization), build the DMG, write the Sparkle appcast with the owner's key, publish the DMG and the appcast
+# as a GitHub Release of this repo (D103), and open the cask PR (PKG-14).
 #
-# workflow_dispatch with dry_run (the default): the same build, signed ad hoc with a Sparkle key made in the job,
-# no notarization, nothing published; the DMG and appcast.xml are uploaded as workflow artifacts.
+# workflow_dispatch with dry_run (the default): the same build with a Sparkle key made in the job, nothing published;
+# the DMG and appcast.xml are uploaded as workflow artifacts.
 #
-# Secrets (real runs only; docs/plans/packaging.md "Blocked on the owner"): DEVELOPER_ID_P12_BASE64,
-# DEVELOPER_ID_P12_PASSWORD, KEYCHAIN_PASSWORD, NOTARY_API_KEY_P8, NOTARY_API_KEY_ID, NOTARY_API_ISSUER_ID,
-# SPARKLE_ED_PRIVATE_KEY, RELEASES_TOKEN, HOMEBREW_TAP_TOKEN. packaging/identity.env must carry SU_FEED_URL and
-# SU_PUBLIC_ED_KEY for a real run.
+# Secrets (real runs only): SPARKLE_ED_PRIVATE_KEY and HOMEBREW_TAP_TOKEN. The release itself uses the workflow's
+# GITHUB_TOKEN. packaging/identity.env must carry SU_FEED_URL and SU_PUBLIC_ED_KEY for a real run.
 name: release
 
 on:
@@ -19,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: Ad hoc signing, a throwaway Sparkle key, no notarization, nothing published
+        description: A throwaway Sparkle key, nothing published
         type: boolean
         default: true
 
@@ -32,14 +30,16 @@ permissions:
 
 env:
   SPLASH_GUI_SECRETS: memory
-  RELEASES_REPO: arnavprabhu/splash-gui-releases
+  SPLASH_GUI_SIGN_IDENTITY: '-'
 
 jobs:
   release:
-    name: build, sign, notarize, publish
+    name: build, sign, publish
     runs-on: macos-26
-    # 45 minutes for the build (PKG-13 rule) plus up to 30 for notarization (PKG-8 rule).
-    timeout-minutes: 75
+    # 45 minutes for the build (PKG-13 rule).
+    timeout-minutes: 45
+    permissions:
+      contents: write
     env:
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
     steps:
@@ -90,27 +90,6 @@ jobs:
           chmod 600 "$key"
           echo "SPARKLE_KEY_FILE=$key" >> "$GITHUB_ENV"
 
-      - name: Signing identity
-        env:
-          DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
-          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          if [[ "$DRY_RUN" == true ]]; then
-            echo "SPLASH_GUI_SIGN_IDENTITY=-" >> "$GITHUB_ENV"
-          else
-            identity="$(packaging/scripts/import-cert.sh import)"
-            echo "SPLASH_GUI_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
-          fi
-
-      - name: Notary key
-        if: env.DRY_RUN != 'true'
-        env:
-          NOTARY_API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
-        run: |
-          printf '%s' "$NOTARY_API_KEY_P8" > "$RUNNER_TEMP/notary.p8"
-          chmod 600 "$RUNNER_TEMP/notary.p8"
-
       - name: make web
         run: make web
       - name: make runtime
@@ -120,38 +99,16 @@ jobs:
       - name: make app (signed by sign.sh)
         run: make app
 
-      - name: Notarize and staple the app
-        if: env.DRY_RUN != 'true'
-        env:
-          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
-          NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
-        run: |
-          packaging/scripts/notarize.sh --key "$RUNNER_TEMP/notary.p8" --key-id "$NOTARY_API_KEY_ID" \
-            --issuer "$NOTARY_API_ISSUER_ID" "build/package/Splash GUI.app"
-
       - name: make dmg
         run: |
-          if [[ "$DRY_RUN" == true ]]; then
-            packaging/scripts/make-dmg.sh --out build/package/release
-          else
-            packaging/scripts/make-dmg.sh --out build/package/release --identity "$SPLASH_GUI_SIGN_IDENTITY"
-          fi
+          packaging/scripts/make-dmg.sh --out build/package/release
           dmg="$(ls build/package/release/*.dmg)"
           echo "DMG=$dmg" >> "$GITHUB_ENV"
           echo "VERSION=$(basename "$dmg" .dmg | sed 's/.*-//')" >> "$GITHUB_ENV"
 
-      - name: Notarize and staple the DMG
-        if: env.DRY_RUN != 'true'
-        env:
-          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
-          NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
-        run: |
-          packaging/scripts/notarize.sh --key "$RUNNER_TEMP/notary.p8" --key-id "$NOTARY_API_KEY_ID" \
-            --issuer "$NOTARY_API_ISSUER_ID" "$DMG"
-
       - name: Appcast
         run: |
-          prefix="https://github.com/$RELEASES_REPO/releases/download/v$VERSION/"
+          prefix="https://github.com/$GITHUB_REPOSITORY/releases/download/v$VERSION/"
           packaging/scripts/appcast.sh --ed-key-file "$SPARKLE_KEY_FILE" --download-url-prefix "$prefix" \
             build/package/release
 
@@ -167,23 +124,22 @@ jobs:
             build/package/release/appcast.xml
           if-no-files-found: error
 
-      - name: Publish to the releases repo
+      - name: Publish the release
         if: env.DRY_RUN != 'true'
         env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "v$VERSION" "$DMG" build/package/release/appcast.xml \
-            --repo "$RELEASES_REPO" --title "Splash GUI $VERSION" \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --title "Splashboard $VERSION" \
             --notes-file "packaging/release-notes/$VERSION.html"
 
       - name: Cask PR
         if: env.DRY_RUN != 'true'
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          RELEASES_REPO: ${{ github.repository }}
         run: packaging/scripts/render-cask.sh --dmg "$DMG" --pull-request
 
-      - name: Delete the signing keychain and keys
+      - name: Delete the Sparkle key
         if: always()
-        run: |
-          rm -f "$RUNNER_TEMP/sparkle-ed25519.key" "$RUNNER_TEMP/notary.p8"
-          if [[ "$DRY_RUN" != true ]]; then packaging/scripts/import-cert.sh delete; fi
+        run: rm -f "$RUNNER_TEMP/sparkle-ed25519.key"

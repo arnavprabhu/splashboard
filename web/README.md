@@ -1,4 +1,4 @@
-# Splash GUI web admin
+# Splashboard web admin
 
 Preact + Vite + TypeScript SPA served by the manager at `/admin` (SPEC §10, §18, §20.2).
 

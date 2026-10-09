@@ -65,8 +65,8 @@ struct PresentationTests {
         #expect(Presentation.chipLabel(engine("starting", phase: "loading")) == "Loading")
         #expect(Presentation.chipLabel(engine("crashed")) == "Restarting")
         #expect(Presentation.chipLabel(engine("idle_released")) == "Idle")
-        #expect(Presentation.accessibilityLabel(engine("ready"), manager: .running) == "Splash GUI: Ready")
-        #expect(Presentation.accessibilityLabel(nil, manager: .down) == "Splash GUI: Offline")
+        #expect(Presentation.accessibilityLabel(engine("ready"), manager: .running) == "Splashboard: Ready")
+        #expect(Presentation.accessibilityLabel(nil, manager: .down) == "Splashboard: Offline")
     }
 
     @Test func headers() {
@@ -88,9 +88,9 @@ struct PresentationTests {
         let refusal = engine("failed", extra: ["error": ["kind": "budget_refusal", "code": "x", "message": "m"]])
         #expect(Presentation.header(engine: refusal, manager: .running, liveTps: nil)
             == "! Qwen3.8-27B-4bit does not fit in memory")
-        #expect(Presentation.header(engine: nil, manager: .down, liveTps: nil) == "Splash GUI is not running")
-        #expect(Presentation.header(engine: nil, manager: .starting, liveTps: nil) == "Starting Splash GUI…")
-        #expect(Presentation.header(engine: nil, manager: .failedToStart("x"), liveTps: nil) == "Splash GUI failed to start")
+        #expect(Presentation.header(engine: nil, manager: .down, liveTps: nil) == "Splashboard is not running")
+        #expect(Presentation.header(engine: nil, manager: .starting, liveTps: nil) == "Starting Splashboard…")
+        #expect(Presentation.header(engine: nil, manager: .failedToStart("x"), liveTps: nil) == "Splashboard failed to start")
     }
 
     @Test func versionAndProgressLines() {

@@ -1,4 +1,4 @@
-"""Remove Splash GUI data: `POST /uninstall/plan` and `POST /uninstall` (SPEC §19, D72, D36;
+"""Remove Splashboard data: `POST /uninstall/plan` and `POST /uninstall` (SPEC §19, D72, D36;
 docs/plans/packaging.md PKG-12)."""
 
 from __future__ import annotations

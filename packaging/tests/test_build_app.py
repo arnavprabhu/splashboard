@@ -122,7 +122,7 @@ def test_out_under_build_passes_the_guard(tmp_path: Path) -> None:
         ".PHONY: web\nweb:\n\tfalse\n", encoding="utf-8"
     )
     result = run(
-        script, "--out", str(tmp_path / "repo" / "build" / "package" / "Splash GUI.app")
+        script, "--out", str(tmp_path / "repo" / "build" / "package" / "Splashboard.app")
     )
     assert result.returncode == 1
     assert "make web failed" in result.stderr
@@ -134,7 +134,7 @@ def test_default_variant_under_build_verify_is_refused(tmp_path: Path) -> None:
     # The default variant has the owner's bundle id and agent label, so it may not be written under build/verify/.
     root = tmp_path / "repo"
     script = skeleton(root)
-    out = root / "build" / "verify" / "run-1" / "Splash GUI.app"
+    out = root / "build" / "verify" / "run-1" / "Splashboard.app"
     result = run(script, "--out", str(out))
     assert result.returncode == 1
     assert "--variant default may not write under" in result.stderr
@@ -155,7 +155,7 @@ def test_verify_home_outside_build_verify_is_refused(tmp_path: Path) -> None:
         "--variant",
         "verify",
         "--out",
-        str(root / "build" / "package" / "Splash GUI.app"),
+        str(root / "build" / "package" / "Splashboard.app"),
         verify_home=str(home),
     )
     assert result.returncode == 1
@@ -172,7 +172,7 @@ def test_verify_home_with_parent_traversal_is_refused(tmp_path: Path) -> None:
         "--variant",
         "verify",
         "--out",
-        str(root / "build" / "package" / "Splash GUI.app"),
+        str(root / "build" / "package" / "Splashboard.app"),
         verify_home=str(root / "build" / "verify" / ".." / ".." / "outside-home"),
     )
     assert result.returncode == 1
@@ -193,7 +193,7 @@ def test_verify_home_through_a_symlink_is_refused(tmp_path: Path) -> None:
         "--variant",
         "verify",
         "--out",
-        str(root / "build" / "package" / "Splash GUI.app"),
+        str(root / "build" / "package" / "Splashboard.app"),
         verify_home=str(root / "build" / "verify" / "escape" / "home"),
     )
     assert result.returncode == 1
@@ -213,7 +213,7 @@ def test_verify_home_through_a_dangling_symlink_is_refused(tmp_path: Path) -> No
         "--variant",
         "verify",
         "--out",
-        str(root / "build" / "package" / "Splash GUI.app"),
+        str(root / "build" / "package" / "Splashboard.app"),
         verify_home=str(root / "build" / "verify" / "dangle" / "home"),
     )
     assert result.returncode == 1
@@ -234,7 +234,7 @@ def test_verify_home_under_build_verify_passes_the_guard(tmp_path: Path) -> None
         "--variant",
         "verify",
         "--out",
-        str(root / "build" / "package" / "Splash GUI.app"),
+        str(root / "build" / "package" / "Splashboard.app"),
         verify_home=str(home),
     )
     assert result.returncode == 1
@@ -248,7 +248,7 @@ def test_verify_home_under_build_verify_passes_the_guard(tmp_path: Path) -> None
 def test_missing_input_stops_before_the_build(tmp_path: Path, omit: str) -> None:
     root = tmp_path / "repo"
     script = skeleton(root, omit=omit)
-    result = run(script, "--out", str(root / "build" / "package" / "Splash GUI.app"))
+    result = run(script, "--out", str(root / "build" / "package" / "Splashboard.app"))
     assert result.returncode == 1
     assert "missing" in result.stderr
     assert Path(omit).name in result.stderr

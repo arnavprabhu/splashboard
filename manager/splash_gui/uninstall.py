@@ -1,4 +1,4 @@
-"""Remove Splash GUI data (SPEC §19, D72; docs/plans/packaging.md PKG-12).
+"""Remove Splashboard data (SPEC §19, D72; docs/plans/packaging.md PKG-12).
 
 `POST /uninstall/plan` lists what would go, with sizes; `POST /uninstall` runs the steps in
 SPEC §19 order: restore the integrations (all of them, or nothing else happens: D36), remove
@@ -74,7 +74,9 @@ def _guard_base(base: Path, home: Path) -> Path:
         or home_resolved.is_relative_to(resolved)
     ):
         raise ApiError(
-            409, f"Refusing to delete {resolved}: it is not a Splash GUI data folder", "unsafe_home"
+            409,
+            f"Refusing to delete {resolved}: it is not a Splashboard data folder",
+            "unsafe_home",
         )
     return resolved
 

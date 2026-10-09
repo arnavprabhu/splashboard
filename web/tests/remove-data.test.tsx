@@ -1,5 +1,5 @@
 /**
- * Settings → About → Remove Splash GUI data… (SPEC §19, PKG-12): the plan's sizes, models and cache
+ * Settings → About → Remove Splashboard data… (SPEC §19, PKG-12): the plan's sizes, models and cache
  * unticked by default, the typed DELETE they need, the request body, and the menu bar app case.
  */
 import { fireEvent, render, screen, waitFor } from '@testing-library/preact';
@@ -55,7 +55,7 @@ function sentBody(spy: { mock: { calls: unknown[][] } }): Record<string, unknown
 
 afterEach(() => vi.restoreAllMocks());
 
-describe('Remove Splash GUI data', () => {
+describe('Remove Splashboard data', () => {
   it('lists the sizes with models and cache unticked, and removes only the data by default', async () => {
     const spy = stubFetch(PLAN);
     render(<RemoveData />);
@@ -88,7 +88,7 @@ describe('Remove Splash GUI data', () => {
     stubFetch({ ...PLAN, app_connected: true });
     render(<RemoveData />);
     fireEvent.click(screen.getByTestId('remove-data'));
-    expect(await screen.findByText(/Use About → Remove Splash GUI Data… in the app/)).toBeTruthy();
+    expect(await screen.findByText(/Use About → Remove Splashboard Data… in the app/)).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Remove' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

@@ -3,9 +3,6 @@ old item. Runs on the in-memory backend; nothing touches the real Keychain."""
 
 from __future__ import annotations
 
-import logging
-from pathlib import Path
-
 import pytest
 
 from splash_gui import app as app_module
@@ -62,25 +59,26 @@ def test_an_item_already_under_the_new_name_wins_and_the_old_copy_stays() -> Non
 
 
 def test_the_manager_moves_items_at_startup_once_a_legacy_prefix_is_named(
-    paths: Paths, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    paths: Paths, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     backend = MemoryBackend()
     backend.set(f"{OLD}.apikey", "sk-splash-keep-me")
     monkeypatch.setattr(secrets_module, "KEYCHAIN_PREFIX", NEW)
     monkeypatch.setattr(secrets_module, "LEGACY_PREFIXES", (OLD,))
-    monkeypatch.setattr(secrets_module, "suffix_of", lambda name: name.removeprefix(f"{OLD}."))
-    application = create_app(AppConfig(paths=paths, secrets=SecretStore(backend)))
 
-    with caplog.at_level(logging.INFO):
-        app_module._migrate_keychain_prefix(application.state.manager)
+    # The move runs while the app is built, before ensure_api_key could create a new key.
+    create_app(AppConfig(paths=paths, secrets=SecretStore(backend)))
 
     assert backend.get(f"{NEW}.apikey") == "sk-splash-keep-me"
     assert backend.get(f"{OLD}.apikey") is None
 
 
-def test_without_a_legacy_prefix_nothing_is_touched(paths: Paths, tmp_path: Path) -> None:
+def test_without_a_legacy_prefix_nothing_is_touched(
+    paths: Paths, monkeypatch: pytest.MonkeyPatch
+) -> None:
     backend = MemoryBackend()
     backend.set(f"{OLD}.apikey", "sk-splash-abc")
+    monkeypatch.setattr(secrets_module, "LEGACY_PREFIXES", ())
     application = create_app(AppConfig(paths=paths, secrets=SecretStore(backend)))
 
     app_module._migrate_keychain_prefix(application.state.manager)

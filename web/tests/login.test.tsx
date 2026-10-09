@@ -18,7 +18,7 @@ function json(status: number, body: unknown): Response {
   return new Response(body === null ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
-const AUTH_REQUIRED = { error: { message: 'Sign in to Splash GUI', type: 'authentication_error', code: 'auth_required' } };
+const AUTH_REQUIRED = { error: { message: 'Sign in to Splashboard', type: 'authentication_error', code: 'auth_required' } };
 const SESSION = { admin_requires_key: true, authenticated: true, method: 'session' };
 
 type Handler = (method: string, path: string, body: string | undefined) => Response | undefined;

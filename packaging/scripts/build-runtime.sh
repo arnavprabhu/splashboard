@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the bundled Python runtime for the packaged Splash GUI.app (docs/plans/packaging.md, PKG-2).
+# Builds the bundled Python runtime for the packaged Splashboard.app (docs/plans/packaging.md, PKG-2).
 #
 #   packaging/scripts/build-runtime.sh          # → build/package/manager/python plus splash_gui and its locked deps
 #   make runtime                                 # the same, through the Makefile
