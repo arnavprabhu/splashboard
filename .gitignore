@@ -44,3 +44,7 @@ build/package/
 /DESIGN.md
 /docs/
 /.claude/
+
+# Local secrets
+.env
+.env.*
