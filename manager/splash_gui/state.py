@@ -26,18 +26,12 @@ from .jobs import Jobs
 from .paths import Paths
 from .secrets import SecretStore
 from .settings.store import Change, SettingsStore
+from .system.info import memory_bytes as _physical_memory
 from .system.macos import MacOS
 from .usage.db import UsageDB
 
 DISCOVERY_TTL_S = 60.0
 UPDATE_CHECK_ENV = "SPLASH_GUI_UPDATE_CHECK"
-
-
-def _physical_memory() -> int:
-    try:
-        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
-    except (ValueError, OSError):
-        return 0
 
 
 @dataclass

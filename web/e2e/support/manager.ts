@@ -124,6 +124,9 @@ export async function startManager(options: ManagerOptions = {}): Promise<RealMa
     SPLASH_GUI_SECRETS: 'memory',
     SPLASH_GUI_REAL_SPLASH: FAKE_SPLASH,
     SPLASH_GUI_FAKE_DATA: join(home, 'fake-data'),
+    // The same Mac on every machine: GitHub's macOS runners are 7 GB M1s (system/info.py).
+    SPLASH_GUI_FAKE_CHIP: 'Apple M5 Pro',
+    SPLASH_GUI_FAKE_MEMORY: String(64 * 1024 ** 3),
     HF_HUB_CACHE: join(home, 'models'),
     FAKE_SPLASH_LOAD_SECONDS: '0.2',
     FAKE_SPLASH_TOKS: '400',

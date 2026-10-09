@@ -29,10 +29,21 @@ REPO = Path(__file__).resolve().parents[2]
 FAKE_SPLASH = REPO / "scripts" / "fake_splash"
 
 
+# The Mac every test except the real-engine ones sees (system/info.py), so results do
+# not depend on the runner: GitHub's macOS runners are 7 GB M1s.
+FAKE_CHIP = "Apple M5 Pro"
+FAKE_MEMORY = 64 * 1024**3
+
+
 @pytest.fixture(autouse=True)
-def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def isolated_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> Path:
     """Every test gets its own SPLASH_GUI_HOME and in-memory secrets: never ~/.splash."""
     home = tmp_path / "splash-home"
+    if request.node.get_closest_marker("real") is None:
+        monkeypatch.setenv("SPLASH_GUI_FAKE_CHIP", FAKE_CHIP)
+        monkeypatch.setenv("SPLASH_GUI_FAKE_MEMORY", str(FAKE_MEMORY))
     monkeypatch.setenv("SPLASH_GUI_HOME", str(home))
     monkeypatch.setenv("SPLASH_GUI_SECRETS", "memory")
     monkeypatch.setenv("SPLASH_GUI_FAKE_DATA", str(home / "fake-data"))

@@ -30,6 +30,27 @@ def _sysctl(name: str) -> str | None:
     return _run(["/usr/sbin/sysctl", "-n", name])
 
 
+# Tests and CI set these so a run behaves the same on any Mac: GitHub's runners are 7 GB
+# M1s, where the real values would refuse the chip and fit no model.
+FAKE_CHIP_ENV = "SPLASH_GUI_FAKE_CHIP"
+FAKE_MEMORY_ENV = "SPLASH_GUI_FAKE_MEMORY"
+
+
+def chip_name() -> str | None:
+    return os.environ.get(FAKE_CHIP_ENV) or _sysctl("machdep.cpu.brand_string")
+
+
+def memory_bytes() -> int:
+    """Physical memory in bytes, or 0 when unknown."""
+    fake = _int(os.environ.get(FAKE_MEMORY_ENV))
+    if fake:
+        return fake
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (ValueError, OSError):
+        return _int(_sysctl("hw.memsize")) or 0
+
+
 def _int(text: str | None) -> int | None:
     try:
         return int(text) if text is not None else None
@@ -78,8 +99,8 @@ def power() -> PowerInfo:
 
 
 def system_info(models_dir: Path, cache_dir: Path) -> SystemInfo:
-    chip = _sysctl("machdep.cpu.brand_string")
-    memory = _int(_sysctl("hw.memsize")) or 0
+    chip = chip_name()
+    memory = memory_bytes()
     macos_version = platform.mac_ver()[0] or platform.release()
     reasons: list[str] = []
     arch = platform.machine()
