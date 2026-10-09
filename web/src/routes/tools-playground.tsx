@@ -31,6 +31,16 @@ const copyLabel = (k: SnippetKind) => t(`tools.pg.copy.${k}`);
 
 const ms = (v: number | null) => (v === null ? "—" : `${formatCount(Math.round(v))} ms`);
 
+/** The body's `model` value, or null when the body has none or does not parse. */
+function modelOf(text: string): string | null {
+  try {
+    const value = JSON.parse(text) as { model?: unknown };
+    return typeof value?.model === "string" ? value.model : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function Playground() {
   const active = engine.value?.model ?? "";
   const [endpoint, setEndpoint] = useState<EndpointId>("chat");
@@ -54,6 +64,13 @@ export default function Playground() {
   const lastResponseId = useRef<string | null>(null);
   const ctrl = useRef<AbortController | null>(null);
   useEffect(() => () => ctrl.current?.abort(), []);
+  // The page can open before the engine state arrives, so the first template has an empty
+  // model. Fill it in once the active model is known; a model the user typed stays.
+  useEffect(() => {
+    if (!active) return;
+    setBody((text) => (modelOf(text) === "" ? withModel(text, active) : text));
+    if (ep.param === "model_id") setParam((p) => p || active);
+  }, [active]);
   const keyRequired = !!(settings.value?.settings?.global?.security as { api_key_required?: boolean } | undefined)?.api_key_required;
 
   function choose(id: EndpointId) {

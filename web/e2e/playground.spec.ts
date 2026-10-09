@@ -81,3 +81,22 @@ test('Copy as curl puts a runnable snippet on the clipboard', async ({ page, con
   expect(text).toContain('"stream":true');
   expect(text).not.toContain('Authorization');
 });
+
+test('the template gets the active model even when the engine state arrives after the page', async ({ page }) => {
+  await mockManager(page, { engine: READY });
+  // The engine answer comes late, so the template is first built with no model.
+  await page.route('**/api/admin/engine', async (r) => {
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(READY) });
+  });
+  const bodies: Array<{ model?: string }> = [];
+  await page.route('**/v1/chat/completions', (r) => {
+    bodies.push(JSON.parse(r.request().postData() ?? '{}') as { model?: string });
+    return r.fulfill({ status: 200, contentType: 'text/event-stream', body: STREAM });
+  });
+  await page.goto('/admin/tools/playground');
+  await expect(page.getByText(`${MODEL}`, { exact: false }).first()).toBeVisible();
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect(page.getByText('[DONE]').first()).toBeVisible();
+  expect(bodies[0]?.model).toBe(MODEL);
+});

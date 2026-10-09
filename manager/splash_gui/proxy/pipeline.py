@@ -557,9 +557,11 @@ class ProxyPipeline:
         if shape in ("chat", "completions", "responses", "messages"):
             body, injected = inject(shape, body, overlay)
         requested = body.get("model")
-        if route.model is not None and isinstance(requested, str) and requested:
+        if route.model is not None and isinstance(requested, str):
             names = set(self.sup.aliases()) | {route.model}
-            if route.profile is not None or requested not in names:
+            # "" was routed to the active model, but Splash would answer `model  not found`,
+            # so it gets the name. A missing model stays missing: Splash accepts that.
+            if not requested or route.profile is not None or requested not in names:
                 body = {**body, "model": route.model}
         return await self._forward(
             request,

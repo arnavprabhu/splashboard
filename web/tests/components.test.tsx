@@ -73,6 +73,14 @@ describe('NavBand', () => {
   });
 });
 
+describe('NavBand before the first engine state', () => {
+  it('says Connecting, not Offline, until the engine state arrives', () => {
+    withRouter(<NavBand connecting />);
+    expect(screen.getByRole('status').textContent).toContain('Connecting');
+    expect(screen.queryByText('Offline')).toBeNull();
+  });
+});
+
 describe('SubNav', () => {
   it('renders the Tools tabs', () => {
     withRouter(<SubNav items={TOOLS_TABS} label="Tools" />, '/tools/benchmark');

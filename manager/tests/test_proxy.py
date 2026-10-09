@@ -574,6 +574,13 @@ def test_empty_model_goes_to_the_active_model(h_ready: EngineHarness):
     assert "model" not in last_body(h, "/v1/chat/completions")
 
 
+def test_an_empty_model_string_is_sent_as_the_active_model(h_ready: EngineHarness):
+    """Splash refuses `"model": ""` (`model  not found`); the proxy names the routed model."""
+    h = h_ready
+    assert h.client.post("/v1/chat/completions", json={"model": "", **CHAT}).status_code == 200
+    assert last_body(h, "/v1/chat/completions")["model"] == MODEL
+
+
 def test_unknown_model_fallback(h_ready: EngineHarness):
     h = h_ready
     h.patch_settings({"global": {"routing": {"unknown_model_fallback": True}}})

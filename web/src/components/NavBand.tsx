@@ -40,6 +40,8 @@ export interface NavBandProps {
   engineMissing?: boolean;
   /** Logged out: no links, only the toggle. */
   linksHidden?: boolean;
+  /** The first engine state has not arrived yet: neither a state nor Offline. */
+  connecting?: boolean;
 }
 
 export function ThemeToggle() {
@@ -58,7 +60,7 @@ export function ThemeToggle() {
 }
 
 /** Wordmark · meta (engine version · model · state chip) · text links · theme toggle. */
-export function NavBand({ engineVersion, model, state, authEnabled, onLogout, tokps, modelsProgress, engineMissing, linksHidden }: NavBandProps) {
+export function NavBand({ engineVersion, model, state, authEnabled, onLogout, tokps, modelsProgress, engineMissing, linksHidden, connecting }: NavBandProps) {
   const [location] = useLocation();
   const items = linksHidden ? [] : engineMissing ? NAV_ITEMS.filter((i) => i.href === '/settings') : NAV_ITEMS;
   return (
@@ -77,7 +79,7 @@ export function NavBand({ engineVersion, model, state, authEnabled, onLogout, to
           <span aria-hidden="true">·</span>
         </span>
         <span class="navband-item">
-          <StatusChip state={state ?? null} />
+          <StatusChip state={state ?? null} label={connecting ? t('state.connecting') : undefined} />
           {tokps && <span aria-hidden="true">·</span>}
         </span>
         {tokps && (

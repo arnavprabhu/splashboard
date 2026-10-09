@@ -44,6 +44,12 @@ def isolated_home(
     if request.node.get_closest_marker("real") is None:
         monkeypatch.setenv("SPLASH_GUI_FAKE_CHIP", FAKE_CHIP)
         monkeypatch.setenv("SPLASH_GUI_FAKE_MEMORY", str(FAKE_MEMORY))
+    # Programs are looked up on the test's own PATH and home only: never the developer's
+    # login shell or Homebrew folder, where a real `claude` or `codex` may be installed.
+    from splash_gui.system import userpath
+
+    monkeypatch.setattr(userpath, "shell_path", lambda: "")
+    monkeypatch.setattr(userpath, "SYSTEM_DIRS", ())
     monkeypatch.setenv("SPLASH_GUI_HOME", str(home))
     monkeypatch.setenv("SPLASH_GUI_SECRETS", "memory")
     monkeypatch.setenv("SPLASH_GUI_FAKE_DATA", str(home / "fake-data"))

@@ -111,6 +111,7 @@ export const en = {
 
   // engine state chips
   'state.offline': 'Offline',
+  'state.connecting': 'Connecting',
   'state.stopped': 'Stopped',
   'state.preparing': 'Preparing',
   'state.loading': 'Loading',

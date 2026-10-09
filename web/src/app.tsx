@@ -250,6 +250,7 @@ export function Shell() {
           engineVersion={e?.engine_version ?? null}
           model={e?.model ?? null}
           state={offline ? null : (e?.state ?? null)}
+          connecting={!offline && e === null}
           authEnabled={a.authenticated && a.method === 'session'}
           onLogout={() => {
             void logout().finally(() => navigate('/login'));

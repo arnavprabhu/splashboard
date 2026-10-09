@@ -41,6 +41,7 @@ from ..schemas import (
 )
 from ..secrets import SecretName, SecretsError
 from ..settings import parsers, profile_reasoning_effort
+from ..system import userpath
 from ..usage.db import iso
 from .snapshots import encode_document, read_document, restore, snapshot
 
@@ -301,7 +302,8 @@ class IntegrationsService:
         launched = self.state.usage.last_launches()
         cli = []
         for name, (label, url) in CLIENTS.items():
-            path = shutil.which(name)
+            # The user's own PATH: launchd gives the packaged manager only the system's.
+            path = userpath.which(name, self.state.user_home)
             version = (
                 self.state.macos.run([path, "--version"]).stdout.strip().splitlines()
                 if path

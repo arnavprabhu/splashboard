@@ -1,12 +1,12 @@
 import { useEffect, useState } from "preact/hooks";
 import { Link, useSearchParams } from "wouter-preact";
-import { Empty } from "../components/States";
+import { Empty, Loading } from "../components/States";
 import { Section } from "../components/Section";
 import { SubNav } from "../components/SubNav";
 import { useApi } from "../lib/use-api";
 import { useTitle } from "../lib/title";
 import { stateDisplay } from "../lib/engine-state";
-import { engine, settings } from "../store";
+import { engine, managerReachable, settings } from "../store";
 import { liveSample, liveSampleAt, useLiveMetrics } from "../store/live";
 import { t } from "../strings/status";
 import { useInstalled } from "./models/hooks";
@@ -39,6 +39,12 @@ function readScope(param: string | null): Scope {
 export default function StatusPage() {
   useLiveMetrics();
   const e = engine.value;
+  // A moment to wait for the first engine state before rendering without one.
+  const [settling, setSettling] = useState(true);
+  useEffect(() => {
+    const timer = setTimeout(() => setSettling(false), 3000);
+    return () => clearTimeout(timer);
+  }, []);
   const installed = useInstalled();
   const [params, setParams] = useSearchParams();
   const scope = readScope(params.get("scope"));
@@ -107,6 +113,10 @@ export default function StatusPage() {
   const family = models?.find((m) => m.id === e?.model)?.family ?? null;
   const fullError = viewOf(e?.view).error ?? null;
   const showCharts = running || group === "frozen";
+
+  // Before the first engine state arrives there is nothing true to say yet ("No model
+  // loaded · Offline" would be wrong); the shell shows Offline itself once the manager fails.
+  if (e === null && settling && managerReachable.value !== false) return <Loading />;
 
   return (
     <>
