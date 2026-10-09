@@ -86,8 +86,10 @@ test('the stat tiles show the last reply, then live numbers while a reply runs',
   test.skip(info.project.name === 'phone', 'the panel is a column on desktop');
   await page.setViewportSize({ width: 1400, height: 900 });
   await chatMocks(page);
-  await page.route('**/v1/chat/completions', (r) =>
-    r.fulfill({
+  const client: Array<string | undefined> = [];
+  await page.route('**/v1/chat/completions', (r) => {
+    client.push(r.request().headers()['x-splashboard-client']);
+    return r.fulfill({
       headers: { 'content-type': 'text/event-stream' },
       body:
         [
@@ -97,8 +99,8 @@ test('the stat tiles show the last reply, then live numbers while a reply runs',
         ]
           .map((c) => `data: ${JSON.stringify(c)}\n\n`)
           .join('') + 'data: [DONE]\n\n',
-    }),
-  );
+    });
+  });
   await page.goto('/admin/chat/c1');
   const tile = (id: string) => page.getByTestId(`chat-tile-${id}`);
   await expect(tile('prefill')).toContainText('—');
@@ -111,6 +113,7 @@ test('the stat tiles show the last reply, then live numbers while a reply runs',
   await page.getByRole('textbox', { name: 'Message' }).fill('again');
   await page.getByRole('button', { name: 'Send' }).click();
   await expect(page.getByText('Done.')).toBeVisible();
+  expect(client).toEqual(['chat']);
   await expect(tile('prefill')).toContainText('2,049');
   await expect(tile('prefill')).toContainText('12,800 tok');
   await expect(tile('decode')).toContainText('70.5');

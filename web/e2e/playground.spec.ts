@@ -31,8 +31,10 @@ const STREAM = [
 test('Send goes through the profiles path, shows the stream and records one history row', async ({ page }) => {
   await mockManager(page, { engine: READY });
   const seen: string[] = [];
+  const client: Array<string | undefined> = [];
   await page.route('**/v1/chat/completions', (r) => {
     seen.push(r.request().url());
+    client.push(r.request().headers()['x-splashboard-client']);
     return r.fulfill({ status: 200, contentType: 'text/event-stream', body: STREAM });
   });
   await page.goto('/admin/tools/playground');
@@ -41,6 +43,8 @@ test('Send goes through the profiles path, shows the stream and records one hist
   await expect(page.getByText('[DONE]').first()).toBeVisible();
   expect(seen).toHaveLength(1);
   expect(new URL(seen[0]!).pathname).toBe('/v1/chat/completions');
+  // Usage history files it under the Playground, not the browser's User-Agent.
+  expect(client).toEqual(['playground']);
   await expect(page.locator('.pg-history-row')).toHaveCount(1);
   const stored = await page.evaluate(() => localStorage.getItem('playground.history'));
   const rows = JSON.parse(stored ?? '[]') as Array<{ path: string; mode: string; status: number | null }>;

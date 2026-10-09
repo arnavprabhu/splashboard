@@ -41,6 +41,19 @@ function shortName(id: string): string {
   return id.slice(id.indexOf("/") + 1);
 }
 
+/** One line, truncated in the middle so the variant at the end stays visible; the full ID is the tooltip. */
+export function MiddleTruncate({ text, title, tail = 10 }: { text: string; title?: string; tail?: number }) {
+  // Too short to be worth splitting: the head would be under its 8-character floor.
+  if (text.length <= tail + 8) return <span class="mono nowrap" title={title ?? text}>{text}</span>;
+  const cut = text.length - tail;
+  return (
+    <span class="mid-trunc mono" title={title ?? text}>
+      <span class="mid-trunc-head">{text.slice(0, cut)}</span>
+      <span class="mid-trunc-tail">{text.slice(cut)}</span>
+    </span>
+  );
+}
+
 function median(values: Array<number | null>): number | null {
   const v = values.filter((x): x is number => x !== null).sort((a, b) => a - b);
   if (!v.length) return null;
@@ -233,7 +246,7 @@ export default function Benchmark() {
                 ),
               },
               { key: "ts", label: t("tools.bm.col.when"), render: (r) => <span class="tnum nowrap">{when(r.ts)}</span> },
-              { key: "model", label: t("tools.model"), render: (r) => <span class="mono">{shortName(r.model)}</span> },
+              { key: "model", label: t("tools.model"), render: (r) => <MiddleTruncate text={shortName(r.model)} title={r.model} /> },
               { key: "engine", label: t("tools.bm.col.engine"), render: (r) => <span class="nowrap">{r.engine_version ? `Splash ${r.engine_version}` : DASH}</span> },
               { key: "state", label: t("tools.bm.col.state"), render: (r) => t(`tools.bm.state.${r.state}`) },
               { key: "decode", label: t("tools.bm.h.decode"), align: "right", render: (r) => tps(r.headline?.decode_tps) },

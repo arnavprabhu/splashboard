@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { ApiError } from "../api/client";
+import { ApiError, webClient } from "../api/client";
 import { Banner } from "../components/Banner";
 import { Button } from "../components/Button";
 import { CodeBlock } from "../components/CodeBlock";
@@ -111,7 +111,7 @@ export default function Playground() {
       const res = await fetch(url, {
         method: ep.method,
         credentials: "same-origin",
-        headers: ep.body ? { "Content-Type": "application/json", Accept: "application/json, text/event-stream" } : { Accept: "*/*" },
+        headers: { ...(ep.body ? { "Content-Type": "application/json", Accept: "application/json, text/event-stream" } : { Accept: "*/*" }), ...webClient("playground") },
         body: ep.body ? body : undefined,
         signal: abort.signal,
       });

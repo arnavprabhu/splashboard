@@ -1,5 +1,5 @@
 import { useState } from "preact/hooks";
-import { ApiError, api, request } from "../api/client";
+import { ApiError, api, request, webClient } from "../api/client";
 import type { TokenPieces } from "../api/models";
 import { Banner } from "../components/Banner";
 import { Button } from "../components/Button";
@@ -47,7 +47,7 @@ export default function Tokenizer() {
 }
 
 const tokenizeFn = (model: string | undefined) => async (content: string, add_special: boolean) =>
-  (await request<{ tokens: number[] }>("/tokenize", { body: { model, content, add_special } })).tokens;
+  (await request<{ tokens: number[] }>("/tokenize", { body: { model, content, add_special }, headers: webClient("tokenizer") })).tokens;
 
 /**
  * Pieces from the manager (`POST /tokenizer/pieces`: the model's own tokenizer under Splash's
@@ -194,6 +194,7 @@ function TemplateTab({ model, ready }: { model: string | undefined; ready: boole
       const toolList = JSON.parse(tools) as unknown[];
       const kw = JSON.parse(kwargs) as Record<string, unknown>;
       const res = await request<{ prompt: string }>("/apply-template", {
+        headers: webClient("tokenizer"),
         body: {
           model,
           messages: JSON.parse(messages),
@@ -284,6 +285,7 @@ function CountTab({ model, ready }: { model: string | undefined; ready: boolean 
     try {
       const toolList = JSON.parse(tools) as unknown[];
       const res = await request<{ input_tokens: number }>("/v1/messages/count_tokens", {
+        headers: webClient("tokenizer"),
         body: { model, messages: JSON.parse(messages), ...(system ? { system } : {}), ...(toolList.length ? { tools: toolList } : {}) },
       });
       setCount(res.input_tokens);

@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from splash_gui.proxy.shapes import constrained, inject
+from splash_gui.proxy.shapes import constrained, inject, web_client
 
 from .fakeengine import MODEL, MODEL_27B, EngineHarness
 
@@ -81,6 +81,66 @@ def test_no_think_profile_from_an_external_client_is_injected_and_logged(h_ready
     assert row["injected"] == {"reasoning_effort": "none"}
     assert row["status"] == 200
     assert row["prompt_tokens"] and row["completion_tokens"]
+
+
+# The Claude desktop app's built-in browser says "Claude/…" in its User-Agent.
+DESKTOP_BROWSER_UA = "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Claude/1.3.0 Chrome/138.0"
+SAME_ORIGIN = {"Origin": "http://127.0.0.1:8000", "Sec-Fetch-Site": "same-origin"}
+
+
+@pytest.mark.parametrize(
+    ("page", "label"),
+    [
+        ("playground", "splashboard-playground"),
+        ("chat", "splashboard-chat"),
+        ("judgments", "splashboard-judgments"),
+        ("tokenizer", "splashboard-tokenizer"),
+    ],
+)
+def test_web_admin_pages_are_recorded_under_their_own_client(
+    h_ready: EngineHarness, page: str, label: str
+):
+    h = h_ready
+    response = h.client.post(
+        "/v1/chat/completions",
+        json={"model": MODEL, **CHAT},
+        headers={"User-Agent": DESKTOP_BROWSER_UA, "X-Splashboard-Client": page, **SAME_ORIGIN},
+    )
+    assert response.status_code == 200, response.text
+    assert usage_row(h, response.headers["x-splash-request-id"])["client"] == label
+    assert "x-splashboard-client" not in last_engine_headers(h, "/v1/chat/completions")
+
+
+@pytest.mark.parametrize(
+    ("value", "headers"),
+    [
+        # Not one of the web admin's own names: falls back to the User-Agent.
+        ("claude-code", SAME_ORIGIN),
+        ("anything", SAME_ORIGIN),
+        # A known name without the manager's own Origin is ignored.
+        ("playground", {}),
+    ],
+)
+def test_the_web_client_header_cannot_name_another_client(
+    h_ready: EngineHarness, value: str, headers: dict[str, str]
+):
+    h = h_ready
+    response = h.client.post(
+        "/v1/chat/completions",
+        json={"model": MODEL, **CHAT},
+        headers={"User-Agent": DESKTOP_BROWSER_UA, "X-Splashboard-Client": value, **headers},
+    )
+    assert response.status_code == 200, response.text
+    assert usage_row(h, response.headers["x-splash-request-id"])["client"] == "claude-desktop"
+
+
+def test_web_client_accepts_only_its_own_names_from_its_own_origin():
+    assert web_client("playground", same_origin=True) == "splashboard-playground"
+    assert web_client(" Chat ", same_origin=True) == "splashboard-chat"
+    assert web_client("playground", same_origin=False) is None
+    assert web_client("claude-code", same_origin=True) is None
+    assert web_client("", same_origin=True) is None
+    assert web_client(None, same_origin=True) is None
 
 
 def test_an_explicit_field_is_never_overridden(h_ready: EngineHarness):

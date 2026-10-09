@@ -351,6 +351,8 @@ function TokensPerDay({ data, error, onRetry }: SeriesProps) {
             series={stacked.series.map((s) => ({ label: s.label, tone: s.tone }))}
             yFormat={formatCompact}
             empty={t("usage.history.heatmap_none")}
+            days
+            stacked
             bars
           />
           {stacked.series.length > 0 && (
@@ -387,6 +389,7 @@ function RequestsOverTime({ data, error, onRetry }: SeriesProps) {
           ]}
           yFormat={formatCompact}
           empty={t("usage.history.heatmap_none")}
+          days
         />
       )}
     </Section>

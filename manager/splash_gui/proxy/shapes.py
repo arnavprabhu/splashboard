@@ -318,6 +318,26 @@ def _f(value: Any, current: float | None) -> float | None:
     return current
 
 
+#: What the web admin's own pages send in `X-Splashboard-Client`, and the label each records.
+#: Only these values are accepted, and only from a same-origin page, so the header cannot file
+#: a request under another client's name (an agent, an SDK) or under an arbitrary string.
+WEB_CLIENTS = {
+    "playground": "splashboard-playground",
+    "chat": "splashboard-chat",
+    "judgments": "splashboard-judgments",
+    "tokenizer": "splashboard-tokenizer",
+}
+WEB_CLIENT_HEADER = "x-splashboard-client"
+
+
+def web_client(value: str | None, same_origin: bool) -> str | None:
+    """The label a web admin page asked for, or None when the header is absent, unknown or
+    sent from anywhere but the manager's own origin."""
+    if not same_origin or not value:
+        return None
+    return WEB_CLIENTS.get(value.strip().lower())
+
+
 def guess_client(user_agent: str | None, same_origin: bool = False) -> str | None:
     """A short client name from the User-Agent."""
     ua = (user_agent or "").lower()

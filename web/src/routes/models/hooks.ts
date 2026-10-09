@@ -5,7 +5,7 @@ import { useTitle } from '../../lib/title';
 import { activeDownloads, downloadProgress, downloads, refreshDownloads, useEvent } from '../../store';
 import { useApi } from '../../lib/use-api';
 import { listModels } from './api';
-import { pageTitle } from './logic';
+import { pageTitle } from './title';
 
 /** `42% · Models — Splashboard` while a download runs, updated at most once per second. */
 export function useModelsTitle(page: string): void {

@@ -1,7 +1,7 @@
 import type { ComponentChildren } from "preact";
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { Link, useLocation } from "wouter-preact";
-import { ApiError, api, request } from "../api/client";
+import { ApiError, api, request, webClient } from "../api/client";
 import { postStream } from "../api/stream";
 import type { AttachmentUpload, ChatList, McpCallResult, McpServers, McpToolList, ProfilesView } from "../api/models";
 import { Banner } from "../components/Banner";
@@ -524,7 +524,7 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
       for await (const evt of postStream("/v1/chat/completions", body, {
         signal: ctrl.signal,
         onHeaders: (h) => (requestId = h.get("x-splash-request-id")),
-        ...(waitForIdle ? { headers: { "X-Splash-Switch": "wait" } } : {}),
+        headers: { ...webClient("chat"), ...(waitForIdle ? { "X-Splash-Switch": "wait" } : {}) },
       })) {
         acc.push(evt.data);
         setWaiting(false);

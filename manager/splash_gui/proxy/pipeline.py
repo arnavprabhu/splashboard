@@ -37,7 +37,15 @@ from ..secrets import SecretName, SecretsError
 from ..settings import parsers as p
 from ..settings.effective import effective_profiles, sampling_defaults
 from ..usage.db import CANCELLED, CANCELLED_STATUS, iso
-from .shapes import SHAPES, Shape, UsageCapture, guess_client, inject
+from .shapes import (
+    SHAPES,
+    WEB_CLIENT_HEADER,
+    Shape,
+    UsageCapture,
+    guess_client,
+    inject,
+    web_client,
+)
 
 if TYPE_CHECKING:
     from ..state import ManagerState
@@ -67,6 +75,7 @@ DROP_REQUEST_HEADERS = frozenset(
         "te",
         "proxy-authorization",
         "x-splash-switch",
+        "x-splashboard-client",
         "sec-fetch-site",
         "sec-fetch-mode",
         "sec-fetch-dest",
@@ -807,6 +816,7 @@ class ProxyPipeline:
                     "profile": route.profile if route else None,
                     "endpoint": path,
                     "client": client_label
+                    or web_client(request.headers.get(WEB_CLIENT_HEADER), same_origin)
                     or guess_client(request.headers.get("user-agent"), same_origin),
                     "stream": stream,
                     "status": status,

@@ -28,10 +28,21 @@ export interface ChartProps {
   valueFormat?: (value: number) => string;
   /** x is unix seconds and the axis shows time (default); false for category/ordinal x. */
   time?: boolean;
+  /** Each x is a whole local day (usage history): the hidden table shows dates, not times. */
+  days?: boolean;
+  /** Each column is cumulative over the columns after it (stacked bars); the hidden table shows each series' own value. */
+  stacked?: boolean;
   /** Bars instead of lines (usage history). */
   bars?: boolean;
   /** A fixed y range, e.g. [0, 1] for fractions shown as percents (uPlot's empty auto-range is 0–100). */
   yRange?: [number, number];
+}
+
+/** The hidden table's label for one x value. */
+export function xLabel(x: number, props: Pick<ChartProps, 'time' | 'days'>): string {
+  if (props.time === false) return String(x);
+  const d = new Date(x * 1000);
+  return props.days ? d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : d.toLocaleTimeString('en-GB');
 }
 
 let loader: Promise<typeof uPlot> | null = null;
@@ -172,10 +183,10 @@ export function Chart(props: ChartProps) {
       )}
       {hasData && (
         <table class="visually-hidden">
-          <caption>{props.title ?? 'Chart'} — last samples</caption>
+          <caption>{props.title ?? props.ariaLabel ?? 'Chart'} — last samples</caption>
           <thead>
             <tr>
-              <th scope="col">Time</th>
+              <th scope="col">{props.days ? 'Day' : 'Time'}</th>
               {props.series.map((s) => (
                 <th key={s.label} scope="col">
                   {s.label}
@@ -186,9 +197,11 @@ export function Chart(props: ChartProps) {
           <tbody>
             {lastRows.map((i) => (
               <tr key={i}>
-                <td>{props.time === false ? String(xs[i]) : new Date((xs[i] ?? 0) * 1000).toLocaleTimeString('en-GB')}</td>
+                <td>{xLabel(xs[i] ?? 0, props)}</td>
                 {props.series.map((s, si) => {
-                  const v = props.data[si + 1]?.[i];
+                  let v = props.data[si + 1]?.[i];
+                  const below = props.stacked ? props.data[si + 2]?.[i] : null;
+                  if (typeof v === 'number' && typeof below === 'number') v -= below;
                   return <td key={s.label}>{v === null || v === undefined ? '—' : fmt(v)}</td>;
                 })}
               </tr>

@@ -94,6 +94,14 @@ export function parseErrorBody(body: unknown, status = 0): ErrorBody | null {
   return null;
 }
 
+/** The web admin's own pages that call the public API; the manager records their requests under
+ * `splashboard-<page>` instead of guessing from the browser's User-Agent. */
+export type WebClient = 'playground' | 'chat' | 'judgments' | 'tokenizer';
+
+export function webClient(page: WebClient): Record<string, string> {
+  return { 'X-Splashboard-Client': page };
+}
+
 export type Query = Record<string, string | number | boolean | null | undefined>;
 
 export interface RequestOptions {

@@ -1,5 +1,5 @@
 import { useState } from "preact/hooks";
-import { ApiError, request } from "../api/client";
+import { ApiError, request, webClient } from "../api/client";
 import { Banner } from "../components/Banner";
 import { Button, ExternalLink } from "../components/Button";
 import { SegmentedControl } from "../components/controls";
@@ -120,7 +120,7 @@ function SystemOne({ model }: { model: string }) {
     const started = performance.now();
     try {
       // The manager stamps `x-splash-request-id` on the relayed response (proxy/pipeline.py); the body alone lacks it.
-      const res = await request<Response>("/v1/systemone", { body, raw: true });
+      const res = await request<Response>("/v1/systemone", { body, raw: true, headers: webClient("judgments") });
       const requestId = res.headers.get("x-splash-request-id");
       const json = (await res.json()) as { answers?: Record<string, Record<string, unknown>>; usage?: { input_tokens?: number } };
       setResult({ answers: json.answers ?? {}, tokens: json.usage?.input_tokens ?? null, secs: (performance.now() - started) / 1000, requestId });
@@ -361,7 +361,7 @@ function Semif({ model }: { model: string }) {
     setBusy(true);
     setFailure(null);
     try {
-      setResult(await request<Record<string, unknown>>("/v1/judgments", { body }));
+      setResult(await request<Record<string, unknown>>("/v1/judgments", { body, headers: webClient("judgments") }));
     } catch (e) {
       setResult(null);
       setFailure(e instanceof Error ? e.message : String(e));
