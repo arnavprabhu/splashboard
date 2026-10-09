@@ -1,15 +1,38 @@
 # Splashboard
 
-A macOS app for serving, monitoring and chatting with models on the [Splash](https://github.com/incoai/splash) local inference engine: a SwiftUI menu bar app plus a web admin served by a local manager, laid out like oMLX and styled in a Swiss poster design.
+[![Latest release](https://img.shields.io/github/v/release/arnavprabhu/splashboard?label=download&color=E8432E)](https://github.com/arnavprabhu/splashboard/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/arnavprabhu/splashboard/total?color=111111)](https://github.com/arnavprabhu/splashboard/releases)
+[![CI](https://github.com/arnavprabhu/splashboard/actions/workflows/ci.yml/badge.svg)](https://github.com/arnavprabhu/splashboard/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-macOS%2026.4%2B%20·%20Apple%20silicon-black.svg)](#requirements)
+[![Built on Splash](https://img.shields.io/badge/built%20on-Splash-E8432E.svg)](https://github.com/incoai/splash)
 
-- **One URL.** The manager listens on `http://127.0.0.1:8000`, proxies the OpenAI- and Anthropic-compatible API (`/v1/*`) to one Splash process, and serves the admin at `/admin`.
-- **One active model, quick switching.** Install supported Qwen3.8-27B / Qwen3.6-35B-A3B builds (MLX 4-bit group 64, or GGUF), load one, switch from the menu bar or the admin.
-- **Everything in the GUI.** Welcome wizard (Homebrew, Splash, storage, presets, first model), live status and usage history, model downloads with compatibility checks, settings for every `splash serve` option with Splash's own validation, chat with tools and MCP, a playground, tokenizer, judgments and benchmarks, session-only agent launchers (`splash launch claude`) and desktop-app integrations.
+**The menu bar app for [Splash](https://github.com/incoai/splash), the local inference engine for Apple silicon.**
+Install Splash and a model in a few clicks, run it in the background, watch it live, chat with it, and point
+Claude Code, Codex and other coding agents at it, all on your own Mac.
+
+**[⬇ Download Splashboard for macOS](https://github.com/arnavprabhu/splashboard/releases/latest)** · or `brew install --cask arnavprabhu/tap/splashboard`
+
+## Why Splashboard
+Splash is fast, but it is a command-line engine that serves one model per process. Splashboard wraps it in an app:
+
+- **Set up in minutes.** A welcome wizard installs Homebrew and Splash, picks where models live, recommends a model that fits your Mac's memory, and downloads it.
+- **One local endpoint for everything.** OpenAI- and Anthropic-compatible `/v1` on `http://127.0.0.1:8000`, whatever model is loaded.
+- **Switch models fast.** Load Qwen3.8-27B or Qwen3.6-35B-A3B (MLX or GGUF) from the menu bar; the same URL serves whichever model is loaded.
+- **See what the engine is doing.** Live tokens per second, memory, cache and request history, from the menu bar or a full web dashboard.
+- **Coding agents, session-only.** `splash launch claude`, `codex`, `opencode`, `pi` or `hermes` runs the agent on your local model for that session and leaves its normal setup untouched. Claude Desktop and the Codex app connect with one click and are always restored.
+- **Chat and tools built in.** Chat with tools and MCP servers, a playground, a tokenizer and benchmarks.
+- **Private by default.** Everything runs on your Mac; secrets live in the macOS Keychain.
+- **Updates itself.** New versions arrive through **Check for Updates…** in the menu.
 
 > Repository: <https://github.com/arnavprabhu/splashboard> · [issues](https://github.com/arnavprabhu/splashboard/issues) · [releases](https://github.com/arnavprabhu/splashboard/releases).
 
 ## Install
-Download `Splashboard-<version>.dmg` from the [latest release](https://github.com/arnavprabhu/splashboard/releases/latest) and drag Splashboard to Applications. Updates arrive through **Check for Updates…** in the menu.
+Download `Splashboard-<version>.dmg` from the [latest release](https://github.com/arnavprabhu/splashboard/releases/latest) and drag Splashboard to Applications, or install it with Homebrew:
+
+```bash
+brew install --cask arnavprabhu/tap/splashboard
+```
 
 Splashboard is signed ad hoc and **not notarized**, so macOS blocks the first open. Open System Settings → Privacy & Security and click **Open Anyway** next to "Splashboard" (or run `xattr -dr com.apple.quarantine /Applications/Splashboard.app`). You only do this once.
 
