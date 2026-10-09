@@ -54,6 +54,7 @@ final class MockService: AppService, @unchecked Sendable {
     let registerCount = LockedBox(0)
     let unregisterCount = LockedBox(0)
     var failRegister = false
+    var failUnregister = false
     var statusAfterRegister: AppServiceStatus = .enabled
 
     init(_ status: AppServiceStatus = .notRegistered) { state = LockedBox(status) }
@@ -65,6 +66,7 @@ final class MockService: AppService, @unchecked Sendable {
     }
     func unregister() throws {
         unregisterCount.withValue { $0 += 1 }
+        if failUnregister { throw NSError(domain: "test", code: 2) }
         state.value = .notRegistered
     }
 }

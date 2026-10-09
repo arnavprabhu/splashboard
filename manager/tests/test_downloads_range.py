@@ -137,7 +137,7 @@ def done_on_disk(sidecar: Path) -> int:
 
 def xet_of(hub: Any, sha: str) -> str:
     """The CDN's name for a blob: the Xet hash the fake Hub answered its HEAD with."""
-    return next(xet for xet, remote in hub.cdn_files.items() if remote.blob == sha)
+    return str(next(xet for xet, remote in hub.cdn_files.items() if remote.blob == sha))
 
 
 def gets_of(hub: Any, sha: str) -> list[dict[str, Any]]:

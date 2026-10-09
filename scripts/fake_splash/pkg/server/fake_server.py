@@ -244,6 +244,7 @@ def _responses_tools(tools: object) -> tuple[list | None, dict]:
         output.append(_response_function(tool))
     return output or None, namespaces
 
+
 class SystemOneError(Exception):
     def __init__(self, details: list[dict]):
         self.details = details

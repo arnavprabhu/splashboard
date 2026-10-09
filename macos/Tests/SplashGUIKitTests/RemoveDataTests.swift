@@ -82,4 +82,27 @@ struct RemoveDataTests {
         #expect(mainApp.unregisterCount.value == 0 && agent.unregisterCount.value == 0)
         #expect(!host.terminated && host.errors.count == 1)
     }
+
+    @Test func aFailedAgentUnregisterStopsTheManagerAndKeepsTheAppOpen() async {
+        let agent = MockService(.enabled)
+        agent.failUnregister = true
+        let (vm, host, api) = make(agent: agent, mainApp: MockService(.enabled))
+        host.removalChoice = RemovalChoice(deleteModels: false, deleteCache: false)
+        await vm.removeData()
+        #expect(api.posted("/api/admin/shutdown"), "the agent is still registered, so the manager is stopped explicitly")
+        #expect(!host.terminated)
+        #expect(host.errors.count == 1 && host.errors[0].contains("background item"))
+    }
+
+    @Test func aFailedLoginItemUnregisterKeepsTheAppOpen() async {
+        let mainApp = MockService(.enabled)
+        mainApp.failUnregister = true
+        let agent = MockService(.enabled)
+        let (vm, host, _) = make(agent: agent, mainApp: mainApp)
+        host.removalChoice = RemovalChoice(deleteModels: false, deleteCache: false)
+        await vm.removeData()
+        #expect(agent.unregisterCount.value == 1, "the agent is still removed")
+        #expect(!host.terminated)
+        #expect(host.errors.count == 1 && host.errors[0].contains("login item"))
+    }
 }

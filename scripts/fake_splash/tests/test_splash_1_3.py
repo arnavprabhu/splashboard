@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import socket
 import time
+from typing import Any
 
 from test_startup_and_signals import run_cli
 
@@ -73,11 +74,10 @@ def test_weights_block_follows_idle_release(make_engine, tmp_path):
     quick.wait_for_line(r"Weights released after 0\.3 s without a request")
     assert quick.json("GET", "/status")[1]["weights"]["released"] is True
     assert quick.json("POST", "/v1/chat/completions", chat_body())[0] == 200
-    assert quick.json("GET", "/status")[1]["weights"] == {
-        "idle_release_seconds": 0.3,
-        "released": False,
-        "restores": 1,
-    }
+    # The request restored the weights once. `released` is not checked here: 0.3 s after the
+    # request the timer may already have released them again, which made this test flaky.
+    weights = quick.json("GET", "/status")[1]["weights"]
+    assert weights["idle_release_seconds"] == 0.3 and weights["restores"] == 1
 
 
 def test_overload_is_a_retryable_503_in_each_apis_format(make_engine):
@@ -180,6 +180,10 @@ def test_responses_refuse_codex_tool_search_shapes(engine):
             400,
             "only message, reasoning, function_call, and function_call_output input items are supported",
         )
-    reasoning = {"type": "reasoning", "summary": [], "content": [{"type": "reasoning_text", "text": "hm"}]}
+    reasoning: dict[str, Any] = {
+        "type": "reasoning",
+        "summary": [],
+        "content": [{"type": "reasoning_text", "text": "hm"}],
+    }
     history = [{"type": "message", "role": "user", "content": "x"}, reasoning]
     assert engine.json("POST", "/v1/responses", {"input": history, "store": False})[0] == 200

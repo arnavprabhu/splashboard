@@ -6,6 +6,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -257,10 +258,10 @@ def test_idle_unload_stops_the_process(harness_factory: Callable[..., EngineHarn
     assert h.client.put("/api/admin/settings", json=settings).status_code == 200
     h.load()
     h.sup.last_request_mono = time.monotonic() - 299
-    h.client.portal.call(h.sup.check_idle)  # type: ignore[union-attr]
+    portal(h).call(h.sup.check_idle)
     assert h.engine()["state"] == "ready"
     h.sup.last_request_mono = time.monotonic() - 301
-    h.client.portal.call(h.sup.check_idle)  # type: ignore[union-attr]
+    portal(h).call(h.sup.check_idle)
     assert h.wait_state("stopped")["state"] == "stopped"
     assert h.state.usage.sessions()[0]["reason"] == "idle_unload"
 
@@ -592,9 +593,9 @@ def test_ready_needs_the_ready_line_or_three_ready_polls(
     run.ready_line = False
     run.ready_polls_ok = 0
     for _ in range(2):
-        h.client.portal.call(h.sup._check_ready, run)
+        portal(h).call(h.sup._check_ready, run)
     assert (h.sup.state, run.ready_polls_ok) == ("starting", 2)
-    h.client.portal.call(h.sup._check_ready, run)
+    portal(h).call(h.sup._check_ready, run)
     assert h.sup.state == "ready"
 
 
@@ -651,7 +652,7 @@ def test_a_new_process_starts_a_fresh_counter_baseline(
         json={"model": MODEL, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 2},
     )
     assert chat.status_code == 200, chat.text
-    h.client.portal.call(h.sup.poll_now)
+    portal(h).call(h.sup.poll_now)
     h.fake("POST", "/_fake/crash", {"signal": "SIGKILL"})
     h.wait_state("crashed", "starting", timeout=10)
     h.wait_state("ready", timeout=20)
@@ -669,3 +670,9 @@ def test_the_restart_gauge_exports_the_detected_count(
     sup._detect_restart({"requests": {"submitted": 1}})
     assert sup.restarts_detected == 1
     assert "splash_gui_engine_restarts_detected_total 1" in h.client.get("/metrics").text
+
+
+def portal(h: Any) -> Any:
+    """The test client's portal, which exists while the client is open."""
+    assert h.client.portal is not None
+    return h.client.portal

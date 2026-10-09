@@ -235,7 +235,7 @@ async def test_codex_quit_falls_back_to_the_bundle_id(service, monkeypatch):
     calls: list[tuple[str, str | None]] = []
     stopped = False
 
-    def quit_app(label: str, bundle_id: str | None = None) -> subprocess.CompletedProcess:
+    def quit_app(label: str, bundle_id: str | None = None) -> subprocess.CompletedProcess[str]:
         nonlocal stopped
         calls.append((label, bundle_id))
         ok = bundle_id == CODEX_BUNDLE_ID
@@ -265,7 +265,7 @@ def _quit_recorder(monkeypatch, service, accepted: str | None) -> list[tuple[str
     calls: list[tuple[str, str | None]] = []
     stopped = False
 
-    def quit_app(label: str, bundle_id: str | None = None) -> subprocess.CompletedProcess:
+    def quit_app(label: str, bundle_id: str | None = None) -> subprocess.CompletedProcess[str]:
         nonlocal stopped
         calls.append((label, bundle_id))
         ok = accepted is not None and bundle_id == accepted

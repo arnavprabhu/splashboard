@@ -67,7 +67,7 @@ def _item(state: str, progress: float | None, done: int, total: int) -> dict[str
 def _pull(monkeypatch: pytest.MonkeyPatch, stderr: io.StringIO, polls: list[dict[str, Any]]) -> int:
     monkeypatch.setattr(sys, "stderr", stderr)
     monkeypatch.setattr(cli_module, "Client", lambda port=None: _FakeClient(polls))
-    monkeypatch.setattr(cli_module.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr("splash_gui.cli.time.sleep", lambda seconds: None)
     return cli_module.main(["pull", "org/repo"])
 
 

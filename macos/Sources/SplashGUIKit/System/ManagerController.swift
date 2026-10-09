@@ -188,14 +188,24 @@ public final class ManagerController {
         ownership = nil
     }
 
+    public enum AgentRemoval: Equatable, Sendable {
+        /// No agent was registered: the manager runs some other way.
+        case notRegistered
+        /// Unregistered (a bootout, which also stops a running agent with SIGTERM).
+        case unregistered
+        /// Still registered after the call, with the reason.
+        case failed(String)
+    }
+
     /// Remove Splash GUI data (PKG-12): unregisters the manager's LaunchAgent whatever started the
-    /// manager, so launchd forgets it; that also stops a running agent (SIGTERM). True when one was registered.
-    @discardableResult
-    public func unregisterAgentForRemoval() -> Bool {
-        guard let agent, agent.status == .enabled || agent.status == .requiresApproval else { return false }
-        try? agent.unregister()
+    /// manager, so launchd forgets it. The status is read again afterwards, so a failure is reported.
+    public func unregisterAgentForRemoval() -> AgentRemoval {
+        guard let agent, agent.status == .enabled || agent.status == .requiresApproval else { return .notRegistered }
+        do { try agent.unregister() } catch { return .failed(error.localizedDescription) }
+        let after = agent.status
+        if after == .enabled || after == .requiresApproval { return .failed("it is still registered") }
         ownership = nil
-        return true
+        return .unregistered
     }
 
     /// `launchctl kickstart gui/<uid>/ai.splashgui.manager` for a registered but stopped agent.

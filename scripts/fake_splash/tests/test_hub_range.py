@@ -14,7 +14,7 @@ WEIGHTS = "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
 
 def request(url: str, method: str = "GET", headers: dict[str, str] | None = None):
     parts = urlsplit(url)
-    connection = http.client.HTTPConnection(parts.hostname, parts.port, timeout=10)
+    connection = http.client.HTTPConnection(parts.hostname or "127.0.0.1", parts.port, timeout=10)
     connection.request(method, parts.path + ("?" + parts.query if parts.query else ""), headers=headers or {})
     response = connection.getresponse()
     body = response.read()

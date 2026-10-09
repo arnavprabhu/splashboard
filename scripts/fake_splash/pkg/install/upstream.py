@@ -155,16 +155,12 @@ def _mlx_target(repo, language_only, scratch):
     # requireNumber, 1.3.0), naming the first module it checks.
     quant = repo.json("config.json").get("quantization")
     if not isinstance(quant, dict):
-        raise models.ModelError(
-            "this model requires an MLX affine 4-bit/group-64 checkpoint or a supported GGUF"
-        )
+        raise models.ModelError("this model requires an MLX affine 4-bit/group-64 checkpoint or a supported GGUF")
     label = "quantization language_model.model.embed_tokens"
     if quant.get("bits") != 4:
         raise models.ModelError(f"{label} bits mismatch: MLX {quant.get('bits')}, runtime 4")
     if quant.get("group_size") != 64:
-        raise models.ModelError(
-            f"{label} group_size mismatch: MLX {quant.get('group_size')}, runtime 64"
-        )
+        raise models.ModelError(f"{label} group_size mismatch: MLX {quant.get('group_size')}, runtime 64")
     if quant.get("mode", "affine") != "affine":
         raise models.ModelError(f"{label} mode must be affine")
     files = {name: name for name in sorted(repo.files)}

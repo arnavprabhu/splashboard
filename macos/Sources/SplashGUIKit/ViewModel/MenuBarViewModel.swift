@@ -524,14 +524,29 @@ public final class MenuBarViewModel {
             host?.showError(title: "Couldn’t remove Splash GUI data", message: error.localizedDescription)
             return
         }
-        loginItems?.unregisterForRemoval()
-        let stoppedByAgent = managerController?.unregisterAgentForRemoval() ?? false
-        if !stoppedByAgent {
+        var problems: [String] = []
+        if let error = loginItems?.unregisterForRemoval() {
+            problems.append("The login item could not be removed (\(error)). Remove Splash GUI in System Settings → General → Login Items.")
+        }
+        switch managerController?.unregisterAgentForRemoval() ?? .notRegistered {
+        case .unregistered:
+            break
+        case .failed(let error):
+            problems.append("The manager's background item could not be removed (\(error)). Remove it in System Settings → General → Login Items.")
+            // The agent stays registered, so stop the manager explicitly. It exits 0, which launchd does not restart.
+            _ = try? await api.post("/api/admin/shutdown")
+        case .notRegistered:
             if managerController?.ownership == .child {
                 await managerController?.stopOwned()
             } else {
                 _ = try? await api.post("/api/admin/shutdown")
             }
+        }
+        // A login item or agent that is still registered could start the app or manager again and recreate the data:
+        // keep the app open and say what is left instead of quitting as if the removal were complete.
+        guard problems.isEmpty else {
+            host?.showError(title: "Splash GUI data was removed, but not everything", message: problems.joined(separator: "\n\n"))
+            return
         }
         host?.terminate()
     }

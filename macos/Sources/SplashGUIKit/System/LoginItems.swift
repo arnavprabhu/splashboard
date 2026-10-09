@@ -104,7 +104,11 @@ public final class LoginItemController: Sendable {
     public var status: AppServiceStatus { mainApp.status }
 
     /// Remove Splash GUI data (PKG-12): the app no longer opens at login, whatever the setting says.
-    public func unregisterForRemoval() {
-        if mainApp.status == .enabled || mainApp.status == .requiresApproval { try? mainApp.unregister() }
+    /// Returns nil when no login item is left, else why it could not be removed (re-read after the call).
+    public func unregisterForRemoval() -> String? {
+        guard mainApp.status == .enabled || mainApp.status == .requiresApproval else { return nil }
+        do { try mainApp.unregister() } catch { return error.localizedDescription }
+        let after = mainApp.status
+        return after == .enabled || after == .requiresApproval ? "it is still registered" : nil
     }
 }

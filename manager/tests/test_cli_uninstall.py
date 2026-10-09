@@ -45,7 +45,7 @@ def launchd(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
         calls.append(list(argv))
         raise AssertionError("no subprocess expected")
 
-    monkeypatch.setattr(cli_module.subprocess, "run", fake_run)
+    monkeypatch.setattr("splash_gui.cli.subprocess.run", fake_run)
     return calls
 
 
@@ -97,7 +97,7 @@ def test_a_manager_run_by_its_agent_is_booted_out_not_stopped(
     monkeypatch.setattr(cli_module.Client, "request", request)
     monkeypatch.setattr(cli_module, "manager_pid", lambda paths: (4242, 1.0))
     monkeypatch.setattr(cli_module, "agent_pid", lambda label: 4242)
-    monkeypatch.setattr(cli_module.subprocess, "run", lambda argv, **kw: calls.append(argv))
+    monkeypatch.setattr("splash_gui.cli.subprocess.run", lambda argv, **kw: calls.append(argv))
 
     code, _, _ = run(capsys, "doctor", "--uninstall", "--yes")
 
@@ -113,7 +113,7 @@ def test_another_installs_agent_is_never_touched(
     calls: list[list[str]] = []
     monkeypatch.setattr(cli_module, "manager_pid", lambda paths: (4242, 1.0))
     monkeypatch.setattr(cli_module, "agent_pid", lambda label: 999)  # the owner's real agent
-    monkeypatch.setattr(cli_module.subprocess, "run", lambda argv, **kw: calls.append(argv))
+    monkeypatch.setattr("splash_gui.cli.subprocess.run", lambda argv, **kw: calls.append(argv))
 
     assert run(capsys, "doctor", "--uninstall", "--yes")[0] == 0
     assert calls == []
