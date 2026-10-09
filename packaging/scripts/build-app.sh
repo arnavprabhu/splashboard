@@ -121,7 +121,7 @@ COLLECTOR="$REPO/packaging/scripts/collect-licenses.py"
 for input in "$TEMPLATE" "$FONT" "$ARCHIVO_LICENSE" "$COLLECTOR" "$REPO/LICENSE" "$REPO/NOTICE" \
   "$SIGN" "$REPO/packaging/entitlements/app.plist" "$REPO/packaging/entitlements/python.plist" \
   "$REPO/packaging/entitlements/python-adhoc.plist" "$REPO/packaging/entitlements/app-adhoc.plist" \
-  "$REPO/packaging/scripts/lib-sparkle.sh"; do
+  "$REPO/packaging/scripts/lib-sparkle.sh" "$REPO/packaging/AppIcon.icns"; do
   [[ -f "$input" ]] || die "missing $input"
 done
 mkdir -p "$REPO/build"
@@ -200,6 +200,9 @@ cp "$ARCHIVO_LICENSE" "$STAGE/Contents/Resources/"
 # The app's license and notice, as the Apache-2.0 terms require them with a binary (checked above).
 cp "$REPO/LICENSE" "$REPO/NOTICE" "$STAGE/Contents/Resources/"
 
+# The app icon (packaging/scripts/make-icon.py draws it).
+cp "$REPO/packaging/AppIcon.icns" "$STAGE/Contents/Resources/AppIcon.icns"
+
 xml_escape() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' <<<"$1"; }
 
 # Sparkle's feed and public key: identity.env, or SPLASH_GUI_SU_FEED_URL / SPLASH_GUI_SU_PUBLIC_ED_KEY for a
@@ -235,6 +238,7 @@ cat > "$STAGE/Contents/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>Splashboard</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleDisplayName</key><string>Splashboard</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>

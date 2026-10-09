@@ -34,6 +34,7 @@ INPUTS = [
     "packaging/entitlements/python-adhoc.plist",
     "packaging/scripts/lib-sparkle.sh",
     "packaging/entitlements/app-adhoc.plist",
+    "packaging/AppIcon.icns",
 ]
 
 

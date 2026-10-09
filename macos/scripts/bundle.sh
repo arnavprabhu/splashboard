@@ -103,6 +103,7 @@ embed_sparkle "$APP" "$BIN_DIR" "$EXECUTABLE"
 # Archivo (OFL), the same file the web admin self-hosts, for the About window.
 FONT="$REPO/web/src/assets/fonts/archivo-latin.woff2"
 [[ -f "$FONT" ]] && cp "$FONT" "$APP/Contents/Resources/Fonts/"
+cp "$REPO/packaging/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 [[ -f "$REPO/web/public/licenses/Archivo-OFL.txt" ]] && cp "$REPO/web/public/licenses/Archivo-OFL.txt" "$APP/Contents/Resources/"
 
 xml_escape() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' <<<"$1"; }
@@ -136,6 +137,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>Splashboard</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleDisplayName</key><string>Splashboard</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>

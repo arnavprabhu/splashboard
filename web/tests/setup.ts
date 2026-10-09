@@ -1,5 +1,5 @@
 import { cleanup } from '@testing-library/preact';
-import { afterEach, vi } from 'vitest';
+import { afterAll, afterEach, vi } from 'vitest';
 
 vi.mock('uplot', () => ({ default: class { static paths = {}; setData() {} setSize() {} destroy() {} } }));
 if (typeof EventSource === 'undefined') {
@@ -26,4 +26,11 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+// Unmounting schedules Preact's remaining effect cleanups on a timer. Let them run before the
+// file's jsdom is torn down, or they fire into a closed window ("document is not defined").
+afterAll(async () => {
+  vi.useRealTimers();
+  await new Promise((resolve) => setTimeout(resolve, 150));
 });
