@@ -105,6 +105,7 @@ printf '%s\n' "$RENDERED" > "$TMP/tap/Casks/$TOKEN.rb"
 git -C "$TMP/tap" add "Casks/$TOKEN.rb"
 git -C "$TMP/tap" -c user.name="splash-gui release" -c user.email="releases@users.noreply.github.com" \
   commit -m "$TOKEN $VERSION"
-git -C "$TMP/tap" push origin "$branch"
+# gh cloned with GH_TOKEN; git needs gh as its credential helper to push with it too.
+git -C "$TMP/tap" -c credential.helper= -c credential.helper="!gh auth git-credential" push origin "$branch"
 gh pr create --repo "$TAP_REPO" --head "$branch" --title "$TOKEN $VERSION" \
   --body "Release $VERSION from the release workflow."
