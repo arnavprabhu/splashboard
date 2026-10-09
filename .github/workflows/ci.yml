@@ -1,10 +1,8 @@
-# CI for Splashboard: lint, types and web on Linux, then one macOS job for pytest, Playwright and Swift.
-# Two jobs, to spend as few macOS minutes as possible (GitHub bills macOS runners at 10x Linux):
-#   checks  ubuntu-latest: lint, types and the pure Node/Python steps (ruff, mypy with
-#           --platform darwin, typecheck, vitest, build, bundle size). None of them touch the OS.
-#   macos   macos-26: everything that runs processes or needs macOS (manager and fake-engine
-#           pytest, Playwright against a real manager, swift build and test), in one job so the
-#           checkout and setup are paid once.
+# CI for Splashboard. Four jobs run in parallel, so a run takes as long as the slowest one:
+#   checks      ubuntu-latest: ruff, mypy (--platform darwin), typecheck, vitest, build, bundle size.
+#   pytest      macos-26: manager and fake-engine pytest, one worker per core.
+#   playwright  macos-26: the web admin against stubbed routes and a real manager.
+#   swift       macos-26: swift build and test, with the build folder cached.
 # Nothing here needs a model, Metal or the network beyond package installs.
 name: ci
 
@@ -60,10 +58,30 @@ jobs:
         working-directory: web
         run: pnpm install --frozen-lockfile && pnpm typecheck && pnpm test && pnpm build && pnpm size
 
-  macos:
-    name: macOS (pytest · fake engine · playwright · swift)
+  pytest:
+    name: macOS pytest (manager · fake engine)
     runs-on: macos-26
-    timeout-minutes: 45
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: manager/uv.lock
+      - name: manager pytest
+        working-directory: manager
+        # One worker per core (pytest-xdist). A test over 5 minutes fails with its stack
+        # (pytest-timeout) instead of using up the job; --durations lists the slowest.
+        run: >-
+          uv sync --locked && SPLASH_GUI_HOME="$RUNNER_TEMP/splash-home"
+          uv run pytest -n auto --timeout=300 --durations=15
+      - name: fake engine pytest
+        run: uv run --no-project --with pytest pytest scripts/fake_splash/tests
+
+  playwright:
+    name: macOS Playwright (stubbed shell + real manager)
+    runs-on: macos-26
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -78,18 +96,21 @@ jobs:
           node-version: 24
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
-      - name: manager pytest
+      - name: manager environment
         working-directory: manager
-        run: uv sync --locked && SPLASH_GUI_HOME="$RUNNER_TEMP/splash-home" uv run pytest
-      - name: fake engine pytest
-        run: uv run --no-project --with pytest pytest scripts/fake_splash/tests
-      - name: web build for Playwright
+        run: uv sync --locked
+      - name: web build
         working-directory: web
         run: pnpm install --frozen-lockfile && pnpm build
+      - name: Playwright browser cache
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('web/pnpm-lock.yaml') }}
       - name: install Playwright browsers
         working-directory: web
-        run: pnpm exec playwright install --with-deps chromium
-      - name: playwright (stubbed shell + real manager with the fake engine)
+        run: pnpm exec playwright install chromium
+      - name: playwright
         working-directory: web
         run: pnpm exec playwright test
       - name: upload Playwright report
@@ -101,6 +122,18 @@ jobs:
             web/playwright-report
             web/test-results
           retention-days: 7
+
+  swift:
+    name: macOS Swift (build · test)
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: SwiftPM cache
+        uses: actions/cache@v4
+        with:
+          path: macos/.build
+          key: swiftpm-${{ runner.os }}-${{ hashFiles('macos/Package.resolved', 'macos/Package.swift') }}
       - name: swift build and test
         working-directory: macos
         run: swift --version && swift build && swift test

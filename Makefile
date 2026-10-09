@@ -81,7 +81,7 @@ notarize:
 test: test-manager test-fake test-packaging test-web test-e2e test-macos
 
 test-manager: manager-deps
-	cd manager && SPLASH_GUI_SECRETS=memory uv run pytest
+	cd manager && SPLASH_GUI_SECRETS=memory uv run pytest -n auto --timeout=300
 
 test-fake:
 	uv run --no-project --with pytest pytest scripts/fake_splash/tests
