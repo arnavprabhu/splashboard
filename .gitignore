@@ -1,0 +1,41 @@
+# Engine reference clone (read-only)
+/splash/
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/
+*.tsbuildinfo
+
+# Xcode / SwiftPM
+macos/.build/
+macos/.swiftpm/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# Build output
+dist/
+build/
+# Bundled Python runtime and its downloads; already under build/, listed for clarity
+build/package/
+
+
+# Local secrets
+.env
+.env.*

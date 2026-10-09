@@ -1,0 +1,145 @@
+# Release Splashboard.
+#
+# On a `v*` tag: build the web admin, the bundled runtime and the app, sign it ad hoc inside out (no Developer
+# ID, no notarization), build the DMG, write the Sparkle appcast with the user's key, publish the DMG and the appcast
+# as a GitHub Release of this repo, and open the cask PR.
+#
+# workflow_dispatch with dry_run (the default): the same build with a Sparkle key made in the job, nothing published;
+# the DMG and appcast.xml are uploaded as workflow artifacts.
+#
+# Secrets (real runs only): SPARKLE_ED_PRIVATE_KEY and HOMEBREW_TAP_TOKEN. The release itself uses the workflow's
+# GITHUB_TOKEN. packaging/identity.env must carry SU_FEED_URL and SU_PUBLIC_ED_KEY for a real run.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: A throwaway Sparkle key, nothing published
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  SPLASH_GUI_SECRETS: memory
+  SPLASH_GUI_SIGN_IDENTITY: '-'
+
+jobs:
+  release:
+    name: build, sign, publish
+    runs-on: macos-26
+    # 45 minutes for the build.
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    env:
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: manager/uv.lock
+
+      - name: Check the release inputs
+        run: |
+          if [[ "$DRY_RUN" != true ]]; then
+            [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+              || { echo "::error::a real release needs a vX.Y.Z tag (got $GITHUB_REF_NAME)"; exit 1; }
+            # shellcheck source=/dev/null
+            source packaging/identity.env
+            [[ -n "${SU_FEED_URL:-}" && -n "${SU_PUBLIC_ED_KEY:-}" ]] \
+              || { echo "::error::packaging/identity.env needs SU_FEED_URL and SU_PUBLIC_ED_KEY"; exit 1; }
+          fi
+
+      - name: Sparkle key
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          key="$RUNNER_TEMP/sparkle-ed25519.key"
+          if [[ "$DRY_RUN" == true ]]; then
+            openssl genpkey -algorithm ed25519 -out "$RUNNER_TEMP/test.pem"
+            openssl pkey -in "$RUNNER_TEMP/test.pem" -outform DER | tail -c 32 | base64 > "$key"
+            public="$(openssl pkey -in "$RUNNER_TEMP/test.pem" -pubout -outform DER | tail -c 32 | base64)"
+            rm -f "$RUNNER_TEMP/test.pem"
+            {
+              echo "SPLASH_GUI_SU_FEED_URL=http://127.0.0.1:8171/appcast.xml"
+              echo "SPLASH_GUI_SU_PUBLIC_ED_KEY=$public"
+            } >> "$GITHUB_ENV"
+          else
+            printf '%s' "$SPARKLE_ED_PRIVATE_KEY" > "$key"
+          fi
+          chmod 600 "$key"
+          echo "SPARKLE_KEY_FILE=$key" >> "$GITHUB_ENV"
+
+      - name: make web
+        run: make web
+      - name: make runtime
+        run: make runtime
+      - name: Sparkle tools
+        run: cd macos && swift package resolve
+      - name: make app (signed by sign.sh)
+        run: make app
+
+      - name: make dmg
+        run: |
+          packaging/scripts/make-dmg.sh --out build/package/release
+          dmg="$(ls build/package/release/*.dmg)"
+          echo "DMG=$dmg" >> "$GITHUB_ENV"
+          echo "VERSION=$(basename "$dmg" .dmg | sed 's/.*-//')" >> "$GITHUB_ENV"
+
+      - name: Appcast
+        run: |
+          prefix="https://github.com/$GITHUB_REPOSITORY/releases/download/v$VERSION/"
+          packaging/scripts/appcast.sh --ed-key-file "$SPARKLE_KEY_FILE" --download-url-prefix "$prefix" \
+            build/package/release
+
+      - name: Dry run artifacts
+        if: env.DRY_RUN == 'true'
+        run: mv "$DMG" "build/package/release/$(basename "$DMG" .dmg)-dryrun.dmg"
+      - uses: actions/upload-artifact@v4
+        if: env.DRY_RUN == 'true'
+        with:
+          name: splash-gui-dryrun
+          path: |
+            build/package/release/*-dryrun.dmg
+            build/package/release/appcast.xml
+          if-no-files-found: error
+
+      - name: Publish the release
+        if: env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v$VERSION" "$DMG" build/package/release/appcast.xml \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --title "Splashboard $VERSION" \
+            --notes-file "packaging/release-notes/$VERSION.html"
+
+      - name: Cask PR
+        if: env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          RELEASES_REPO: ${{ github.repository }}
+        run: packaging/scripts/render-cask.sh --dmg "$DMG" --pull-request
+
+      - name: Delete the Sparkle key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/sparkle-ed25519.key"

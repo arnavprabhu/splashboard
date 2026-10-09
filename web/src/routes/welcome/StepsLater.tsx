@@ -1,0 +1,572 @@
+/** Wizard steps 3–5: use case with the preset diff, first model, start. */
+import { useEffect, useState } from 'preact/hooks';
+import { useLocation } from 'wouter-preact';
+import type { HfWhoami, InstalledModels } from '../../api/models';
+import { api } from '../../api/client';
+import { Banner } from '../../components/Banner';
+import { Button } from '../../components/Button';
+import { CodeBlock } from '../../components/CodeBlock';
+import { CopyButton } from '../../components/CopyButton';
+import { KeyValue } from '../../components/KeyValue';
+import { LogPane } from '../../components/LogPane';
+import { ProgressBar } from '../../components/ProgressBar';
+import { Sheet } from '../../components/Sheet';
+import { TextInput } from '../../components/inputs';
+import { Empty, LoadError, Loading } from '../../components/States';
+import { StatusChip } from '../../components/StatusChip';
+import { Table } from '../../components/Table';
+import { Tag } from '../../components/Tag';
+import { toast, toastError } from '../../components/Toast';
+import { Tooltip } from '../../components/Tooltip';
+import { Install } from '../../components/Install';
+import { installOf, isCancelled, withInstallConfirm } from '../../lib/engine-install';
+import { formatBytes } from '../../lib/format';
+import { useApi } from '../../lib/use-api';
+import { downloads, engine, settings } from '../../store';
+import { t } from '../../strings/welcome';
+import { FitTag } from '../models/bits';
+import { DownloadsPanel } from '../models/DownloadsPanel';
+import { applyPreset, getCatalog, getEffective, getPresets, getSchema, loadEngine, markCompleted, queueDownload } from './api';
+import { StepLayout, progress, resetProgress, updateProgress, useWizard } from './frame';
+import { closeWelcome, openURL } from './host';
+import { activeDownloadFor, defaultInstalled, servingModel, installedChoices, savedPreset, curlSample, endpoints, movedOrigin, presetDiff, recommendation, startSettings, tierSentence } from './logic';
+import { probeOrigin } from '../settings/api';
+import { type PresetId } from './steps';
+
+const ORDER: PresetId[] = ['coding', 'chat', 'speed'];
+/** Hub download sizes are decimal, as in the downloads panel. */
+const HUB = { base: 1000 } as const;
+
+// ---------- step 3 ----------
+
+export function StepUseCase() {
+  const { goTo } = useWizard();
+  const presets = useApi(getPresets);
+  const effective = useApi(getEffective);
+  const schema = useApi(getSchema);
+  // This run's pick, else the preset saved by an earlier run (settings `wizard.preset`), else Chat.
+  const saved = savedPreset(settings.value?.settings?.global);
+  // The unapplied pick (settings `wizard.use_case`) first, then the applied one, then the saved preset.
+  const [picked, setSelected] = useState<PresetId | null>(progress.value.useCase ?? progress.value.preset);
+  const selected = picked ?? saved ?? 'chat';
+  const [busy, setBusy] = useState(false);
+  const list = presets.data?.presets ?? [];
+  const sorted = ORDER.map((id) => list.find((p) => p.id === id)).filter((p): p is NonNullable<typeof p> => !!p);
+  const rows = presets.data ? presetDiff(list, selected, effective.data, schema.data, settings.value?.settings?.global) : [];
+  // Saved at once: another browser or a reload resumes with this pick, not yet applied.
+  function pick(id: PresetId) {
+    setSelected(id);
+    updateProgress({ useCase: id });
+  }
+  async function apply() {
+    setBusy(true);
+    try {
+      await applyPreset(selected);
+      updateProgress({ preset: selected, useCase: null });
+      goTo(4);
+    } catch (err) {
+      toastError(t('welcome.usecase.apply_failed'), err);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <StepLayout lead={t('welcome.usecase.lead')} footer={{ onContinue: () => void apply(), busy, continueDisabled: !presets.data }}>
+      {presets.error ? (
+        <LoadError thing={t('welcome.usecase.thing')} error={presets.error} onRetry={presets.reload} />
+      ) : !presets.data ? (
+        <Loading />
+      ) : (
+        <>
+          <div class="wz-presets" role="radiogroup" aria-label={t('welcome.usecase.label')}>
+            {sorted.map((p) => (
+              <label key={p.id} class="wz-preset" data-selected={selected === p.id ? 'true' : undefined}>
+                <input type="radio" name="wz-preset" class="visually-hidden" checked={selected === p.id} onChange={() => pick(p.id)} />
+                <span class="wz-preset-mark" aria-hidden="true">
+                  {selected === p.id ? '●' : '○'}
+                </span>
+                <span class="heading wz-preset-name">{p.label}</span>
+                <span class="body">{p.description}</span>
+              </label>
+            ))}
+          </div>
+          <h3 class="label">{t('welcome.usecase.applies')}</h3>
+          <Table
+            caption={t('welcome.usecase.applies')}
+            rows={rows}
+            rowKey={(r) => r.key}
+            columns={[
+              { key: 'label', label: t('welcome.usecase.col.setting'), render: (r) => <span class={r.changed ? undefined : 'mute'}>{r.label}</span> },
+              { key: 'flag', label: t('welcome.usecase.col.flag'), render: (r) => <span class="mono mute">{r.flag ?? r.key}</span> },
+              { key: 'now', label: t('welcome.usecase.col.now'), render: (r) => <span class={r.changed ? undefined : 'mute'}>{r.nowText}{r.nowIsDefault ? ` ${t('welcome.usecase.default')}` : ''}</span> },
+              {
+                key: 'next',
+                label: t('welcome.usecase.col.next'),
+                render: (r) =>
+                  r.changed ? (
+                    r.dependsOnRam ? (
+                      <Tooltip text={t('welcome.usecase.ram_tip')}>
+                        <span tabIndex={0}>→ {r.nextText}</span>
+                      </Tooltip>
+                    ) : (
+                      <span>→ {r.nextText}</span>
+                    )
+                  ) : (
+                    <span class="mute">
+                      → {r.nextText} {t('welcome.usecase.unchanged')}
+                    </span>
+                  ),
+              },
+            ]}
+          />
+        </>
+      )}
+    </StepLayout>
+  );
+}
+
+// ---------- step 4 ----------
+
+export function StepModel() {
+  const { goTo, hosted } = useWizard();
+  const presets = useApi(getPresets);
+  const catalog = useApi(getCatalog);
+  // Reload the installed list when a download finishes, so its row turns into "Use this model".
+  const finished = downloads.value.filter((d) => d.state === 'done').length;
+  const installed = useApi((s) => api.get<InstalledModels>('/models', undefined, s), [finished]);
+  const ids = installed.data?.models.map((m) => m.id) ?? [];
+  const rec = recommendation(presets.data, progress.value.preset, catalog.data, ids);
+  // Only a live download blocks its row: a cancelled or failed one leaves Download usable.
+  const live = (model: string) => activeDownloadFor(downloads.value, model);
+  const anyLive = !!rec?.rows.some((r) => live(r.model));
+  const tier = tierSentence(rec?.reason);
+  const activeId = servingModel(engine.value);
+  const others = installed.data ? installedChoices(installed.data.models, rec?.rows.map((r) => r.model) ?? [], activeId) : [];
+  // A re-run with a model already installed: preselect it (the active one, else the last used) so step 5 can load it.
+  useEffect(() => {
+    if (progress.value.model || !installed.data) return;
+    const pick = defaultInstalled(installed.data.models, activeId);
+    if (pick) updateProgress({ model: pick, downloadId: null });
+  }, [installed.data]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [tokenSheet, setTokenSheet] = useState(false);
+  // A gated or private repo: offer the token field here so the wizard is not left.
+  const gated = downloads.value.find(
+    (d) => d.state === 'failed' && (d.error?.code === 'gated' || d.error?.action === 'add_hf_token') && (d.id === progress.value.downloadId || d.model === progress.value.model),
+  );
+  async function download(model: string, languageOnly: boolean) {
+    setBusy(model);
+    try {
+      const item = await queueDownload({ id: model, language_only: languageOnly, verify: false });
+      updateProgress({ model, downloadId: item.id });
+      toast(t('welcome.model.queued', { model }));
+    } catch (err) {
+      toastError(t('welcome.model.download_failed'), err);
+    } finally {
+      setBusy(null);
+    }
+  }
+  const browse = '/admin/models/downloader?tab=supported';
+  return (
+    <StepLayout lead={t('welcome.model.lead')} footer={{ onContinue: () => goTo(5), note: anyLive ? t('welcome.model.continue_note') : undefined }}>
+      {presets.error ? (
+        <LoadError thing={t('welcome.model.thing')} error={presets.error} onRetry={presets.reload} />
+      ) : !rec ? (
+        <Loading />
+      ) : (
+        <>
+          <p class="body">{t('welcome.model.reason', { preset: rec.preset?.label ?? '', ram: formatBytes(rec.memoryBytes) })}</p>
+          {others.length > 0 && (
+            <>
+              <h3 class="label">{t('welcome.model.installed_group')}</h3>
+              <ul class="wz-models" data-testid="wz-installed">
+                {others.map((m) => {
+                  const chosen = progress.value.model === m.id;
+                  return (
+                    <li key={m.id} class="wz-model">
+                      <div class="wz-model-head">
+                        <span class="heading wz-model-name">{m.id.slice(m.id.indexOf('/') + 1)}</span>
+                        <span class="cluster">
+                          {m.id === activeId && <Tag>{t('welcome.model.active')}</Tag>}
+                          <span class="label">
+                            {m.format.toUpperCase()} · {formatBytes(m.sizeBytes)}
+                          </span>
+                        </span>
+                      </div>
+                      <p class="meta">
+                        <span class="mono">{m.id}</span>
+                      </p>
+                      <div class="cluster">
+                        <Button size="s" variant={chosen ? 'solid' : 'outline'} onClick={() => updateProgress({ model: m.id, downloadId: null })}>
+                          {chosen ? t('welcome.model.selected') : t('welcome.model.use')}
+                        </Button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+              <h3 class="label">{t('welcome.model.recommended_group')}</h3>
+            </>
+          )}
+          {tier && <p class="meta">{tier}</p>}
+          <ul class="wz-models">
+            {rec.rows.map((r, i) => {
+              const chosen = progress.value.model === r.model;
+              const busyDl = live(r.model);
+              const size = r.downloadBytes ? formatBytes(r.downloadBytes, HUB) : null;
+              return (
+                <li key={r.model} class="wz-model" data-primary={r.primary ? 'true' : undefined}>
+                  {i > 0 && !r.primary && rec.rows[i - 1]?.primary && <h3 class="label wz-alt">{t('welcome.model.alternatives')}</h3>}
+                  <div class="wz-model-head">
+                    <span class="heading wz-model-name">{r.model.slice(r.model.indexOf('/') + 1)}</span>
+                    <span class="cluster">
+                      {r.primary && <Tag tone="acc">{t('welcome.model.recommended')}</Tag>}
+                      {r.languageOnly && <Tag>{t('welcome.model.language_only')}</Tag>}
+                      {r.installed && <Tag>{t('welcome.model.installed')}</Tag>}
+                      <span class="label">
+                        {r.format?.toUpperCase()}
+                        {size ? ` · ${size}` : r.sizeBytes ? ` · ${t('welcome.model.weights', { size: formatBytes(r.sizeBytes, HUB) })}` : ''}
+                      </span>
+                      <FitTag fit={r.fit} needBytes={r.memoryNeedBytes} memoryBytes={rec.memoryBytes} />
+                    </span>
+                  </div>
+                  <p class="meta">
+                    <span class="mono">{r.model}</span> · {r.note}
+                    {r.perfNote ? ` · ${r.perfNote}` : ''}
+                  </p>
+                  <div class="cluster">
+                    {r.installed ? (
+                      <Button size="s" variant={chosen ? 'solid' : r.primary ? 'accent' : 'outline'} onClick={() => updateProgress({ model: r.model, downloadId: null })}>
+                        {chosen ? t('welcome.model.selected') : t('welcome.model.use')}
+                      </Button>
+                    ) : r.disabled ? (
+                      <span class="meta">{t('welcome.model.wont_fit', { size: r.memoryNeedBytes ? formatBytes(r.memoryNeedBytes) : '—' })}</span>
+                    ) : (
+                      <Button size="s" variant={r.primary ? 'accent' : 'outline'} loading={busy === r.model} disabled={!!busyDl} onClick={() => void download(r.model, r.languageOnly)}>
+                        {busyDl ? t('welcome.model.downloading') : size ? t('welcome.model.download_size', { size }) : t('welcome.model.download')}
+                      </Button>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+          {hosted ? (
+            <Button variant="text" onClick={() => void openURL(new URL(browse, location.origin).href)}>
+              {t('welcome.model.browse')} ↗
+            </Button>
+          ) : (
+            <a href={browse} target="_blank" rel="noopener noreferrer">
+              {t('welcome.model.browse')} ↗
+            </a>
+          )}
+          {gated && (
+            <Banner
+              tone="warn"
+              title={t('welcome.model.gated')}
+              actions={
+                <Button size="s" variant="solid" onClick={() => setTokenSheet(true)}>
+                  {t('welcome.model.add_token')}
+                </Button>
+              }
+            >
+              <span class="mono">{gated.model}</span>
+            </Banner>
+          )}
+          {(progress.value.downloadId || anyLive) && <DownloadsPanel installedIds={installed.data ? new Set(ids) : null} />}
+          <HfTokenSheet
+            open={tokenSheet}
+            onClose={() => setTokenSheet(false)}
+            onRetry={
+              gated
+                ? () => {
+                    setTokenSheet(false);
+                    void download(gated.model, gated.language_only);
+                  }
+                : undefined
+            }
+          />
+        </>
+      )}
+    </StepLayout>
+  );
+}
+
+/** The Hugging Face token field in a sheet: status from `GET /hf/whoami`, save the override, test it. */
+export function HfTokenSheet({ open, onClose, onRetry }: { open: boolean; onClose: () => void; onRetry?: (() => void) | undefined }) {
+  const who = useApi((s) => api.get<HfWhoami>('/hf/whoami', { use: 'active' }, s), [open], open);
+  const [token, setToken] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<HfWhoami | null>(null);
+  const status = result ?? who.data;
+  async function save() {
+    setBusy(true);
+    try {
+      await api.put('/settings/secrets/hf-token', { token });
+      setToken('');
+      setResult(await api.get<HfWhoami>('/hf/whoami', { use: 'override' }));
+    } catch (err) {
+      toastError(t('welcome.token.failed'), err);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Sheet
+      open={open}
+      title={t('welcome.token.title')}
+      onClose={onClose}
+      busy={busy}
+      footer={
+        <>
+          <Button variant="text" onClick={onClose}>
+            {t('common.close')}
+          </Button>
+          {onRetry && (
+            <Button variant="accent" disabled={status?.status !== 'ok'} onClick={onRetry}>
+              {t('welcome.token.retry')}
+            </Button>
+          )}
+        </>
+      }
+    >
+      <div class="stack">
+        <p class="body">{t('welcome.token.lead')}</p>
+        {status && (
+          <p class={status.status === 'ok' ? 'body' : 'field-error'} role="status" data-testid="whoami">
+            {status.status === 'ok'
+              ? t('welcome.token.ok', { user: status.user ?? '—', source: status.source })
+              : t(`welcome.token.${status.status}` as 'welcome.token.no_token', { message: status.message ?? '' })}
+          </p>
+        )}
+        <label class="stack">
+          <span class="label">{t('welcome.token.field')}</span>
+          <TextInput type="password" autocomplete="off" class="mono" value={token} onChange={setToken} placeholder="hf_…" />
+        </label>
+        <div class="cluster">
+          <Button variant="solid" disabled={!token.trim()} loading={busy} onClick={() => void save()}>
+            {t('welcome.token.save')}
+          </Button>
+          <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener noreferrer">
+            {t('welcome.token.create')} ↗
+          </a>
+        </div>
+        <p class="meta">{t('welcome.token.keychain')}</p>
+      </div>
+    </Sheet>
+  );
+}
+
+// ---------- step 5 ----------
+
+const PHASES = ['installing', 'loading', 'warming', 'ready'] as const;
+
+export function StepStart() {
+  const { goTo, hosted } = useWizard();
+  const [, navigate] = useLocation();
+  // Read once: finishing setup resets the progress (below), but the ready screen still names the model.
+  const [model] = useState(() => progress.value.model);
+  const e = engine.value;
+  const ready = !!e && e.model === model && ['ready', 'busy', 'idle_released'].includes(e.state);
+  const installed = useApi((s) => api.get<InstalledModels>('/models', undefined, s), [downloads.value.length]);
+  const dl = downloads.value.find((d) => d.id === progress.value.downloadId || d.model === model);
+  const isInstalled = !!model && (installed.data?.models.some((m) => m.id === model) ?? false);
+  const [busy, setBusy] = useState(false);
+  const [completed, setCompleted] = useState(false);
+  const keyRequired = !!(settings.value?.settings?.global?.security as { api_key_required?: boolean } | undefined)?.api_key_required;
+  const shim = useApi((s) => api.get<{ on_path: boolean }>('/cli/shim', undefined, s), [], ready);
+  const [pathBusy, setPathBusy] = useState(false);
+
+  const [moving, setMoving] = useState<string | null>(null);
+  useEffect(() => {
+    if (!ready || completed) return;
+    setCompleted(true);
+    const port = progress.value.pendingPort;
+    void markCompleted((doc) => startSettings(doc, model, port))
+      .then(async () => {
+        // The port is applied and the pending copy is gone, here and in settings. The signal is
+        // reset too, or a later step change would write the old step and port back.
+        resetProgress();
+        // W2: the port typed in step 2 applies now; follow the manager to its new address.
+        if (!port || String(port) === location.port) return;
+        const origin = movedOrigin(location.origin, port);
+        setMoving(origin);
+        const until = Date.now() + 20_000;
+        while (Date.now() < until) {
+          if (await probeOrigin(origin, 500)) {
+            location.replace(`${origin}${location.pathname}${location.search}`);
+            return;
+          }
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        setMoving(null);
+      })
+      .catch((err) => toastError(t('welcome.finish_failed'), err));
+  }, [ready]);
+
+  async function load() {
+    if (!model) return;
+    setBusy(true);
+    try {
+      await withInstallConfirm((force) => loadEngine(model, force), model);
+    } catch (err) {
+      if (!isCancelled(err)) toastError(t('welcome.start.load_failed'), err);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function finish(path: string) {
+    if (!completed) {
+      try {
+        await markCompleted();
+      } catch (err) {
+        toastError(t('welcome.finish_failed'), err);
+        return;
+      }
+    }
+    if (hosted) {
+      await openURL(new URL(`/admin${path}`, location.origin).href).catch(() => undefined);
+      await closeWelcome(true).catch(() => undefined);
+      toast(t('welcome.start.close_hint'));
+    } else navigate(path);
+  }
+
+  if (!model)
+    return (
+      <StepLayout lead={t('welcome.start.lead')} footer={null}>
+        <Empty
+          title={t('welcome.start.no_model')}
+          action={
+            <>
+              <Button onClick={() => goTo(4)}>{t('welcome.start.back_model')}</Button>
+              <Button variant="text" onClick={() => void finish('/status')}>
+                {t('welcome.start.finish_anyway')}
+              </Button>
+            </>
+          }
+        >
+          {t('welcome.start.no_model_body')}
+        </Empty>
+      </StepLayout>
+    );
+
+  if (ready) {
+    const ep = endpoints(location.origin);
+    return (
+      <StepLayout lead={t('welcome.start.ready_title')} footer={null}>
+        <p class="cluster">
+          <span class="mono">{model}</span> <StatusChip state={e?.state} announce={false} />
+        </p>
+        {moving && (
+          <p class="meta loading-dots" role="status">
+            {t('welcome.start.moving', { url: moving })}
+          </p>
+        )}
+        <KeyValue
+          label={t('welcome.start.endpoints')}
+          items={[
+            { key: 'oa', label: t('welcome.start.openai'), value: <span class="cluster"><code class="mono">{ep.openai}</code><CopyButton text={ep.openai} /></span> },
+            { key: 'an', label: t('welcome.start.anthropic'), value: <span class="cluster"><code class="mono">{ep.anthropic}</code><CopyButton text={ep.anthropic} /></span> },
+            { key: 'key', label: t('welcome.start.key'), value: keyRequired ? t('welcome.start.key_on') : t('welcome.start.key_off') },
+          ]}
+        />
+        <h3 class="label">{t('welcome.start.try')}</h3>
+        <CodeBlock code={curlSample(location.origin, model, keyRequired)} />
+        <h3 class="label">{t('welcome.start.next')}</h3>
+        <div class="cluster">
+          <Button variant="accent" onClick={() => void finish('/chat')}>
+            {t('welcome.start.open_chat')}
+          </Button>
+          <Button onClick={() => void finish('/integrations')}>{t('welcome.start.agents')} ↗</Button>
+          <Button variant="text" onClick={() => void finish('/status')}>
+            {t('welcome.start.open_status')}
+          </Button>
+        </div>
+        {shim.data?.on_path ? (
+          <p class="meta">{t('welcome.start.path_on')}</p>
+        ) : (
+          <div class="stack">
+            <p class="body">{t('welcome.start.path')}</p>
+            <div class="cluster">
+              <Button
+                size="s"
+                loading={pathBusy}
+                onClick={() => {
+                  setPathBusy(true);
+                  void api
+                    .post('/cli/shim', { add_to_path: true })
+                    .then(() => {
+                      toast(t('welcome.start.path_done'));
+                      void shim.reload();
+                    })
+                    .catch((err) => toastError(t('welcome.start.path_failed'), err))
+                    .finally(() => setPathBusy(false));
+                }}
+              >
+                {t('welcome.start.path_add')}
+              </Button>
+              <span class="meta">{t('welcome.start.path_help')}</span>
+            </div>
+          </div>
+        )}
+      </StepLayout>
+    );
+  }
+
+  const failed = e?.state === 'failed' && e.model === model;
+  const phase = e?.model === model && e.state.startsWith('starting') ? (e.phase ?? 'loading') : null;
+  const tail = ((e?.view?.log_tail as string[] | undefined) ?? []).slice(-12);
+  const install = e?.model === model ? installOf(e) : null;
+  return (
+    <StepLayout lead={t('welcome.start.lead')} footer={{ hideContinue: true }}>
+      {dl && !isInstalled && (
+        <div class="stack">
+          <span class="label">
+            {t('welcome.start.download')} · <span class="mono">{model}</span> · {dl.state}
+          </span>
+          <ProgressBar live value={dl.bytes_total ? (dl.bytes_done ?? 0) / dl.bytes_total : (dl.progress ?? null)} label={t('welcome.start.download')} />
+        </div>
+      )}
+      <div class="cluster">
+        <Button variant="accent" disabled={!isInstalled || busy || !!phase} loading={busy || !!phase} onClick={() => void load()}>
+          {t('welcome.start.load')}
+        </Button>
+        <span class="meta">{isInstalled ? t('welcome.start.load_help') : t('welcome.start.waiting_download')}</span>
+      </div>
+      {phase && (
+        <ol class="wz-phases cluster" aria-live="polite">
+          {PHASES.map((p) => {
+            const idx = PHASES.indexOf(p);
+            const cur = PHASES.indexOf(phase as (typeof PHASES)[number]);
+            return (
+              <li key={p} class={idx < cur ? undefined : idx === cur ? 'loading-dots' : 'mute'}>
+                {t(`welcome.start.phase.${p}`)}
+                {idx < cur ? ' ✓' : ''}
+              </li>
+            );
+          })}
+        </ol>
+      )}
+      {install && <Install install={install} />}
+      {(phase || failed) && tail.length > 0 && <LogPane label={t('welcome.start.log')} lines={tail.map((text, i) => ({ key: i, text }))} height={200} />}
+      {failed && (
+        <Banner
+          tone="critical"
+          title={t('welcome.start.failed')}
+          actions={
+            <span class="cluster">
+              <Button size="s" onClick={() => void load()}>
+                {t('welcome.start.retry')}
+              </Button>
+              <Button size="s" variant="text" onClick={() => goTo(4)}>
+                {t('welcome.start.choose_other')}
+              </Button>
+            </span>
+          }
+        >
+          <code class="mono">{e?.error?.message ?? ''}</code>
+        </Banner>
+      )}
+    </StepLayout>
+  );
+}

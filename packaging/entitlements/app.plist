@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for the app's main executable, Contents/MacOS/SplashGUI.
+  Starts empty. sign.sh applies it in step 3, when it signs the app bundle. Add a key only when a
+  live lane shows the need, and keep that run's log.
+-->
+<plist version="1.0">
+<dict>
+</dict>
+</plist>

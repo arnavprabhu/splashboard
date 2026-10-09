@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use Splashboard, please cite it, and cite Splash, the engine it runs on."
+title: Splashboard
+abstract: "A macOS menu bar app and web admin for serving, monitoring and chatting with models on the Splash local inference engine."
+type: software
+authors:
+  - given-names: Arnav
+    family-names: Prabhu
+license: Apache-2.0
+repository-code: "https://github.com/arnavprabhu/splashboard"
+version: 0.2.0
+references:
+  - type: software
+    title: Splash
+    abstract: "A local inference engine for Apple silicon, built around the model."
+    authors:
+      - name: inco.ai
+    license: Apache-2.0
+    repository-code: "https://github.com/incoai/splash"
+    url: "https://inco.ai/blog/splash/"
+    version: 1.3.0
+    date-released: 2026-10-06

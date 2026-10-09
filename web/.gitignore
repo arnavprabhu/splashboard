@@ -1,0 +1,2 @@
+# Per-agent / per-run build outputs (SPLASH_GUI_E2E_DIST, SPLASH_GUI_DIST)
+dist-*/

@@ -1,0 +1,678 @@
+"""Engine supervision against the fake engine."""
+
+from __future__ import annotations
+
+import threading
+import time
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from splash_gui.engine.discovery import EngineInfo
+from splash_gui.engine.startup import ReadyEvent
+
+from .conftest import write_script
+from .fakeengine import MODEL, MODEL_27B, EngineHarness
+
+
+def test_load_reaches_ready_and_logs_session(harness_factory: Callable[..., EngineHarness]) -> None:
+    h = harness_factory()
+    view = h.load()
+    assert view["state"] == "ready", view
+    assert view["model"] == MODEL
+    assert view["maximum_context_tokens"] == 262144
+    assert view["chat_template_mode"] == "patched"
+    assert view["vision"] is True
+    assert view["draft"] is None or isinstance(view["draft"], str)
+    assert view["command"] and "--no-webui" in view["command"]
+    assert "SPLASH_API_KEY=••••••" in view["command"]
+    assert view["pid"] and view["internal_port"]
+    assert view["restart"]["auto_restart"] is True
+    log = (h.home / "logs" / "engine.log").read_text()
+    assert "engine session started" in log
+    assert "Ready · " in log
+    assert "splash-internal-" not in log
+    h.client.post("/api/admin/engine/stop")
+    view = h.wait_state("stopped")
+    assert view["pid"] is None
+    log = (h.home / "logs" / "engine.log").read_text()
+    assert "engine session ended · stop" in log
+    sessions = h.state.usage.sessions()
+    assert sessions[0]["model"] == MODEL and sessions[0]["reason"] == "stop"
+    assert not (h.home / "run" / "engine.pid").exists()
+
+
+def test_draft_is_the_repo_id_not_a_dict_repr(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """Acceptance 2026-10-04: the Status header showed `{'repo_id': …}` because
+    InstalledModel.draft is a DraftRef dict."""
+    h = harness_factory()
+    h.load()
+    real = h.state.model_info
+
+    def with_draft(model: str) -> dict[str, object] | None:
+        info = dict(real(model) or {})
+        info["draft"] = {
+            "repo_id": "incoai/Qwen3.6-35B-A3B-DFlash2",
+            "commit": "51ef7b69",
+            "shared": False,
+        }
+        return info
+
+    h.state.model_info = with_draft
+    view = h.client.get("/api/admin/engine").json()
+    assert view["draft"] == "incoai/Qwen3.6-35B-A3B-DFlash2"
+
+
+def test_engine_environment_and_flags(harness_factory: Callable[..., EngineHarness]) -> None:
+    h = harness_factory()
+    h.load()
+    fake = h.fake("GET", "/_fake/state")
+    env = fake["env"]
+    assert env["HF_HUB_CACHE"] == str(h.home / "models")
+    assert env["TMPDIR"] == str(h.home / "cache" / "tmp")
+    assert fake["api_key_set"] is True
+    argv = fake["argv"]
+    assert (
+        "--no-webui" in argv and "--host" in argv and argv[argv.index("--host") + 1] == "127.0.0.1"
+    )
+
+
+def test_load_validation_errors(harness_factory: Callable[..., EngineHarness]) -> None:
+    h = harness_factory()
+    bad = h.client.post("/api/admin/engine/load", json={"model": "not a model"})
+    assert bad.status_code == 400 and bad.json()["error"]["code"] == "invalid_model_id"
+    missing = h.client.post("/api/admin/engine/load", json={"model": "a/b"})
+    assert missing.status_code == 404 and missing.json()["error"]["code"] == "model_not_installed"
+    assert MODEL in missing.json()["error"]["details"]["installed"]
+    restart = h.client.post("/api/admin/engine/restart")
+    assert restart.status_code == 409
+
+
+def test_profile_id_loads_the_base_model(harness_factory: Callable[..., EngineHarness]) -> None:
+    h = harness_factory()
+    response = h.client.post(
+        "/api/admin/engine/load", json={"model": f"{MODEL}:no-think", "wait": True}
+    )
+    assert response.status_code == 202
+    assert response.json()["state"] == "ready" and response.json()["model"] == MODEL
+
+
+def test_crash_restarts_with_backoff_then_fails(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    h = harness_factory()
+    h.load()
+    for attempt in (1, 2):
+        h.fake("POST", "/_fake/crash", {"code": 3})
+        view = h.wait_state("crashed", "starting", "ready", timeout=10)
+        view = h.wait_state("ready", timeout=20)
+        assert view["restart"]["crashes_in_window"] == attempt
+    events = h.state.usage.sessions()
+    assert any(s["reason"] == "crash" for s in events)
+    h.fake("POST", "/_fake/crash", {"signal": "SIGKILL"})
+    view = h.wait_state("failed", timeout=10)
+    assert view["error"]["kind"] == "crash_loop"
+    alerts = h.client.get("/api/admin/alerts").json()["alerts"]
+    assert any(a["condition"] == "crash_loop" and a["severity"] == "critical" for a in alerts)
+    # Restart from failed works and clears the history.
+    h.client.post("/api/admin/engine/restart")
+    assert h.wait_state("ready", timeout=20)["restart"]["crashes_in_window"] == 0
+    # ...and the crash-loop alert, whose condition is gone (acceptance 2026-10-04).
+    alerts = h.client.get("/api/admin/alerts").json()["alerts"]
+    assert not any(a["condition"] == "crash_loop" for a in alerts), alerts
+
+
+def test_crash_loop_alert_clears_when_a_reload_reaches_ready(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """The band kept showing "Splash crashed 3× in 5 min" after a successful
+    manual reload (real-engine acceptance, item 8)."""
+    h = harness_factory()
+    cleared: list[object] = []
+    bus = h.state.events
+    real = bus.publish
+
+    def spy(event: str, data: object) -> None:
+        if event == "alert.cleared":
+            cleared.append(getattr(data, "id", None))
+        real(event, data)
+
+    bus.publish = spy
+    h.load()
+    for _ in range(2):
+        h.fake("POST", "/_fake/crash", {"signal": "SIGKILL"})
+        h.wait_state("crashed", "starting", timeout=10)
+        h.wait_state("ready", timeout=20)
+    h.fake("POST", "/_fake/crash", {"signal": "SIGKILL"})
+    h.wait_state("failed", timeout=10)
+    assert h.state.alerts.active("crash_loop"), "still failed: the alert stays"
+    response = h.client.post("/api/admin/engine/load", json={"model": MODEL, "wait": True})
+    assert response.status_code == 202 and response.json()["state"] == "ready"
+    assert not h.state.alerts.active("crash_loop")
+    assert "crash_loop" in cleared, "clients drop the band on alert.cleared"
+
+
+def test_crash_without_auto_restart_fails(harness_factory: Callable[..., EngineHarness]) -> None:
+    h = harness_factory()
+    settings = h.client.get("/api/admin/settings").json()["settings"]
+    settings["global"]["lifecycle"]["auto_restart"] = False
+    assert h.client.put("/api/admin/settings", json=settings).status_code == 200
+    h.load()
+    h.fake("POST", "/_fake/crash", {"code": 1})
+    view = h.wait_state("failed", timeout=10)
+    assert view["error"]["code"] == "crashed"
+
+
+def test_budget_refusal_fails_with_breakdown(harness_factory: Callable[..., EngineHarness]) -> None:
+    h = harness_factory(env={"FAKE_SPLASH_FAIL_STARTUP": "budget"})
+    view = h.load()
+    assert view["state"] == "failed"
+    error = view["error"]
+    assert error["kind"] == "budget_refusal"
+    assert error["budget"] and error["budget"][0]["label"] == "physical memory"
+    assert {s["action"] for s in error["suggestions"]} >= {"lower_max_context", "language_only"}
+    assert view["log_tail"]
+    # Stop from failed returns to stopped and clears the error.
+    assert h.client.post("/api/admin/engine/stop").json()["state"] == "stopped"
+
+
+def test_switch_model_and_busy_conflict(harness_factory: Callable[..., EngineHarness]) -> None:
+    h = harness_factory(installed=(MODEL, MODEL_27B), env={"FAKE_SPLASH_TOKS": "40"})
+    h.load(MODEL)
+    done = threading.Event()
+
+    def slow() -> None:
+        h.client.post(
+            "/v1/chat/completions",
+            json={
+                "model": MODEL,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 80,
+                "ignore_eos": True,
+                "stream": True,
+            },
+        )
+        done.set()
+
+    worker = threading.Thread(target=slow)
+    worker.start()
+    deadline = time.monotonic() + 5
+    while h.engine()["requests_in_flight"] == 0 and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert h.engine()["state"] == "busy"
+    busy = h.client.post("/api/admin/engine/load", json={"model": MODEL_27B})
+    assert busy.status_code == 409 and busy.json()["error"]["code"] == "model_switch_busy"
+    worker.join(30)
+    assert done.is_set()
+    h.wait_state("ready")
+    view = h.load(MODEL_27B)
+    assert view["state"] == "ready" and view["model"] == MODEL_27B
+    reasons = [s["reason"] for s in h.state.usage.sessions()]
+    assert "switch" in reasons
+
+
+def test_recovering_and_engine_failed(harness_factory: Callable[..., EngineHarness]) -> None:
+    h = harness_factory()
+    h.load()
+    h.fake("POST", "/_fake/mode", {"mode": "engine_recovering"})
+    view = h.wait_state("recovering", timeout=10)
+    assert view["transport"]["recovering"] is True
+    h.fake("POST", "/_fake/mode", {"mode": "normal"})
+    h.wait_state("ready", timeout=10)
+    h.fake("POST", "/_fake/mode", {"mode": "engine_failed"})
+    view = h.wait_state("engine_failed", timeout=10)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        alerts = h.client.get("/api/admin/alerts").json()["alerts"]
+        if any(a["condition"] == "engine_failed" for a in alerts):
+            break
+        time.sleep(0.1)
+    assert any(a["condition"] == "engine_failed" for a in alerts)
+    restart = next(a for a in alerts if a["condition"] == "engine_failed")["actions"]
+    assert restart[0]["path"] == "/api/admin/engine/restart"
+
+
+def test_idle_released_and_restored(harness_factory: Callable[..., EngineHarness]) -> None:
+    h = harness_factory(env={"FAKE_SPLASH_IDLE_RELEASE_SECONDS": "0.3"})
+    h.load()
+    view = h.wait_state("idle_released", timeout=10)
+    assert view["model"] == MODEL
+    response = h.client.post(
+        "/v1/chat/completions",
+        json={"model": MODEL, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 2},
+    )
+    assert response.status_code == 200
+    view = h.wait_state("ready", "idle_released", timeout=10)
+    assert any(n["kind"] == "weights_restored" for n in h.engine()["notices"])
+
+
+def test_idle_unload_stops_the_process(harness_factory: Callable[..., EngineHarness]) -> None:
+    h = harness_factory()
+    settings = h.client.get("/api/admin/settings").json()["settings"]
+    settings["global"]["lifecycle"]["idle_unload"] = True
+    settings["global"]["lifecycle"]["idle_unload_minutes"] = 5
+    assert h.client.put("/api/admin/settings", json=settings).status_code == 200
+    h.load()
+    h.sup.last_request_mono = time.monotonic() - 299
+    portal(h).call(h.sup.check_idle)
+    assert h.engine()["state"] == "ready"
+    h.sup.last_request_mono = time.monotonic() - 301
+    portal(h).call(h.sup.check_idle)
+    assert h.wait_state("stopped")["state"] == "stopped"
+    assert h.state.usage.sessions()[0]["reason"] == "idle_unload"
+
+
+def test_auto_load_after_idle_unload(harness_factory: Callable[..., EngineHarness]) -> None:
+    h = harness_factory()
+    response = h.client.post(
+        "/v1/chat/completions",
+        json={"model": MODEL, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 2},
+    )
+    assert response.status_code == 200, response.text
+    assert h.engine()["state"] in ("ready", "busy")
+
+
+def test_stop_sequence_escalates_to_sigkill(
+    harness_factory: Callable[..., EngineHarness], tmp_path: Path
+) -> None:
+    stubborn = write_script(
+        tmp_path / "stubborn" / "splash",
+        'trap "" INT\necho "12:00:00 Loading · x"\nexec sleep 60\n',
+    )
+    h = harness_factory()
+    h.state.discover_engine = lambda: EngineInfo(
+        found=True,
+        cli=stubborn,
+        source="setting",
+        version="1.3.0",
+        version_tuple=(1, 3, 0),
+        support="supported",
+    )
+    h.state.forget_engine()
+    h.sup.stop_timeout_s = 0.3
+    h.sup.second_sigint_s = 0.3
+    response = h.client.post("/api/admin/engine/load", json={"model": MODEL})
+    assert response.status_code == 202
+    h.wait_state("starting")
+    # Wait until the child installed its SIGINT trap, rather than racing process startup.
+    deadline = time.monotonic() + 5
+    while "Loading · x" not in (h.home / "logs" / "engine.log").read_text():
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    started = time.monotonic()
+    view = h.client.post("/api/admin/engine/stop").json()
+    assert view["state"] == "stopped"
+    assert time.monotonic() - started < 5
+    log = (h.home / "logs" / "engine.log").read_text()
+    assert "engine session ended · stop · exit -9" in log
+
+
+def test_startup_failure_is_failed_not_a_restart_loop(
+    harness_factory: Callable[..., EngineHarness], tmp_path: Path
+) -> None:
+    broken = write_script(
+        tmp_path / "broken" / "splash",
+        'echo "error: cannot install a/b: no supported model has this architecture '
+        '(hidden_size=4096); supported: Qwen3.8-27B" >&2\nexit 1\n',
+    )
+    h = harness_factory()
+    h.state.discover_engine = lambda: EngineInfo(
+        found=True,
+        cli=broken,
+        source="setting",
+        version="1.3.0",
+        version_tuple=(1, 3, 0),
+        support="supported",
+    )
+    h.state.forget_engine()
+    view = h.load()
+    assert view["state"] == "failed"
+    assert view["error"]["kind"] == "incompatible"
+    assert view["restart"]["crashes_in_window"] == 0
+
+
+def test_engine_missing(harness_factory: Callable[..., EngineHarness]) -> None:
+    h = harness_factory()
+    h.state.discover_engine = lambda: EngineInfo(found=False, error="Splash is not installed")
+    h.state.forget_engine()
+    response = h.client.post("/api/admin/engine/load", json={"model": MODEL})
+    assert response.status_code == 503 and response.json()["error"]["code"] == "engine_not_found"
+
+
+@pytest.mark.parametrize("watchers", [0, 1])
+def test_status_poll_interval_follows_watchers(
+    harness_factory: Callable[..., EngineHarness], watchers: int
+) -> None:
+    h = harness_factory()
+    h.state.watchers = watchers
+    assert h.sup.watching() is bool(watchers)
+
+
+def test_the_effective_command_line_is_in_the_engine_log(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """Every option set in Settings shows in Logs at engine start."""
+    h = harness_factory()
+    h.patch_settings(
+        {
+            "global": {
+                "serve": {
+                    "max_context": "96K",
+                    "kv_format": "bf16",
+                    "max_memory": "40G",
+                    "decode_share": 1.5,
+                    "max_request_size": "256M",
+                    "max_image_pixels": 1048576,
+                    "request_timeout": 600,
+                    "queue_size": 8,
+                    "default_reasoning_effort": "low",
+                }
+            },
+            "models": {
+                MODEL: {
+                    "serve": {
+                        "served_model_names": ["moe"],
+                        "announce_served_name": True,
+                        "language_only": True,
+                    }
+                }
+            },
+        }
+    )
+    view = h.load()
+    assert view["state"] == "ready", view
+    lines = h.client.get("/api/admin/logs/engine", params={"tail": 200}).json()["lines"]
+    start = next(line["text"] for line in lines if "engine session started" in line["text"])
+    for expected in (
+        f"--model {MODEL}",
+        "--no-webui",
+        "--host 127.0.0.1",
+        "--max-context 96K",
+        "--kv-format bf16",
+        "--max-memory 40G",
+        "--decode-share 1.5",
+        "--max-request-size 256M",
+        "--max-image-pixels 1048576",
+        "--request-timeout 600",
+        "--queue-size 8",
+        "--default-reasoning-effort low",
+        "--served-model-name moe",
+        "--announce-served-name",
+        "--language-only",
+        "SPLASH_API_KEY=••••••",
+        f"TMPDIR={h.home / 'cache' / 'tmp'}",
+    ):
+        assert expected in start, (expected, start)
+    assert "splash-internal-" not in start
+    # The engine accepted every flag (the fake validates with Splash's own serve_options.py).
+    argv = h.fake("GET", "/_fake/state")["argv"]
+    assert "--announce-served-name" in argv and "--language-only" in argv
+
+
+def test_persistent_cache_flags_tmpdir_and_restore(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """--persistent-cache needs --max-cache-disk, gets --cache-dir
+    ~/.splash/cache, and TMPDIR is ~/.splash/cache/tmp; a restart restores states."""
+    h = harness_factory()
+    bad = h.settings_document()
+    bad["global"]["serve"].update(max_cache_disk="0", persistent_cache=True)
+    refused = h.client.put("/api/admin/settings", json=bad)
+    assert refused.status_code == 422, refused.text
+    h.patch_settings({"global": {"serve": {"max_cache_disk": "4G", "persistent_cache": True}}})
+    view = h.load()
+    cache = h.home / "cache"
+    assert f"--max-cache-disk 4G --persistent-cache --cache-dir {cache}" in view["command"]
+    fake = h.fake("GET", "/_fake/state")
+    assert fake["env"]["TMPDIR"] == str(cache / "tmp")
+    assert (cache / "tmp").is_dir()
+    chat = h.client.post(
+        "/v1/chat/completions",
+        json={
+            "model": MODEL,
+            "messages": [{"role": "user", "content": "x " * 3000}],
+            "max_tokens": 4,
+        },
+    )
+    assert chat.status_code == 200, chat.text
+    assert h.client.get("/api/admin/engine/status").json()["disk"]["persistent"] is True
+    # The fake publishes the prefix just after the response; wait for it.
+    deadline = time.monotonic() + 5
+    while not h.fake("GET", "/_fake/state")["counters"]["publications"]:
+        assert time.monotonic() < deadline, "the fake never published a restore point"
+        time.sleep(0.02)
+    restarted = h.client.post("/api/admin/engine/restart")
+    assert restarted.status_code in (200, 202), restarted.text
+    view = h.wait_state("ready", timeout=30)
+    deadline = time.monotonic() + 5
+    while not (view.get("taken_back") or {}).get("states") and time.monotonic() < deadline:
+        time.sleep(0.1)
+        view = h.engine()
+    log = (h.home / "logs" / "engine.log").read_text()
+    assert view["taken_back"]["states"] > 0, (view["taken_back"], log[-3000:])
+    assert view["persistent_cache"] is True
+    assert any(p.is_dir() and p.name != "tmp" for p in cache.iterdir()), (
+        "files under ~/.splash/cache"
+    )
+
+
+def test_three_quick_kills_fail_with_alert_and_notification(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    h = harness_factory()
+    published: list[tuple[str, object]] = []
+    bus = h.state.events
+    real = bus.publish
+
+    def spy(event: str, data: object) -> None:
+        published.append((event, data))
+        real(event, data)
+
+    bus.publish = spy
+    h.load()
+    for _ in range(2):
+        h.fake("POST", "/_fake/crash", {"signal": "SIGKILL"})
+        h.wait_state("crashed", "starting", timeout=10)
+        h.wait_state("ready", timeout=20)
+    h.fake("POST", "/_fake/crash", {"signal": "SIGKILL"})
+    view = h.wait_state("failed", timeout=10)
+    assert view["error"]["code"] == "crash_loop"
+    notes = [d for e, d in published if e == "notification"]
+    assert any(getattr(n, "kind", None) == "crash_loop" for n in notes), notes
+    alerts = [d for e, d in published if e == "alert"]
+    assert any(getattr(a, "condition", None) == "crash_loop" for a in alerts)
+
+
+def test_raw_status_passes_ane_ffn_and_weights_through(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """Splash 1.3.0's `ane_ffn` and `weights` blocks reach /api/admin/engine/status with
+    the engine's own key names; the Status page reads them by dotted path."""
+    h = harness_factory(installed=(MODEL_27B,))
+    h.load(MODEL_27B)
+    raw = h.client.get("/api/admin/engine/status").json()
+    assert raw["ane_ffn"] == {
+        "state": "split",
+        "share": 0.3235294118,
+        "minimum_rows": 524,
+        "reason": "at share 0.32 for chunks of 524 rows or more, 2.2% from the GPU alone "
+        "on the Neural Engine's part (set up as calibrated before in 2.0 s)",
+        "split_commands": 1,
+        "reruns": 0,
+        "ane_ms": 1258.4,
+        "evaluations": 64,
+    }
+    assert raw["weights"] == {"idle_release_seconds": 600.0, "released": False, "restores": 0}
+    assert raw["memory_plan"]["budget"]["ane_ffn_bytes"] == 229_703_680
+
+
+def test_disable_ane_reaches_the_engine_per_model(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    h = harness_factory(installed=(MODEL_27B,))
+    h.patch_settings({"models": {MODEL_27B: {"serve": {"disable_ane": True}}}})
+    view = h.load(MODEL_27B)
+    assert view["command"].endswith("--disable-ane")
+    raw = h.client.get("/api/admin/engine/status").json()
+    assert (raw["ane_ffn"]["state"], raw["ane_ffn"]["reason"]) == ("off", "as given")
+
+
+def test_idle_release_setting_and_the_weights_block_drive_idle_released(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """`serve.idle_release` becomes --idle-release; the state follows `weights.released`
+    in /status, not the manager's own 10-minute timer."""
+    h = harness_factory()
+    h.patch_settings({"global": {"serve": {"idle_release": "0.5s"}}})
+    h.sup.splash_idle_release_s = 3600.0  # the fallback timer must not be what fires
+    view = h.load()
+    assert "--idle-release 0.5s" in view["command"]
+    h.wait_state("idle_released", timeout=10)
+    raw = h.client.get("/api/admin/engine/status").json()
+    assert raw["weights"]["released"] is True and raw["weights"]["idle_release_seconds"] == 0.5
+
+
+def test_a_crash_restart_waits_out_a_hold_instead_of_dropping_it(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """A restart whose timer fires while a hold runs (a GGUF registration,
+    a model delete, a KV clear) used to return without re-arming. The engine then stayed
+    crashed until a manual restart."""
+    h = harness_factory()
+    h.load()
+    h.sup.hold_retry_s = 0.05
+    h.sup._holds.append("local_model")
+    try:
+        h.fake("POST", "/_fake/crash", {"code": 3})
+        h.wait_state("crashed", timeout=10)
+        # The first restart timer (0.05 s) fires inside the hold. It must stay armed.
+        time.sleep(0.5)
+        view = h.engine()
+        assert view["state"] == "crashed", view
+        assert view["restart"]["next_retry_at"] is not None
+        assert h.sup._restart_task is not None and not h.sup._restart_task.done()
+    finally:
+        h.sup._holds.remove("local_model")
+    view = h.wait_state("ready", timeout=10)
+    assert view["restart"]["next_retry_at"] is None
+
+
+def test_a_request_for_the_crashed_model_is_served_when_the_hold_ends(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    h = harness_factory()
+    h.load()
+    h.sup.hold_retry_s = 0.05
+    h.sup._holds.append("local_model")
+    h.fake("POST", "/_fake/crash", {"code": 3})
+    h.wait_state("crashed", timeout=10)
+    release = threading.Timer(0.5, h.sup._holds.remove, args=("local_model",))
+    release.start()
+    response = h.client.post(
+        "/v1/chat/completions",
+        json={"model": MODEL, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 2},
+    )
+    release.join()
+    assert response.status_code == 200, response.text
+    assert h.engine()["state"] in ("ready", "busy")
+
+
+def test_ready_needs_the_ready_line_or_three_ready_polls(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """Without the Ready line, three /ready 200 polls reach ready; two do not."""
+    h = harness_factory()
+    h.load()
+    run = h.sup._run
+    assert run is not None
+    h.sup._set("starting")
+    run.ready_line = False
+    run.ready_polls_ok = 0
+    for _ in range(2):
+        portal(h).call(h.sup._check_ready, run)
+    assert (h.sup.state, run.ready_polls_ok) == ("starting", 2)
+    portal(h).call(h.sup._check_ready, run)
+    assert h.sup.state == "ready"
+
+
+def test_an_engine_without_the_ready_line_still_reaches_ready(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """The fallback for an engine that words its Ready line differently."""
+    h = harness_factory()
+    real_apply = h.sup._apply
+
+    def without_ready_line(run: object, event: object) -> None:
+        if isinstance(event, ReadyEvent):
+            return
+        real_apply(run, event)
+
+    h.sup._apply = without_ready_line
+    view = h.load()
+    assert view["state"] == "ready", view
+    assert "Ready · " in (h.home / "logs" / "engine.log").read_text()
+    run = h.sup._run
+    assert run is not None and run.ready_line is False and run.ready_polls_ok >= 3
+
+
+def test_detect_restart_counts_a_build_change_or_a_counter_drop(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """A drop in counters or a new identity.build_id means a restart."""
+    h = harness_factory()
+    sup = h.sup
+
+    def status(build: str, submitted: int) -> dict[str, object]:
+        return {"identity": {"cache": {"build_id": build}}, "requests": {"submitted": submitted}}
+
+    assert sup._detect_restart(status("a", 5)) is False, "the first look is no restart"
+    assert sup._detect_restart(status("a", 9)) is False
+    assert sup.restarts_detected == 0
+    assert sup._detect_restart(status("a", 2)) is True, "a counter went down"
+    assert sup._detect_restart(status("b", 2)) is True, "a new build id"
+    assert sup._detect_restart(status("b", 2)) is False, "nothing changed"
+    assert sup._detect_restart({}) is False, "missing fields are not a restart"
+    assert sup.restarts_detected == 2
+
+
+def test_a_new_process_starts_a_fresh_counter_baseline(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """_spawn clears the baseline, so the first poll of a new process (a crash restart
+    here, or a model switch) is not a drop. /status shows only Splash's own in-process
+    restarts (`recovering`)."""
+    h = harness_factory()
+    h.load()
+    chat = h.client.post(
+        "/v1/chat/completions",
+        json={"model": MODEL, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 2},
+    )
+    assert chat.status_code == 200, chat.text
+    portal(h).call(h.sup.poll_now)
+    h.fake("POST", "/_fake/crash", {"signal": "SIGKILL"})
+    h.wait_state("crashed", "starting", timeout=10)
+    h.wait_state("ready", timeout=20)
+    assert h.sup.restarts_detected == 0
+    assert "splash_gui_engine_restarts_detected_total 0" in h.client.get("/metrics").text
+
+
+def test_the_restart_gauge_exports_the_detected_count(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """No engine runs here, so no status poll can move the counter under the test."""
+    h = harness_factory()
+    sup = h.sup
+    sup._detect_restart({"requests": {"submitted": 5}})
+    sup._detect_restart({"requests": {"submitted": 1}})
+    assert sup.restarts_detected == 1
+    assert "splash_gui_engine_restarts_detected_total 1" in h.client.get("/metrics").text
+
+
+def portal(h: Any) -> Any:
+    """The test client's portal, which exists while the client is open."""
+    assert h.client.portal is not None
+    return h.client.portal

@@ -1,0 +1,40 @@
+import type { NavItem } from '../components/NavBand';
+import { t } from '../strings/en';
+
+export const STATUS_TABS: readonly NavItem[] = [
+  { href: '/status', label: t('nav.tab.live') },
+  { href: '/status/history', label: t('nav.tab.history') },
+];
+
+export const MODELS_TABS: readonly NavItem[] = [
+  { href: '/models', label: t('nav.tab.manager') },
+  { href: '/models/downloader', label: t('nav.tab.downloader') },
+];
+
+export const LOGS_TABS: readonly NavItem[] = [
+  { href: '/logs', label: t('nav.tab.tail') },
+  { href: '/logs/diagnostics', label: t('nav.tab.diagnostics') },
+];
+
+/** Settings sections in page order; slugs are the /admin/settings/:section values. */
+export const SETTINGS_SECTIONS = [
+  { slug: 'server', label: 'Server & network' },
+  { slug: 'security', label: 'Security' },
+  { slug: 'storage', label: 'Models & storage' },
+  { slug: 'memory', label: 'Memory & context' },
+  { slug: 'cache', label: 'Cache' },
+  { slug: 'performance', label: 'Performance' },
+  { slug: 'requests', label: 'Requests & limits' },
+  { slug: 'sampling', label: 'Reasoning & sampling' },
+  { slug: 'routing', label: 'Routing' },
+  { slug: 'hf', label: 'Hugging Face' },
+  { slug: 'chat', label: 'Chat & MCP' },
+  { slug: 'lifecycle', label: 'Lifecycle' },
+  { slug: 'menubar', label: 'Menu bar' },
+  { slug: 'notifications', label: 'Notifications' },
+  { slug: 'data', label: 'Data & privacy' },
+  { slug: 'advanced', label: 'Advanced' },
+  { slug: 'about', label: 'About' },
+] as const;
+
+export type SettingsSlug = (typeof SETTINGS_SECTIONS)[number]['slug'];

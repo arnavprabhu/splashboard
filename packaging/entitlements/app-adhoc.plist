@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for the menu bar app's executable, but only in an ad hoc build (identity "-" in
+  sign.sh). An ad hoc signature has no team identifier, and library validation
+  then refuses the embedded Sparkle.framework at launch (dyld: "Library not loaded … code signature … not valid for
+  use in process", measured 2026-10-07). This key turns library validation off for the app's executable, and nothing
+  else. Identity builds (Apple Development now, Developer ID later) use app.plist, which stays empty, so they keep
+  library validation. Same reason as python-adhoc.plist.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

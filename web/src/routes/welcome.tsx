@@ -1,0 +1,62 @@
+import { useEffect, useState } from "preact/hooks";
+import { api } from "../api/client";
+import type { SystemInfo } from "../api/models";
+import { PageHeader } from "../components/Section";
+import { useApi } from "../lib/use-api";
+import { t } from "../strings/welcome";
+import { useTitle } from "../lib/title";
+import "../styles/pages/welcome.css";
+import { StepEngine } from "./welcome/StepEngine";
+import { StepStorage } from "./welcome/StepStorage";
+import { StepModel, StepStart, StepUseCase } from "./welcome/StepsLater";
+import { hydrateProgress, progress, updateProgress, WizardContext } from "./welcome/frame";
+import { initialStep, parseStep, stepSearch, type Step } from "./welcome/steps";
+import { isHosted } from "./welcome/host";
+import { stopReason } from "./welcome/logic";
+import { StopState } from "./welcome/StepStop";
+import { loadSettings } from "../store";
+
+/** The welcome wizard: five steps, progress kept across reloads. */
+export default function Welcome() {
+  useTitle(t("welcome.page_title"));
+  const [ready, setReady] = useState(false);
+  const [step, setStep] = useState<Step>(() => initialStep(parseStep(location.search), progress.value));
+  useEffect(() => {
+    // The progress lives in settings: read it before a step mounts, so step 5 sees the port.
+    let live = true;
+    void loadSettings(true).finally(() => {
+      if (!live) return;
+      hydrateProgress();
+      setStep(initialStep(parseStep(location.search), progress.value));
+      setReady(true);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  const system = useApi((s) => api.read<SystemInfo>("/system", undefined, s));
+  const hosted = isHosted();
+  // A Mac Splash cannot run on gets the stop state instead of any step.
+  const stop = stopReason(system.data);
+  function goTo(next: Step) {
+    setStep(next);
+    updateProgress({ step: next, reached: Math.max(progress.value.reached, next) as Step });
+    history.replaceState(null, "", `${location.pathname}?${stepSearch(location.search, next)}`);
+  }
+  return (
+    <WizardContext.Provider value={{ step, goTo, hosted, system: system.data }}>
+      <PageHeader title={t("welcome.title")} />
+      {stop ? (
+        <StopState reason={stop} hosted={hosted} onCheck={() => void system.reload()} />
+      ) : (
+        <>
+          {ready && step === 1 && <StepEngine />}
+          {ready && step === 2 && <StepStorage />}
+          {ready && step === 3 && <StepUseCase />}
+          {ready && step === 4 && <StepModel />}
+          {ready && step === 5 && <StepStart />}
+        </>
+      )}
+    </WizardContext.Provider>
+  );
+}

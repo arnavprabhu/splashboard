@@ -1,0 +1,37 @@
+# The fake engine follows the manager's rule set (manager/pyproject.toml),
+# with a longer line for the engine's long output strings. Files copied
+# verbatim from ./splash are excluded: a test keeps them byte-identical.
+line-length = 120
+target-version = "py312"
+extend-exclude = [
+    "pkg/server/serve_options.py",
+    "pkg/server/origins.py",
+    "pkg/server/http_security.py",
+    "pkg/server/errors.py",
+    "pkg/server/images.py",
+    "pkg/server/metrics.py",
+    "pkg/server/latency.py",
+    "pkg/server/json_codec.py",
+    "pkg/server/lru.py",
+    "pkg/server/diagnostics.py",
+    "pkg/install/families.py",
+    "pkg/install/clients.py",
+]
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "C4", "PTH", "TID", "S"]
+ignore = [
+    "TID252",  # relative imports within the package are the house style
+    "S101",  # assert is fine in tests and for type narrowing
+    "S603",  # subprocess calls are deliberate and never use a shell
+    "S607",  # partial executable paths are resolved from PATH on purpose
+    "S310",  # urllib only ever opens http://127.0.0.1 here
+    "S311",  # fake text and ids need no cryptographic randomness
+    "RUF001", "RUF002", "RUF003",  # typographic characters in engine output strings
+]
+
+[lint.isort]
+known-first-party = ["harness", "conftest", "install", "server"]
+
+[lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S108"]

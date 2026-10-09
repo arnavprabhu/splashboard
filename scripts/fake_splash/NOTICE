@@ -1,0 +1,32 @@
+Fake Splash engine: third-party code
+
+Parts of this folder come from Splash (https://github.com/incoai/splash), by inco.ai,
+licensed under the Apache License, Version 2.0. A copy of that license is in
+LICENSE.splash in this folder. Splash ships no NOTICE file.
+
+Copied unchanged from Splash 1.3.0:
+  pkg/install/__init__.py
+  pkg/install/clients.py
+  pkg/install/families.py
+  pkg/server/__init__.py
+  pkg/server/diagnostics.py
+  pkg/server/errors.py
+  pkg/server/http_security.py
+  pkg/server/images.py
+  pkg/server/json_codec.py
+  pkg/server/latency.py
+  pkg/server/lru.py
+  pkg/server/metrics.py
+  pkg/server/origins.py
+  pkg/server/serve_options.py
+
+Derived from Splash and modified by the Splashboard authors (each file's opening
+docstring names its source):
+  pkg/install/launcher.py     from install/launcher.py
+  pkg/install/models.py       from install/models.py
+  pkg/install/upstream.py     from install/upstream.py
+  pkg/server/crash_trace.py   from server/crash_trace.py
+  pkg/server/fake_shapes.py   from server/api_shapes.py
+
+Everything else here is original to Splashboard and only reproduces Splash's
+command-line and HTTP interface for tests.

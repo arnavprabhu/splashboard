@@ -1,0 +1,102 @@
+# CI for Splashboard: lint, types and web on Linux, then one macOS job for pytest, Playwright and Swift.
+# Two jobs, to spend as few macOS minutes as possible (GitHub bills macOS runners at 10x Linux):
+#   checks  ubuntu-latest: lint, types and the pure Node/Python steps (ruff, mypy with
+#           --platform darwin, typecheck, vitest, build, bundle size). None of them touch the OS.
+#   macos   macos-26: everything that runs processes or needs macOS (manager and fake-engine
+#           pytest, Playwright against a real manager, swift build and test), in one job so the
+#           checkout and setup are paid once.
+# Nothing here needs a model, Metal or the network beyond package installs.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Never touch a developer's ~/.splash; every job uses a throwaway base directory.
+  SPLASH_GUI_SECRETS: memory
+  FORCE_COLOR: '1'
+
+jobs:
+  checks:
+    name: checks (ruff · mypy · typecheck · vitest · build · size)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: manager/uv.lock
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: manager ruff
+        working-directory: manager
+        run: uv sync --locked && uv run ruff check . && uv run ruff format --check .
+      - name: manager mypy (as on macOS)
+        working-directory: manager
+        run: uv run mypy --platform darwin
+      - name: fake engine ruff
+        run: uvx ruff check scripts/fake_splash && uvx ruff format --check scripts/fake_splash
+      - name: fake engine mypy (as on macOS)
+        run: uvx --with pytest mypy --config-file scripts/fake_splash/mypy.ini --platform darwin
+      - name: web install, typecheck, vitest, build, size
+        working-directory: web
+        run: pnpm install --frozen-lockfile && pnpm typecheck && pnpm test && pnpm build && pnpm size
+
+  macos:
+    name: macOS (pytest · fake engine · playwright · swift)
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: manager/uv.lock
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: manager pytest
+        working-directory: manager
+        run: uv sync --locked && SPLASH_GUI_HOME="$RUNNER_TEMP/splash-home" uv run pytest
+      - name: fake engine pytest
+        run: uv run --no-project --with pytest pytest scripts/fake_splash/tests
+      - name: web build for Playwright
+        working-directory: web
+        run: pnpm install --frozen-lockfile && pnpm build
+      - name: install Playwright browsers
+        working-directory: web
+        run: pnpm exec playwright install --with-deps chromium
+      - name: playwright (stubbed shell + real manager with the fake engine)
+        working-directory: web
+        run: pnpm exec playwright test
+      - name: upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            web/playwright-report
+            web/test-results
+          retention-days: 7
+      - name: swift build and test
+        working-directory: macos
+        run: swift --version && swift build && swift test

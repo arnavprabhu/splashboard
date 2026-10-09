@@ -1,0 +1,29 @@
+/** Sign-in strings. Keys start with "login.". Kept apart from ./en so the
+ * initial bundle does not carry them; the login route loads lazily. */
+import { en } from './en';
+import { makeT } from './index';
+
+export const loginStrings = {
+  'login.page_title': 'Sign in',
+  'login.title': 'Sign in.',
+  'login.lead': 'Enter the API key to open Splashboard.',
+  'login.key': 'API key',
+  'login.submit': 'Sign in',
+  'login.checking': 'Checking…',
+  'login.help': 'On the Mac that runs Splashboard, {cmd} in a terminal opens this page signed in.',
+  'login.key_where': 'Once you are signed in, the API key is in Settings → Security.',
+  'login.menubar': 'On the Mac that runs Splashboard, Open Admin Panel in the menu bar signs you in without the key.',
+  'login.wrong': 'That key didn’t match.',
+  'login.throttled': 'Too many attempts. Try again in {s} s.',
+  'login.throttled_soon': 'Too many attempts. Try again in a moment.',
+  'login.unreachable': 'Splashboard is not answering. Is it running?',
+  'login.failed': 'Could not sign in.',
+  'login.expired': 'Your session expired. Sign in again.',
+  'login.expired_settings': 'Your session expired. Sign in again; unsaved settings changes are kept while this tab stays open.',
+  'login.link_signing_in': 'Signing you in…',
+  'login.link_expired': 'This sign-in link has expired or was already used. Links work once, within a minute. Open the admin again from the menu bar, or sign in with the API key.',
+  'login.write_needs_session': 'Sign in to make changes. Reading is open on this Mac, but changes and secrets need the API key.',
+  'login.write_needs_session_settings': 'Sign in to make changes. Reading is open on this Mac, but changes and secrets need the API key. Unsaved settings changes are kept while this tab stays open.',
+} as const;
+
+export const t = makeT({ ...en, ...loginStrings });

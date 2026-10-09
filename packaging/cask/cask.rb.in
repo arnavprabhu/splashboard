@@ -1,0 +1,54 @@
+# Rendered by packaging/scripts/render-cask.sh. Do not edit the
+# rendered file in the tap: the release workflow replaces it on every release.
+cask "@TOKEN@" do
+  version "@VERSION@"
+  sha256 "@SHA256@"
+
+  url "@URL@"
+  name "@APP_NAME@"
+  desc "Menu bar app and web admin for the Splash local inference engine"
+  homepage "@HOMEPAGE@"
+
+  auto_updates true
+  depends_on arch: :arm64
+  depends_on formula: "incoai/tap/splash"
+  depends_on macos: :tahoe
+
+  app "@APP_NAME@.app"
+
+  # Ad hoc signed, not notarized, so macOS blocks the first open.
+  caveats <<~EOS
+    @APP_NAME@ is not notarized, so macOS blocks its first open. Open System Settings,
+    then Privacy & Security, and click Open Anyway next to "@APP_NAME@".
+  EOS
+
+  uninstall launchctl:  "@AGENT_LABEL@",
+            quit:       "@BUNDLE_ID@",
+            login_item: "@APP_NAME@"
+
+  # Zap keeps ~/.splash/models and ~/.splash/cache (large, user-downloaded) and removes the app's own state.
+  # The Splash engine and its formula are never touched. MCP secrets (named by a digest) are removed by
+  # `splash doctor --uninstall`, which can read the settings that name them.
+  zap script: {
+        executable: "/bin/sh",
+        args:       [
+          "-c",
+          "for s in \"$@\"; do /usr/bin/security delete-generic-password -s \"$s\" >/dev/null 2>&1; done; true",
+          "zap",
+          @SECRET_SERVICES@
+        ],
+      },
+      trash:  [
+        "~/.splash/bin",
+        "~/.splash/chats",
+        "~/.splash/downloads.json",
+        "~/.splash/integrations",
+        "~/.splash/logs",
+        "~/.splash/run",
+        "~/.splash/settings.json",
+        "~/.splash/usage.db",
+        "~/.splash/usage.db-shm",
+        "~/.splash/usage.db-wal",
+        "~/Library/Preferences/@BUNDLE_ID@.plist",
+      ]
+end
