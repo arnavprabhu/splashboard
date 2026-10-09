@@ -17,7 +17,7 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TEMPLATE="$REPO/packaging/cask/cask.rb.in"
-RELEASES_REPO="${RELEASES_REPO:-arnavprabhu/splash-gui}"
+RELEASES_REPO="${RELEASES_REPO:-arnavprabhu/splashboard}"
 TAP_REPO="${TAP_REPO:-arnavprabhu/homebrew-tap}"
 DMG=""
 PREFIX=""

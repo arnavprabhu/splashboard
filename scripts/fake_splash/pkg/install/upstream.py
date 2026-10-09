@@ -1,3 +1,5 @@
+# Derived from Splash (github.com/incoai/splash, Apache-2.0), modified by the Splashboard authors.
+# See LICENSE.splash and NOTICE in scripts/fake_splash.
 """Small compatibility stand-in for splash/install/upstream.py (1.3.0).
 
 Mirrors its `Target`, `check_model` and the screening order of

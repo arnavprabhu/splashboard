@@ -13,9 +13,9 @@ import { settingsApi } from './api';
 import { RemoveData } from './RemoveData';
 
 export const LINKS = {
-  /** Splashboard itself (D40; private for now, D26). */
-  guiRepo: 'https://github.com/arnavprabhu/splash-gui',
-  guiIssues: 'https://github.com/arnavprabhu/splash-gui/issues',
+  /** Splashboard itself (D40; public since D103). */
+  guiRepo: 'https://github.com/arnavprabhu/splashboard',
+  guiIssues: 'https://github.com/arnavprabhu/splashboard/issues',
   /** The engine. */
   repo: 'https://github.com/incoai/splash',
   issue: 'https://github.com/incoai/splash/issues/new',

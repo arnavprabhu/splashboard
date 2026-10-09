@@ -1,6 +1,6 @@
 # Splashboard — menu bar app
 
-SwiftUI `MenuBarExtra` app for macOS 26.4+ (SPEC §13, `docs/ui/10-menubar.md`). A SwiftPM package plus a bundle script, with no `.xcodeproj` (`docs/spec-drift.md` #1). Swift 6 language mode.
+SwiftUI `MenuBarExtra` app for macOS 26.4+. A SwiftPM package plus a bundle script, with no `.xcodeproj`. Swift 6 language mode.
 
 | Target | What it holds |
 |---|---|
@@ -21,11 +21,11 @@ open "build/Splashboard.app"
 
 ## Finding the manager
 
-Packaging is deferred (D30), so the app runs the manager from this checkout: `uv run --project <repo>/manager splash-gui-manager`.
+The development bundle (`scripts/bundle.sh`) runs the manager from this checkout: `uv run --project <repo>/manager splash-gui-manager`.
 
 - **Address.** The app reads `server.host` and `server.port` from `$SPLASH_GUI_HOME/settings.json` (default `~/.splash`, 127.0.0.1:8000), then follows `GET /api/admin/settings`.
 - **Auth.** Every admin call sends `Authorization: Bearer $(cat ~/.splash/run/cli.token)`.
-- **Startup order.** If `GET /health` already answers, the app uses that manager and never stops it. Inside a bundle, it registers the LaunchAgent named by Info.plist `SplashGUIAgentLabel` (`ai.splashgui.manager` by default) through `SMAppService.agent`; the plist is in `Contents/Library/LaunchAgents/` with the repo path baked in. If neither works, it spawns a child process, logging to `~/.splash/logs/manager.launch.log`.
+- **Startup order.** If `GET /health` already answers, the app uses that manager and never stops it. Inside a bundle, it registers the LaunchAgent named by Info.plist `SplashGUIAgentLabel` (`io.github.arnavprabhu.splashboard.manager` by default) through `SMAppService.agent`; the plist is in `Contents/Library/LaunchAgents/` with the repo path baked in. If neither works, it spawns a child process, logging to `~/.splash/logs/manager.launch.log`.
 - **Repo path.** In priority order: `SPLASH_GUI_REPO`, `defaults write <bundle id> SplashGUIRepoPath <path>` (the bundle id from `packaging/identity.env`), Info.plist `SplashGUIRepoPath`, the directories above the executable, then `~/Desktop/Projects/Splash-GUI`.
 - **Finding uv.** PATH, then `/opt/homebrew/bin`, then `~/.local/bin`.
 

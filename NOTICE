@@ -3,8 +3,17 @@ Copyright 2026 The Splashboard authors
 
 This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 
-It bundles the Archivo typeface (SIL Open Font License 1.1) and drives the
-Splash inference engine (incoai/splash, Apache-2.0), which is not bundled.
+Splash
+Splashboard is a front end for Splash (https://github.com/incoai/splash), the local
+inference engine for Apple silicon by inco.ai, licensed under the Apache License,
+Version 2.0. Splash is not bundled in the app: users install it from Homebrew
+(incoai/tap/splash). The test stand-in in scripts/fake_splash contains files copied
+from Splash 1.3.0 and files derived from it; scripts/fake_splash/NOTICE lists them,
+and scripts/fake_splash/LICENSE.splash is Splash's license.
+Splashboard is not an official inco.ai product, and is not endorsed by inco.ai.
+
+Other third-party software
+It bundles the Archivo typeface (SIL Open Font License 1.1).
 The packaged app also bundles CPython 3.13 (Python Software Foundation License,
 from python-build-standalone) and the Python packages it depends on. Each keeps
 its own license, and licenses/THIRD_PARTY.txt in the app reproduces their texts.
@@ -14,5 +23,4 @@ THIRD_PARTY.txt yet.
 The runtime's native code is not covered by THIRD_PARTY.txt either: OpenSSL 3.5.9,
 expat 2.8.5, bzip2 1.0.8, libmpdec, libffi, HACL*, SQLite, liblzma, and Tcl and Tk
 9.0.4 with their itcl and thread extensions. Their license texts are not in the app
-yet (SPEC.md Q39).
-Splashboard is not an official inco.ai product.
+yet.

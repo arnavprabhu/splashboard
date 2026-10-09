@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Derived from Splash (github.com/incoai/splash, Apache-2.0), modified by the Splashboard authors.
+# See LICENSE.splash and NOTICE in scripts/fake_splash.
 """Fake splash/install/launcher.py: `splash --version`, `splash serve` and
 the agent subcommands, with the real argument parsing, help text and
 launcher checks (locks, port probe, device check, installer run).

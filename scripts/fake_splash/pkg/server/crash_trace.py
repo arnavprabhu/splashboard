@@ -1,3 +1,5 @@
+# Derived from Splash (github.com/incoai/splash, Apache-2.0), modified by the Splashboard authors.
+# See LICENSE.splash and NOTICE in scripts/fake_splash.
 """Fake `python -m server.crash_trace <trace>` (splash/server/crash_trace.py main).
 
 The real tool replays a native crash trace against the engine; the fake only

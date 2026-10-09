@@ -99,8 +99,8 @@ struct AdminRoutesTests {
 @Suite("Project links (D40)")
 struct ProjectLinksTests {
     @Test func repositoryAndIssues() {
-        #expect(ProjectLinks.repository.absoluteString == "https://github.com/arnavprabhu/splash-gui")
-        #expect(ProjectLinks.issues.absoluteString == "https://github.com/arnavprabhu/splash-gui/issues")
+        #expect(ProjectLinks.repository.absoluteString == "https://github.com/arnavprabhu/splashboard")
+        #expect(ProjectLinks.issues.absoluteString == "https://github.com/arnavprabhu/splashboard/issues")
         #expect(ProjectLinks.engineRepository.host == "github.com")
     }
 }

@@ -19,8 +19,8 @@ test.describe('D40 repository links', () => {
     await mockManager(page, { extra: (_m, path) => (path === '/settings/schema' ? { json: SCHEMA } : undefined) });
     await page.goto('/admin/settings/about');
     const links = page.getByTestId('about-gui-links');
-    await expect(links.getByRole('link', { name: /^Repository/ })).toHaveAttribute('href', 'https://github.com/arnavprabhu/splash-gui');
-    await expect(links.getByRole('link', { name: /^Issues/ })).toHaveAttribute('href', 'https://github.com/arnavprabhu/splash-gui/issues');
+    await expect(links.getByRole('link', { name: /^Repository/ })).toHaveAttribute('href', 'https://github.com/arnavprabhu/splashboard');
+    await expect(links.getByRole('link', { name: /^Issues/ })).toHaveAttribute('href', 'https://github.com/arnavprabhu/splashboard/issues');
   });
 });
 

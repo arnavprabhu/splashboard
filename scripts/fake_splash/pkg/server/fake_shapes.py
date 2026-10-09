@@ -1,3 +1,5 @@
+# Derived from Splash (github.com/incoai/splash, Apache-2.0), modified by the Splashboard authors.
+# See LICENSE.splash and NOTICE in scripts/fake_splash.
 """Response and stream-chunk shapes, copied from splash/server/api_shapes.py
 (1.2.0, lines 982-1255) with the tool-policy and thinking-codec objects
 replaced by plain fields of FakeJob. Keep these in step with the engine."""
