@@ -1,4 +1,4 @@
-# Splash GUI
+# Splashboard
 
 A macOS app for serving, monitoring and chatting with models on the [Splash](https://github.com/incoai/splash) local inference engine: a SwiftUI menu bar app plus a web admin served by a local manager, laid out like oMLX and styled in a Swiss poster design.
 
