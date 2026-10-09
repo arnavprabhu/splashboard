@@ -102,11 +102,24 @@ RETRIES = 5
 RETRY_DELAY_S = 2.0
 USER_AGENT = "splash-gui"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _CONTENT_RANGE = re.compile(r"^bytes (\d+)-(\d+)/(\d+|\*)$")
 
 
 class Fallback(Exception):
     """This file is left to Splash's `prepare`; the message says why, in plain words."""
+
+
+def safe_relative(name: str) -> bool:
+    """Whether a repository file name or revision stays inside the folder it is joined to:
+    relative, forward slashes only, no empty, `.` or `..` part and no control characters.
+    The names come from the Hub (or a mirror set in `hf.endpoint`), so they are checked
+    before they become paths."""
+    if not name or name.startswith("/") or "\\" in name:
+        return False
+    if any(ord(c) < 32 or ord(c) == 127 for c in name):
+        return False
+    return all(part not in ("", ".", "..") for part in name.split("/"))
 
 
 class _Mismatch(Exception):
@@ -295,16 +308,21 @@ def link_snapshot(folder: Path, remote: Remote) -> None:
     """`snapshots/<commit>/<path>` → the relative path of `blobs/<etag>`, and
     `refs/<revision>` when the revision is a branch or tag (huggingface_hub
     `_create_symlink`, `_cache_commit_hash_for_specific_revision`)."""
-    pointer = folder / "snapshots" / remote.commit / remote.path
+    snapshots = folder / "snapshots"
+    pointer = snapshots / remote.commit / remote.path
+    ref = folder / "refs" / remote.revision
+    # `remote` checks these names; this keeps a bad one from ever leaving the repo folder.
+    for path, root in ((pointer, snapshots), (ref, folder / "refs")):
+        if not path.resolve().is_relative_to(root.resolve()):
+            raise Fallback(f"{path} is outside {root}")
     pointer.parent.mkdir(parents=True, exist_ok=True)
     target = os.path.relpath(folder / "blobs" / remote.etag, pointer.parent)
     if not (pointer.is_symlink() and str(pointer.readlink()) == target):
         pointer.unlink(missing_ok=True)
         pointer.symlink_to(target)
-    if remote.revision != remote.commit:
-        ref = folder / "refs" / remote.revision
-        if not ref.is_file() or ref.read_text() != remote.commit:
-            _replace(ref, remote.commit.encode())
+    stale = not ref.is_file() or ref.read_text() != remote.commit
+    if remote.revision != remote.commit and stale:
+        _replace(ref, remote.commit.encode())
 
 
 def _hash_prefix(path: Path, length: int) -> Any:
@@ -428,6 +446,8 @@ class RangeDownloader:
         huggingface_hub's `_httpx_follow_relative_redirects_with_backoff` does, and read
         the headers its `get_hf_file_metadata` reads."""
         revision = revision or "main"
+        if not safe_relative(path) or not safe_relative(revision):
+            raise Fallback(f"the file name {path!r} or revision {revision!r} is not a safe path")
         url = f"{self.endpoint}/{repo}/resolve/{quote(revision, safe='')}/{quote(path)}"
         try:
             for _ in range(5):
@@ -459,6 +479,8 @@ class RangeDownloader:
             raise Fallback(f"the Hub did not describe {path} as an LFS file")
         if not commit or not location:
             raise Fallback(f"the Hub's answer for {path} has no commit or download URL")
+        if not _COMMIT.match(commit):
+            raise Fallback(f"the Hub's answer for {path} names an invalid commit")
         return Remote(
             repo=repo,
             revision=revision,

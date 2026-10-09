@@ -18,6 +18,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# CI only reads the repository.
+permissions:
+  contents: read
+
 env:
   # Never touch a developer's ~/.splash; every job uses a throwaway base directory.
   SPLASH_GUI_SECRETS: memory

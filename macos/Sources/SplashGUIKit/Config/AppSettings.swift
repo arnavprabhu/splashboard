@@ -28,7 +28,7 @@ public struct AppSettings: Sendable, Equatable {
 
     /// `global` = the SettingsDocument's `global` object.
     public init(global: JSONValue) {
-        if let v = global[path: "server.host"]?.string, !v.isEmpty { serverHost = v }
+        if let v = global[path: "server.host"]?.string, Self.isBindHost(v) { serverHost = v }
         if let v = global[path: "server.port"]?.int, (1...65535).contains(v) { serverPort = v }
         if let v = global[path: "lifecycle.launch_at_login"]?.bool { launchAtLogin = v }
         if let v = global[path: "lifecycle.stop_on_quit"]?.bool { stopOnQuit = v }
@@ -58,6 +58,16 @@ public struct AppSettings: Sendable, Equatable {
 
     public func notificationEnabled(_ toggle: String) -> Bool {
         notifications[toggle] ?? true
+    }
+
+    /// What the manager accepts for `server.host`: an IP address or `localhost`. Anything else
+    /// (a name with `@`, `/` or `?`, say) would let the URL below send the CLI token elsewhere,
+    /// so it is ignored and the default loopback address stays.
+    public static func isBindHost(_ value: String) -> Bool {
+        if value == "localhost" { return true }
+        let allowed = CharacterSet(charactersIn: "0123456789abcdefABCDEF.:[]")
+        return !value.isEmpty && value.count <= 47 && value.unicodeScalars.allSatisfy(allowed.contains)
+            && value.contains(where: { $0 == "." || $0 == ":" })
     }
 
     /// Where to reach the manager. A wildcard bind is reached over loopback; the CLI token is

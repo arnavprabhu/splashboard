@@ -139,9 +139,11 @@ def bundled_codex(app: Path) -> Path | None:
         entry = json.loads(package.read_text()).get("entrypoint")
     except (OSError, ValueError, AttributeError):
         return None
-    if isinstance(entry, str) and ".." not in Path(entry).parts:
+    if isinstance(entry, str) and not Path(entry).is_absolute() and ".." not in Path(entry).parts:
         candidate = package.parent / entry
-        if candidate.is_file() and os.access(candidate, os.X_OK):
+        # Only a program inside the app's own codex-cli folder, even through a symlink.
+        inside = candidate.resolve().is_relative_to(package.parent.resolve())
+        if inside and candidate.is_file() and os.access(candidate, os.X_OK):
             return candidate
     return None
 

@@ -720,3 +720,77 @@ def test_a_hard_killed_manager_resumes_every_segment_from_its_verified_end(manag
     assert sha256(folder / sha) == sha
     assert not partial.exists() and not sidecar.exists()
     assert "range GET" in (manager.home / "logs" / "manager.log").read_text()
+
+
+# --- Names from the Hub never leave the repository folder -------------------------------
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["../x", "a/../../x", "/etc/passwd", "a//b", "./a", "a\\b", "a\nb", "", "a/"],
+)
+def test_unsafe_file_names_and_revisions_are_refused(name: str) -> None:
+    assert not ranged.safe_relative(name)
+
+
+@pytest.mark.parametrize(
+    "name", ["model.gguf", "UD-Q4_K_M/model-00001-of-00002.gguf", "main", "feature/x"]
+)
+def test_ordinary_file_names_and_revisions_pass(name: str) -> None:
+    assert ranged.safe_relative(name)
+
+
+def _resolver(tmp_path: Path, headers: dict[str, str]) -> ranged.RangeDownloader:
+    def answer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers=headers)
+
+    downloader = ranged.RangeDownloader(
+        tmp_path, "https://hub.test", None, transport=httpx.MockTransport(answer)
+    )
+    return downloader
+
+
+LFS_HEADERS = {
+    "x-linked-etag": '"' + "a" * 64 + '"',
+    "x-linked-size": "10",
+    "location": "https://cdn.test/blob",
+}
+
+
+def test_a_commit_that_is_not_a_sha1_falls_back_to_the_installer(tmp_path: Path) -> None:
+    downloader = _resolver(tmp_path, {**LFS_HEADERS, "x-repo-commit": "../../../tmp/evil"})
+
+    async def run() -> ranged.Remote:
+        async with downloader.client() as client:
+            return await downloader.resolve(client, "a/b", "main", "model.gguf")
+
+    with pytest.raises(ranged.Fallback, match="invalid commit"):
+        asyncio.run(run())
+
+
+def test_a_traversing_file_name_is_refused_before_any_request(tmp_path: Path) -> None:
+    downloader = _resolver(tmp_path, {**LFS_HEADERS, "x-repo-commit": "c" * 40})
+
+    async def run() -> ranged.Remote:
+        async with downloader.client() as client:
+            return await downloader.resolve(client, "a/b", "main", "../../outside.gguf")
+
+    with pytest.raises(ranged.Fallback, match="not a safe path"):
+        asyncio.run(run())
+
+
+def test_link_snapshot_refuses_a_pointer_outside_the_repository(tmp_path: Path) -> None:
+    folder = tmp_path / "models--a--b"
+    remote = ranged.Remote(
+        repo="a/b",
+        revision="main",
+        path="../../../escaped",
+        commit="c" * 40,
+        etag="a" * 64,
+        size=10,
+        location="https://cdn.test/blob",
+        xet_hash=None,
+    )
+    with pytest.raises(ranged.Fallback):
+        ranged.link_snapshot(folder, remote)
+    assert not (tmp_path / "escaped").exists()

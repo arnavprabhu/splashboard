@@ -1945,3 +1945,41 @@ def test_codex_router_leaves_tool_search_alone_for_native_models(harness_factory
     assert frames == events
     sent = json.loads(seen[0].content)
     assert sent["tools"] == SEARCH_TOOLS and sent["input"] == body["input"]
+
+
+def _codex_app(tmp_path: Path, entrypoint: str) -> Path:
+    app = tmp_path / "ChatGPT.app"
+    cli = app / "Contents" / "Resources" / "codex-cli"
+    cli.mkdir(parents=True)
+    (cli / "codex-package.json").write_text(json.dumps({"entrypoint": entrypoint}))
+    return app
+
+
+def _executable(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n")
+    path.chmod(0o755)
+    return path
+
+
+def test_bundled_codex_uses_an_entrypoint_inside_the_app(tmp_path: Path) -> None:
+    from splash_gui.integrations.service import bundled_codex
+
+    app = _codex_app(tmp_path, "bin/codex")
+    binary = _executable(app / "Contents" / "Resources" / "codex-cli" / "bin" / "codex")
+    assert bundled_codex(app) == binary
+
+
+@pytest.mark.parametrize("kind", ["absolute", "symlink"])
+def test_bundled_codex_never_runs_a_program_outside_the_app(tmp_path: Path, kind: str) -> None:
+    from splash_gui.integrations.service import bundled_codex
+
+    outside = _executable(tmp_path / "elsewhere" / "evil")
+    if kind == "absolute":
+        app = _codex_app(tmp_path, str(outside))
+    else:
+        app = _codex_app(tmp_path, "bin/codex")
+        link = app / "Contents" / "Resources" / "codex-cli" / "bin" / "codex"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(outside)
+    assert bundled_codex(app) is None

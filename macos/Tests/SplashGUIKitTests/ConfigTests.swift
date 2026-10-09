@@ -19,6 +19,17 @@ struct ConfigTests {
         #expect(s.managerBaseURL.absoluteString == "http://127.0.0.1:8000")
     }
 
+    @Test(arguments: ["127.0.0.1@evil.example", "evil.example", "127.0.0.1/x", "127.0.0.1?a", "a b", ""])
+    func aHostThatIsNotAnAddressIsIgnored(host: String) throws {
+        let s = AppSettings(global: try JSONValue.parse(#"{"server": {"host": "\#(host)", "port": 8123}}"#))
+        #expect(s.managerBaseURL.absoluteString == "http://127.0.0.1:8123")
+    }
+
+    @Test(arguments: ["192.168.1.20", "::1", "localhost", "fe80::1"])
+    func anAddressIsKept(host: String) {
+        #expect(AppSettings.isBindHost(host))
+    }
+
     @Test func fromSettingsResponse() throws {
         let json = try JSONValue.parse("""
         {"settings": {"version": 1, "global": {
