@@ -188,7 +188,7 @@ def test_serve_passthrough_warns_when_the_manager_has_the_port(
     monkeypatch.setattr(
         cli_module, "discover", lambda **kwargs: EngineInfo(found=True, cli=Path("/x/splash"))
     )
-    monkeypatch.setattr(os, "execv", lambda path, argv: calls.append(argv))
+    monkeypatch.setattr(os, "execve", lambda path, argv, env: calls.append(argv))
     health = {"status": "ok", "service": "splash-gui-manager", "version": "0.1.0"}
     monkeypatch.setattr(httpx, "get", lambda *a, **k: httpx.Response(200, json=health))
     with pytest.raises(SystemExit):
@@ -350,3 +350,29 @@ def test_doctor_reports_a_real_foreign_server_as_a_port_conflict(
     _, out, _ = run(capsys, "doctor")
     assert f"Another server (not Splashboard) answers on port {port}" in out
     assert seen == [("/health", "")]
+
+
+def test_passthrough_never_execs_itself_twice(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pass-through marks the engine's environment; reaching our CLI again with that mark
+    means PATH led back to Splashboard, so it stops instead of looping."""
+    from pathlib import Path
+
+    from splash_gui.engine.discovery import EngineInfo
+
+    seen: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        cli_module, "discover", lambda **kwargs: EngineInfo(found=True, cli=Path("/x/splash"))
+    )
+    monkeypatch.setattr(os, "execve", lambda path, argv, env: seen.append(env))
+    monkeypatch.delenv(cli_module.PASSTHROUGH_ENV, raising=False)
+    with pytest.raises(SystemExit):
+        cli_module.main(["--version"])
+    assert seen[0][cli_module.PASSTHROUGH_ENV] == "1"
+    assert cli_module.PASSTHROUGH_ENV not in os.environ
+
+    monkeypatch.setenv(cli_module.PASSTHROUGH_ENV, "1")
+    assert cli_module.main(["--version"]) == 127
+    assert "Splashboard's own" in capsys.readouterr().err
+    assert len(seen) == 1

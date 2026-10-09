@@ -21,6 +21,9 @@ from typing import Literal
 REAL_SPLASH_ENV = "SPLASH_GUI_REAL_SPLASH"
 # Our CLI shim (~/.splash/bin/splash) must contain this marker so discovery skips it.
 SHIM_MARKER = "SPLASH_GUI_SHIM"
+# The `splash` script pip and uv install for this package (`[project.scripts]`). It is our
+# CLI too, so it is never the engine: taking it would make the CLI exec itself forever.
+ENTRY_POINT_MARKER = "from splash_gui.cli import"
 # 1.3.0 is the first with the engine's model-check, which the helpers call.
 SUPPORTED_MIN = (1, 3, 0)
 SUPPORTED_BELOW = (1, 4, 0)
@@ -112,9 +115,10 @@ def is_shim(path: Path, shim_paths: Sequence[Path] = ()) -> bool:
         return True
     try:
         with path.open("rb") as handle:
-            return SHIM_MARKER.encode() in handle.read(4096)
+            head = handle.read(4096)
     except OSError:
         return False
+    return SHIM_MARKER.encode() in head or ENTRY_POINT_MARKER.encode() in head
 
 
 def which_all(name: str, path_env: str | None) -> list[Path]:

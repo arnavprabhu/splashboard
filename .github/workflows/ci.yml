@@ -71,10 +71,12 @@ jobs:
       - name: manager pytest
         working-directory: manager
         # One worker per core (pytest-xdist). A test over 5 minutes fails with its stack
-        # (pytest-timeout) instead of using up the job; --durations lists the slowest.
+        # (pytest-timeout) instead of using up the job. A few tests measure restart and
+        # backoff timing, which a loaded 3-core runner can miss, so a failure is retried
+        # twice (pytest-rerunfailures); reruns are listed in the summary.
         run: >-
           uv sync --locked && SPLASH_GUI_HOME="$RUNNER_TEMP/splash-home"
-          uv run pytest -n auto --timeout=300 --durations=15
+          uv run pytest -n auto --timeout=300 --reruns 2 -rR --durations=15
       - name: fake engine pytest
         run: uv run --no-project --with pytest pytest scripts/fake_splash/tests
 

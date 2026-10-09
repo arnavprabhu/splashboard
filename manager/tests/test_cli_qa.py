@@ -106,7 +106,7 @@ def test_global_options_before_the_command_are_ours_not_the_engines(
     """`splash --port 8123 status` used to fall through to the engine CLI."""
     _, _, ports = make()
     execs: list[list[str]] = []
-    monkeypatch.setattr(os, "execv", lambda path, argv: execs.append(argv))
+    monkeypatch.setattr(os, "execve", lambda path, argv, env: execs.append(argv))
     code, out, _ = run(capsys, "--port", "8123", "--json", "status")
     assert execs == [] and code == 0
     assert ports[-1] == 8123
@@ -127,7 +127,7 @@ def test_engine_commands_still_pass_through_untouched(
     monkeypatch.setattr(
         cli_module, "discover", lambda **kwargs: EngineInfo(found=True, cli=Path("/x/splash"))
     )
-    monkeypatch.setattr(os, "execv", lambda path, argv: execs.append(argv))
+    monkeypatch.setattr(os, "execve", lambda path, argv, env: execs.append(argv))
     monkeypatch.setattr(httpx, "get", lambda *a, **k: httpx.Response(404))
     for argv in (
         ["serve", "--model", "m", "--port", "9999", "--json"],

@@ -1671,15 +1671,24 @@ def warn_if_port_taken(arguments: list[str]) -> None:
         )
 
 
+PASSTHROUGH_ENV = "SPLASH_GUI_PASSTHROUGH"
+
+
 def passthrough(arguments: list[str]) -> int:
     """Exec the real engine CLI with the arguments untouched."""
+    if os.environ.get(PASSTHROUGH_ENV):
+        # Something on PATH that discovery took for the engine led back here: stop
+        # instead of exec-ing ourselves over and over.
+        print("splash: the engine CLI found on PATH is Splashboard's own", file=sys.stderr)
+        return 127
     engine = discover(shim_paths=(Paths.from_env().shim,))
     if not engine.cli:
         print("splash: " + str(engine.error), file=sys.stderr)
         return 127
     if arguments and arguments[0] == "serve":
         warn_if_port_taken(arguments)
-    os.execv(str(engine.cli), [str(engine.cli), *arguments])  # noqa: S606
+    environment = {**os.environ, PASSTHROUGH_ENV: "1"}
+    os.execve(str(engine.cli), [str(engine.cli), *arguments], environment)  # noqa: S606
     raise SystemExit(0)  # only when execv is stubbed (tests)
 
 

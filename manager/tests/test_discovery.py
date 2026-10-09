@@ -141,6 +141,27 @@ def test_path_lookup_skips_our_shim(tmp_path: Path) -> None:
     assert info.found and info.source == "path" and info.cli == real_cli
 
 
+def test_path_lookup_skips_the_installed_cli_entry_point(tmp_path: Path) -> None:
+    """`uv run` and pip put this package's own `splash` script first on PATH. Taking it for
+    the engine made `splash --version` exec itself until the machine ran out of processes."""
+    venv_bin = tmp_path / ".venv" / "bin"
+    write_script(
+        venv_bin / "splash",
+        "#!/usr/bin/env python3\nimport sys\nfrom splash_gui.cli import main\nsys.exit(main())\n",
+    )
+    real = fake_pkg(tmp_path / "real")
+    real_cli = real.parent / "bin" / "splash"
+    info = d.discover(
+        env={"PATH": f"{venv_bin}:{real_cli.parent}"},
+        runner=runner_for({str(real_cli): "Splash 1.3.0"}),
+        prefix=None,
+    )
+    assert info.found and info.cli == real_cli
+
+    alone = d.discover(env={"PATH": str(venv_bin)}, runner=runner_for({}), prefix=None)
+    assert not alone.found
+
+
 def test_setting_pointing_at_shim_is_skipped(tmp_path: Path) -> None:
     shim = write_script(tmp_path / "bin" / "splash", f"# {d.SHIM_MARKER}\n")
     info = d.discover(

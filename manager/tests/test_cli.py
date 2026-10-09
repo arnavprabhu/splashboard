@@ -267,7 +267,7 @@ def test_main_reports_an_unknown_command_by_passing_it_through(monkeypatch):
 
         return EngineInfo(found=True, cli=Path("/opt/homebrew/opt/splash/bin/splash"))
 
-    def fake_execv(path, argv):
+    def fake_execve(path, argv, env):
         calls.append([str(path), *argv])
 
     class FakeOs:
@@ -275,15 +275,15 @@ def test_main_reports_an_unknown_command_by_passing_it_through(monkeypatch):
 
         environ = os.environ
 
-        execv = staticmethod(fake_execv)
+        execve = staticmethod(fake_execve)
 
     monkeypatch.setattr(cli_module, "discover", fake_discover)
     monkeypatch.setattr(cli_module, "os", FakeOs())
-    # The stubbed execv returns instead of replacing the process, so main goes
+    # The stubbed execve returns instead of replacing the process, so main goes
     # on to parse the arguments and argparse rejects the engine's own command.
     with pytest.raises(SystemExit):
         cli_module.main(["serve", "--model", "x"])
-    # execv's argv[0] is the program, as the real engine expects.
+    # execve's argv[0] is the program, as the real engine expects.
     engine = "/opt/homebrew/opt/splash/bin/splash"
     assert calls == [[engine, engine, "serve", "--model", "x"]]
 
