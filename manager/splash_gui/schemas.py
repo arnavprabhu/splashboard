@@ -579,6 +579,8 @@ class SecretsState(ApiModel):
 
 
 class ResolvedPaths(ApiModel):
+    # The current user's home folder: the web shortens only paths under it to `~`.
+    home: str
     base: str
     models_dir: str
     cache_dir: str
@@ -899,6 +901,9 @@ class DeleteModelResult(ApiModel):
     freed_bytes: int
     kept_draft: bool
     engine_stopped: bool
+    # D67: source files moved to the Trash, and those a failed move left in place.
+    trashed: list[str] = Field(default_factory=list)
+    trash_failed: list[str] = Field(default_factory=list)
 
 
 class VerifyRequest(ApiModel):
@@ -924,7 +929,10 @@ class VariantOut(ApiModel):
 class VisionInfo(ApiModel):
     available: bool
     reason: str | None = None
+    # SPEC §9.1: the repository's vision projector (`mmproj-*`), labelled in the variant table,
+    # never a variant. Its file size, when the Hub listed it.
     projector: str | None = None
+    projector_bytes: int | None = None
 
 
 class PlannedFile(ApiModel):
@@ -1090,6 +1098,8 @@ class DownloadError(ApiModel):
 class DownloadItem(ApiModel):
     id: str
     model: str
+    # `draft`: a local model's DFlash2 draft (SPEC §9.6, D68), not a model of its own.
+    kind: Literal["model", "draft"] = "model"
     revision: str | None = None
     draft_model: str | None = None
     language_only: bool = False
@@ -1725,3 +1735,52 @@ SSE_MODELS: tuple[type[BaseModel], ...] = (
     LogBackfill,
     ProcessExit,
 )
+
+
+# Uninstall (SPEC §19, D72; PKG-12) ---------------------------------------------
+
+
+class UninstallItem(ApiModel):
+    """One entry of the data folder, or the models or cache folder, with its size."""
+
+    path: str
+    kind: Literal["data", "models", "cache"]
+    bytes: int
+    # A models or cache folder moved outside the data folder (storage.models_dir / cache_dir)
+    # is shown but never deleted: it may be the user's own Hugging Face cache (SPEC §5, Q21).
+    deletable: bool = True
+
+
+class UninstallPlan(ApiModel):
+    home: str
+    items: list[UninstallItem]
+    models_bytes: int
+    cache_bytes: int
+    data_bytes: int
+    connected_integrations: list[str]
+    path_block_files: list[str]
+    shim_installed: bool
+    # The menu bar app is connected: it must run the removal itself (it alone can unregister its
+    # login item and LaunchAgent, and it would otherwise start the manager again).
+    app_connected: bool = False
+    steps: list[str]
+
+
+class UninstallRequest(ApiModel):
+    delete_data: bool = True
+    delete_models: bool = False
+    delete_cache: bool = False
+    # The CLI asks the manager to stop itself; the menu bar app passes false and stops it by
+    # unregistering the LaunchAgent, which would otherwise start it again (KeepAlive).
+    stop: bool = True
+
+
+class UninstallResult(ApiModel):
+    restored: list[str]
+    path_block_removed: list[str]
+    shim_removed: bool
+    secrets_deleted: int
+    deleted: list[str]
+    kept: list[str]
+    freed_bytes: int
+    stopping: bool

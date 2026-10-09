@@ -493,7 +493,7 @@ def test_inspect_stream_follows_inspect(
         # Past the guard (a read, as /inspect): the route itself answers.
         answered = browser.post(path)
         assert answered.status_code == 400, (path, answered.text)
-        assert answered.json()["error"]["code"] == "invalid_model"
+        assert answered.json()["error"]["code"] == "invalid_model_id"
         refused = bare.post(path, headers=cross)
         assert refused.status_code == 403 and refused.json()["error"]["code"] == "csrf_refused"
     assert browser.get(url).status_code == 405

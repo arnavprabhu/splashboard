@@ -10,6 +10,7 @@ import { DASH, formatBytes, formatRelativeTime } from '../../lib/format';
 import { useApi } from '../../lib/use-api';
 import { t } from '../../strings/settings';
 import { settingsApi } from './api';
+import { RemoveData } from './RemoveData';
 
 export const LINKS = {
   /** Splash GUI itself (D40; private for now, D26). */
@@ -191,6 +192,7 @@ export function About() {
             <Link href="/logs/diagnostics" class="btn" data-variant="text" data-size="s">
               {t('settings.about.diagnostics')}
             </Link>
+            <RemoveData />
           </div>
           {!!doctorError && <LoadError thing={t('settings.about.doctor_thing')} error={doctorError} onRetry={() => void runDoctor()} />}
           {doctor && (

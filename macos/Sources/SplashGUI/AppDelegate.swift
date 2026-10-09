@@ -39,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarHost {
             loginItems: loginItems)
         super.init()
         model.host = self
+        model.updater = SparkleUpdater()
     }
 
     // MARK: NSApplicationDelegate
@@ -52,6 +53,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarHost {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         FontLoader.registerBundledFonts()
+
+        // PKG-16: a packaged app that replaced the development bundle moves the manager agent to the bundled
+        // interpreter before the manager starts. A development bundle (no bundled runtime) does nothing here.
+        let migration = DevAgentMigration.plan(
+            currentLabel: ManagerAgent.label, legacyLabels: DevAgentMigration.legacyLabels,
+            packaged: BundledRuntime().python != nil, printer: DevAgentMigration.launchctlPrint)
+        DevAgentMigration.apply(migration, agent: ManagerAgent.plistInBundle() ? SMAppServiceWrapper.agent() : nil)
 
         if bundled {
             let model = self.model
@@ -152,6 +160,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarHost {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    /// The Remove Splash GUI Data… sheet (SPEC §19, docs/ui/10 §8; PKG-12): the steps, two unticked
+    /// boxes with sizes, and a typed DELETE when either is ticked. Nil when the user cancels.
+    func chooseRemoval(_ plan: UninstallSummary) async -> RemovalChoice? {
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.messageText = "Remove Splash GUI data?"
+        var info = plan.steps.map { "· \($0)" }.joined(separator: "\n")
+        info += "\n\nData folder \(plan.home): \(Format.bytes(plan.dataBytes))."
+        for path in plan.kept { info += "\nKept: \(path) is outside the data folder." }
+        alert.informativeText = info
+        alert.alertStyle = .critical
+        let models = NSButton(checkboxWithTitle: "Delete models (\(Format.bytes(plan.modelsBytes)))", target: nil, action: nil)
+        let cache = NSButton(checkboxWithTitle: "Delete cache (\(Format.bytes(plan.cacheBytes)))", target: nil, action: nil)
+        let typed = NSTextField(string: "")
+        typed.placeholderString = "Type DELETE to delete models or the cache"
+        let stack = NSStackView(views: [models, cache, typed])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.frame = NSRect(x: 0, y: 0, width: 340, height: 78)
+        alert.accessoryView = stack
+        alert.addButton(withTitle: "Remove")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let choice = RemovalChoice(deleteModels: models.state == .on, deleteCache: cache.state == .on)
+        if (choice.deleteModels || choice.deleteCache) && typed.stringValue != "DELETE" {
+            showError(title: "Nothing was removed", message: "Type DELETE to delete models or the cache.")
+            return nil
+        }
+        return choice
     }
 
     func showAbout() {

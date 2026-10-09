@@ -12,6 +12,7 @@ from ..errors import SSE_RESPONSES, ApiError, error_responses
 from ..schemas import AlertList, HelloEvent, JobList, JobView, OkResponse
 from ..sse import sse_response
 from ..state import ManagerState, get_state
+from .alerts import MENUBAR_CLIENT
 from .bus import stream
 
 router = APIRouter()
@@ -37,6 +38,21 @@ def events(
         return [("hello", hello(state))]
 
     return sse_response(stream(state.events, snapshot, client=client))
+
+
+@router.post(
+    "/app/check-updates", status_code=202, response_model=OkResponse, responses=error_responses(409)
+)
+def check_app_updates(state: State) -> OkResponse:
+    """Ask the menu bar app to run its Sparkle check (SPEC §19, docs/ui/05 §3.17; PKG-9).
+
+    The check runs in the app, so the manager only relays it as an `app.check_updates`
+    event to the event streams opened with `client=menubar`. With none open, 409
+    `app_not_running`: the web then says `Open the menu bar app to update.`"""
+    if state.events.subscriber_count(MENUBAR_CLIENT) == 0:
+        raise ApiError(409, "Open the menu bar app to update.", "app_not_running")
+    state.events.publish("app.check_updates", {})
+    return OkResponse()
 
 
 @router.get("/alerts", response_model=AlertList)

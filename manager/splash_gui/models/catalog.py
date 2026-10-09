@@ -183,8 +183,29 @@ def official_ids(pkg: Path | None, data_dir: Path) -> list[str]:
     return out
 
 
-def memory_need(target: int, *, vision: bool) -> int:
-    return target + DRAFT_BYTES + (VISION_BYTES if vision else 0) + KV_RUNWAY_BYTES + RESERVE_BYTES
+# The KV cache's geometry per family: (full-attention layers, KV heads, head dimension).
+# Splash's hybrid models run a full-attention layer every fourth layer
+# (runtime/model/Qwen3_8.hpp and Qwen3_6Moe.hpp: `fullAttentionPeriod = 4`; 64 and 40
+# layers), with 4 and 2 KV heads of 256 (`attentionKvHeads`, `attentionHeadDimension`).
+KV_GEOMETRY: dict[str, tuple[int, int, int]] = {
+    "Qwen3.8-27B": (16, 4, 256),
+    "Qwen3.6-35B-A3B": (10, 2, 256),
+}
+
+
+def kv_bytes(family: str, tokens: int, *, bf16: bool = False) -> int:
+    """The KV cache a context of `tokens` takes (runtime/ops/PagedKv.hpp `bytesPerModelPage`).
+    The default INT8 format stores each head's values as one byte each plus one float32
+    scale per token and head, for keys and for values; BF16 stores two bytes each."""
+    layers, heads, dim = KV_GEOMETRY[family]
+    per_token = layers * 2 * heads * (dim * 2 if bf16 else dim + 4)
+    return per_token * tokens
+
+
+def memory_need(target: int, *, vision: bool, kv: int | None = None) -> int:
+    """`kv` is the KV cache the context needs (`kv_bytes`); the default is the 64-page runway."""
+    cache = KV_RUNWAY_BYTES if kv is None else max(kv, KV_RUNWAY_BYTES)
+    return target + DRAFT_BYTES + (VISION_BYTES if vision else 0) + cache + RESERVE_BYTES
 
 
 def fit_for(need: int, memory: int) -> str:
@@ -218,6 +239,27 @@ def bits(name: str) -> int | None:
         return 32
     match = _BITS.search(name)
     return int(match.group(1)) if match else None
+
+
+# SPEC §9.1 quality tier (D98): the label from a variant's bits per weight, lowest floor last.
+QUALITY_TIERS: tuple[tuple[int, str], ...] = (
+    (8, "Highest"),
+    (5, "Higher"),
+    (4, "Balanced"),
+    (0, "Compact"),
+)
+
+
+def quality_tier(name: str, files: list[str] | None = None) -> str | None:
+    """The quality tier label of a GGUF variant, from its bits (`bits`, by name). None for a
+    variant Splash cannot load (`unloadable_reason`), so its row shows a dash, and for a name
+    without a bit width."""
+    if unloadable_reason(name, files) is not None:
+        return None
+    width = bits(name)
+    if width is None:
+        return None
+    return next(label for floor, label in QUALITY_TIERS if width >= floor)
 
 
 @dataclass
@@ -357,6 +399,7 @@ def entry_facts(repo_id: str, fmt: str, info: Any, memory: int) -> dict[str, Any
                 "name": v.name,
                 "size_bytes": v.size + ((files.get(mmproj) or 0) if mmproj else 0),
                 "bits_per_weight": float(b) if (b := bits(v.name)) else None,
+                "quality": quality_tier(v.name, v.files),
                 # False with the reason when the name tells; null = checked by /inspect.
                 "loadable": False if v.unloadable else None,
                 "reason": v.unloadable,

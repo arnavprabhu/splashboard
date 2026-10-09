@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 
 from ..engine.api import get_engine
 from ..errors import SSE_RESPONSES, ApiError, error_responses
+from ..mcp.secrets import masked_document
 from ..schemas import (
     CancelResult,
     DeletedBytes,
@@ -280,7 +281,9 @@ def delete_trace(state: State, name: str) -> Response:
 def diagnostics(state: State) -> DiagnosticsBundle:
     """Everything a Splash issue report asks for."""
     known = state.secrets.known_values()
-    settings = redact_mapping(state.settings.current.to_json_dict(), known)
+    # MCP env and header values are masked here, not only by key name: with the Keychain
+    # unavailable at start they stay plaintext in settings.json (SPEC §17.2, drift 59).
+    settings = redact_mapping(masked_document(state.settings.current).to_json_dict(), known)
     tail = [
         state.secrets.redact(line) for line in _tail(state.paths.engine_log, DIAGNOSTIC_LOG_LINES)
     ]

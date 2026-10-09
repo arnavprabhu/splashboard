@@ -10,6 +10,10 @@ let package = Package(
         .executable(name: "SplashGUI", targets: ["SplashGUI"]),
         .library(name: "SplashGUIKit", targets: ["SplashGUIKit"]),
     ],
+    // Sparkle 2 for the app's own updates (SPEC §19, PKG-9). Exact pin; 2.10.0 was released 2026-09-13.
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"),
+    ],
     targets: [
         .target(
             name: "SplashGUIKit",
@@ -22,7 +26,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "SplashGUI",
-            dependencies: ["SplashGUIKit"],
+            dependencies: ["SplashGUIKit", .product(name: "Sparkle", package: "Sparkle")],
             swiftSettings: [.swiftLanguageMode(.v6)],
             linkerSettings: [.linkedFramework("WebKit")]
         ),

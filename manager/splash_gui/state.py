@@ -94,6 +94,8 @@ class ManagerState:
     replays: dict[str, Any] = field(default_factory=dict)
     # Called to stop the whole manager (POST /shutdown); the runner sets it.
     request_shutdown: Callable[[], None] | None = None
+    # Set once `POST /uninstall` deleted the data folder (PKG-12): nothing writes it again.
+    data_removed: bool = False
     started_at: float = field(default_factory=time.time)
     _engine: EngineInfo | None = None
     _engine_at: float = 0.0

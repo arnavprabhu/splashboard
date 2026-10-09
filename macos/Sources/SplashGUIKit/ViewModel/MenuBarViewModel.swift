@@ -12,6 +12,8 @@ public protocol MenuBarHost: AnyObject {
     func showAbout()
     func showWelcome()
     func terminate()
+    /// The Remove Splash GUI Data… sheet (PKG-12): nil when the user cancels.
+    func chooseRemoval(_ plan: UninstallSummary) async -> RemovalChoice?
 }
 
 /// The menu bar app's state and behaviour. Everything UI-free lives here so it can be tested.
@@ -80,6 +82,8 @@ public final class MenuBarViewModel {
     @ObservationIgnored private let gpu: GPUSampling
     @ObservationIgnored public let paths: HomePaths
     @ObservationIgnored public weak var host: MenuBarHost?
+    /// Sparkle in a packaged build (PKG-9); nil when the bundle has no feed.
+    @ObservationIgnored public var updater: Updater?
     @ObservationIgnored public private(set) var quitCoordinator: QuitCoordinator!
 
     @ObservationIgnored private var eventsTask: Task<Void, Never>?
@@ -323,6 +327,9 @@ public final class MenuBarViewModel {
             if let m = try? await api.models() { models = m }
         case "settings.changed":
             await refreshSettings()
+        case "app.check_updates":
+            // The web About page's Check for updates (`POST /app/check-updates`, PKG-9).
+            await checkForUpdates()
         case "integration.state":
             if let d = DesktopIntegration(json: data) {
                 var view = integrations ?? IntegrationsView()
@@ -483,6 +490,67 @@ public final class MenuBarViewModel {
         return url
     }
 
+    /// Sparkle's check when this build has an updater (PKG-9). Without one (no feed: `swift run`, the dev
+    /// bundle) the About section of Settings shows the versions instead, as before Sparkle.
+    public func checkForUpdates() async {
+        if let updater {
+            if updater.canCheckForUpdates { updater.checkForUpdates() }
+            return
+        }
+        if manager == .running { await openAdminSignedIn("/admin/settings/about") } else { host?.showAbout() }
+    }
+
+    /// About → Remove Splash GUI Data… (SPEC §19, PKG-12). The manager restores the integrations and
+    /// removes the PATH block, the shim and the chosen folders (`stop: false`); a failed restore stops
+    /// here with nothing removed (D36). Then the app unregisters its login item and the manager's
+    /// LaunchAgent, which only it can do (unregistering the agent stops a running manager), stops a
+    /// manager it did not start through `POST /shutdown`, and quits.
+    public func removeData() async {
+        let plan: UninstallSummary
+        do {
+            plan = UninstallSummary(json: try await api.post("/api/admin/uninstall/plan"))
+        } catch {
+            host?.showError(title: "Couldn’t read what would be removed", message: error.localizedDescription)
+            return
+        }
+        guard let choice = await host?.chooseRemoval(plan) else { return }
+        let body: JSONValue = [
+            "delete_data": true, "delete_models": .bool(choice.deleteModels),
+            "delete_cache": .bool(choice.deleteCache), "stop": false,
+        ]
+        do {
+            _ = try await api.post("/api/admin/uninstall", body: body)
+        } catch {
+            host?.showError(title: "Couldn’t remove Splash GUI data", message: error.localizedDescription)
+            return
+        }
+        var problems: [String] = []
+        if let error = loginItems?.unregisterForRemoval() {
+            problems.append("The login item could not be removed (\(error)). Remove Splash GUI in System Settings → General → Login Items.")
+        }
+        switch managerController?.unregisterAgentForRemoval() ?? .notRegistered {
+        case .unregistered:
+            break
+        case .failed(let error):
+            problems.append("The manager's background item could not be removed (\(error)). Remove it in System Settings → General → Login Items.")
+            // The agent stays registered, so stop the manager explicitly. It exits 0, which launchd does not restart.
+            _ = try? await api.post("/api/admin/shutdown")
+        case .notRegistered:
+            if managerController?.ownership == .child {
+                await managerController?.stopOwned()
+            } else {
+                _ = try? await api.post("/api/admin/shutdown")
+            }
+        }
+        // A login item or agent that is still registered could start the app or manager again and recreate the data:
+        // keep the app open and say what is left instead of quitting as if the removal were complete.
+        guard problems.isEmpty else {
+            host?.showError(title: "Splash GUI data was removed, but not everything", message: problems.joined(separator: "\n\n"))
+            return
+        }
+        host?.terminate()
+    }
+
     public func perform(_ command: MenuCommand) async {
         switch command {
         case .startManager:
@@ -523,8 +591,7 @@ public final class MenuBarViewModel {
         case .openTerminal(let client):
             await call { try await $0.openTerminal(client: client) }
         case .checkForUpdates:
-            // Sparkle is deferred (D30): show the About section of Settings instead.
-            if manager == .running { await openAdminSignedIn("/admin/settings/about") } else { host?.showAbout() }
+            await checkForUpdates()
         case .about:
             host?.showAbout()
         case .continueSetup:

@@ -5,7 +5,7 @@ import { useEffect } from 'preact/hooks';
  * Reveal-on-scroll for long pages only (SPEC §18.4: history and benchmark compare).
  * Elements already in view at mount are never hidden; reduced motion is handled in CSS.
  */
-export function useReveal(ref: RefObject<HTMLElement>): void {
+export function useReveal(ref: RefObject<HTMLElement | null>): void {
   useEffect(() => {
     const el = ref.current;
     if (!el || typeof IntersectionObserver === 'undefined') return;

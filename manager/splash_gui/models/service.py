@@ -44,18 +44,25 @@ from ..schemas import (
     VisionInfo,
 )
 from ..settings.parsers import parse_model_id, split_model_id
+from ..system.macos import CommandResult
 from ..usage.db import iso
 from . import catalog as cat
 from . import compat
 from . import inspection as ins
 from .hf import HfClient, HubError, strip_front_matter
-from .layout import directory_size, execute_delete, plan_delete, read_all
+from .layout import Selection, directory_size, execute_delete, plan_delete, read_all
 from .local import LocalModels
 
 if TYPE_CHECKING:
     from ..state import ManagerState
 
 log = logging.getLogger(__name__)
+
+# SPEC §9.5: how often the Hub is asked for each tracked commit, and the pass that
+# asks. The first pass waits a minute so start-up never makes a burst of requests.
+UPDATE_TTL_S = 6 * 3600.0
+UPDATE_POLL_S = 600.0
+UPDATE_FIRST_S = 60.0
 
 
 def fingerprints(facts: dict[str, Any]) -> ModelFingerprints | None:
@@ -108,7 +115,7 @@ def valid_id(model: str) -> str:
     try:
         return parse_model_id(model)
     except ValueError as error:
-        raise ApiError(400, str(error), "invalid_model") from None
+        raise ApiError(400, str(error), "invalid_model_id") from None
 
 
 class Models:
@@ -125,11 +132,20 @@ class Models:
         # Checks in flight per repository, and what its Hub cache folder looked like
         # before the first of them (acceptance 1.3 F5: clean up what they created).
         self.checking: dict[str, tuple[int, tuple[bool, bool], Path]] = {}
+        # The Hub's commit for each tracked revision, by repo@revision, and when it was
+        # asked (SPEC §9.5). Read by `inventory()`, which never waits for the network.
+        self.heads: dict[str, tuple[float, str | None]] = {}
+        self.update_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         await self.local.start()
+        self.update_task = asyncio.create_task(self._update_loop(), name="model-updates")
 
     async def shutdown(self) -> None:
+        if self.update_task:
+            self.update_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.update_task
         await self.local.shutdown()
         for run in list(self.runs.values()):
             if run.task is not None:
@@ -137,9 +153,15 @@ class Models:
                 with contextlib.suppress(BaseException):
                     await run.task
 
-    async def drop_selection(self, model: str) -> None:
-        """Remove a model's Splash selections and assemblies (not its source file)."""
-        plan = plan_delete(read_all(splash_models_dir()), {model})
+    async def drop_selection(self, model: str, *, keep_draft: bool = False) -> None:
+        """Remove a model's Splash selections and assemblies (not its source file). With
+        `keep_draft`, the draft's files stay even when nothing else pins them."""
+        plan = plan_delete(
+            read_all(splash_models_dir()),
+            {model},
+            self.state.settings.models_dir(),
+            keep_draft=keep_draft,
+        )
         await asyncio.to_thread(
             execute_delete, splash_models_dir(), self.state.settings.models_dir(), plan
         )
@@ -195,6 +217,8 @@ class Models:
             overrides = self.state.settings.current.models.get(selection.model)
             revision = overrides.serve.revision if overrides else None
             status = "ready" if all(ref.real for ref in selection.files) else "broken"
+            if status == "ready" and self.update_status(selection)[0]:
+                status = "update_available"
             if self.state.active_model() == selection.model:
                 status = "loading" if self.state.supervisor.state == "starting" else "active"
             if self.state.jobs.running("verify", selection.model):
@@ -268,16 +292,96 @@ class Models:
             for f in selection.files
         ]
         facts = self.state.usage.model_facts(model) or {}
+        update, latest = self.update_status(selections[0])
         return ModelDetail(
             **data,
             files=files,
+            latest_commit=latest,
+            update_available=update,
             link_path=str(selections[0].link),
             chat_template_mode=facts.get("chat_template_mode"),
             fingerprints=fingerprints(facts),
         )
 
-    async def delete(self, model: str, confirm_active: bool = False) -> DeleteModelResult:
+    # --- update check (SPEC §9.5) ----------------------------------------------------
+
+    def tracked_revision(self, selection: Selection) -> str | None:
+        """The branch an unpinned Hub model follows (`serve.revision`, else `main`).
+        None for a pinned model, a `local/` drop-in, or one with no commit to compare."""
+        commit = selection.commit
+        if selection.repo_id.startswith("local/") or not commit:
+            return None
+        if not re.fullmatch("[0-9a-fA-F]{40}", commit):
+            return None  # a legacy package's snapshot name is not a commit to compare
+        overrides = self.state.settings.current.models.get(selection.model)
+        revision = overrides.serve.revision if overrides else None
+        if revision and re.fullmatch("[0-9a-fA-F]{40}", revision):
+            return None
+        return revision or "main"
+
+    def update_status(self, selection: Selection) -> tuple[bool, str | None]:
+        """(update available, the Hub's commit for the tracked revision), from the
+        cache only. Offline mode answers (False, None) without looking at the cache."""
+        revision = self.tracked_revision(selection)
+        if revision is None or self.state.settings.current.global_.hf.offline:
+            return False, None
+        cached = self.heads.get(f"{selection.repo_id}@{revision}")
+        head = cached[1] if cached else None
+        if head is None or selection.commit is None:
+            return False, head
+        return head.lower() != selection.commit.lower(), head
+
+    async def refresh_updates(self) -> bool:
+        """Ask the Hub for the tracked commit of each unpinned model whose answer is
+        older than `UPDATE_TTL_S`. Returns whether any model's update state changed,
+        and then publishes `models.changed`."""
+        if self.state.settings.current.global_.hf.offline:
+            return False
+        selections = read_all(splash_models_dir())
+        before = {s.model: self.update_status(s)[0] for s in selections}
+        asked: set[str] = set()
+        for selection in selections:
+            revision = self.tracked_revision(selection)
+            if revision is None:
+                continue
+            key = f"{selection.repo_id}@{revision}"
+            cached = self.heads.get(key)
+            if key in asked or (cached and time.monotonic() - cached[0] < UPDATE_TTL_S):
+                continue
+            asked.add(key)
+            try:
+                info = await self.hf.repo_info(selection.repo_id, revision)
+            except HubError:
+                continue  # keep the last answer; the next pass asks again
+            except Exception:  # a bad answer for one repository must not end the pass
+                log.warning("update check failed for %s", selection.repo_id, exc_info=True)
+                continue
+            self.heads[key] = (time.monotonic(), info.sha.lower() if info.sha else None)
+        after = {s.model: self.update_status(s)[0] for s in selections}
+        changed = before != after
+        if changed:
+            self.state.events.publish(
+                "models.changed", ModelsChangedEvent(reason="updated", model=None)
+            )
+        return changed
+
+    async def _update_loop(self) -> None:
+        await asyncio.sleep(UPDATE_FIRST_S)
+        while True:
+            try:
+                await self.refresh_updates()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # a failed pass must not end the check
+                log.exception("model update check failed")
+            await asyncio.sleep(UPDATE_POLL_S)
+
+    async def delete(
+        self, model: str, confirm_active: bool = False, trash_source: bool = False
+    ) -> DeleteModelResult:
         self.detail(model)
+        if trash_source and not model.startswith("local/"):
+            raise ApiError(400, "Only a local/ model's file can go to the Trash", "trash_not_local")
         active = self.state.active_model() == model
         if active and not confirm_active:
             raise ApiError(409, "Stop the active model before deleting it", "model_active")
@@ -287,19 +391,59 @@ class Models:
         # A local model's tombstone is written first (Splash prunes its shell repo with the
         # selection) and under the watcher's lock so a scan can't re-add it meanwhile.
         async with self.local.guard(model), self.state.supervisor.hold("model_delete"):
+            # The source files are found before the shell repo goes (D67).
+            doomed = (
+                [(p, k) for p in self.local.sources(model) if (k := self.local.key_of(p))]
+                if trash_source
+                else []
+            )
             self.local.tombstone(model)
             if active:
                 await self.state.supervisor.stop(reason="delete")
-            plan = plan_delete(read_all(splash_models_dir()), {model})
+            plan = plan_delete(
+                read_all(splash_models_dir()), {model}, self.state.settings.models_dir()
+            )
             freed = await asyncio.to_thread(
                 execute_delete, splash_models_dir(), self.state.settings.models_dir(), plan
             )
             self.local.forget(model)
+        # Outside the lock: the tombstone already keeps a scan from re-adding the file, and
+        # Finder can take a while. A failed move keeps the file and raises an alert (D67).
+        trashed: list[str] = []
+        trash_failed: list[str] = []
+        for path, key in doomed:
+            if path.is_symlink():
+                # A link, not a file: what it names may be a blob other models share, so the
+                # link is left where it is and reported (never moved to the Trash).
+                result = CommandResult(
+                    1, "", "The file is a link, not a model file; it was left in place."
+                )
+            else:
+                # Finder is a blocking subprocess; keep it off the event loop.
+                result = await asyncio.to_thread(self.state.macos.trash, path)
+            if result.returncode == 0:
+                self.local.unignore(key)
+                trashed.append(str(path))
+            else:
+                trash_failed.append(str(path))
+                self.state.alerts.raise_alert(
+                    "download_failed",
+                    f"Could not move {path.name} to the Trash",
+                    result.stderr.strip()
+                    or "Finder did not move the file; it is still in the models folder.",
+                    source="downloader",
+                    subject=f"local:{path.name}",
+                )
         self.state.events.publish(
             "models.changed", ModelsChangedEvent(reason="deleted", model=model)
         )
         return DeleteModelResult(
-            deleted=[model], freed_bytes=freed, kept_draft=plan.kept_draft, engine_stopped=active
+            deleted=[model],
+            freed_bytes=freed,
+            kept_draft=plan.kept_draft,
+            engine_stopped=active,
+            trashed=trashed,
+            trash_failed=trash_failed,
         )
 
     def verify(self, model: str, full: bool) -> JobAccepted:
@@ -503,7 +647,8 @@ class Models:
         memory = self.state.memory_bytes()
         # D59 (b): the catalog's §9.1 estimate, so a variant's fit is the same here, in
         # the catalog and in the recommendation (`cat.default_variant`).
-        repo_vision = cat.projector(repo.files) is not None
+        projector = cat.projector(repo.files)
+        repo_vision = projector is not None
         variants = []
         for item in table or []:
             result = fresh.get(item["name"])
@@ -512,6 +657,7 @@ class Models:
                 VariantOut.model_validate(
                     {
                         **item,
+                        "quality": cat.quality_tier(item["name"], item.get("files")),
                         "loadable": result["compatible"] if result else None,
                         "reason": result.get("reason") if result else None,
                         "fit": cat.fit_for(need, memory),
@@ -583,6 +729,8 @@ class Models:
                 "vision": VisionInfo(
                     available=bool(selected and selected["vision"]),
                     reason=selected.get("vision_reason") if selected else reason,
+                    projector=projector,
+                    projector_bytes=repo.files.get(projector) if projector else None,
                 ),
                 "draft": selected.get("draft") if selected else None,
                 "reason": reason,

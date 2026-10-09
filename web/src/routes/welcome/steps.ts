@@ -39,8 +39,10 @@ export interface WizardProgress {
   reached: Step;
   /** Port typed in step 2, written at step 5 after Load (W2). null = unchanged. */
   pendingPort: number | null;
-  /** Use case chosen in step 3. */
+  /** The use case applied in step 3 (settings `wizard.preset`, written by the apply). */
   preset: PresetId | null;
+  /** The step 3 choice not applied yet (settings `wizard.use_case`); Continue applies it and clears it. */
+  useCase: PresetId | null;
   /** The model picked in step 4 (downloaded or already installed). */
   model: string | null;
   /** The download started in step 4, if any. */
@@ -49,7 +51,7 @@ export interface WizardProgress {
 
 export const PROGRESS_KEY = 'splash-gui-wizard';
 
-export const EMPTY_PROGRESS: WizardProgress = { step: 1, reached: 1, pendingPort: null, preset: null, model: null, downloadId: null };
+export const EMPTY_PROGRESS: WizardProgress = { step: 1, reached: 1, pendingPort: null, preset: null, useCase: null, model: null, downloadId: null };
 
 const PRESETS: readonly PresetId[] = ['coding', 'chat', 'speed'];
 
@@ -69,6 +71,7 @@ export function readProgress(raw: unknown): WizardProgress {
     reached: (Math.max(step, reached) as Step),
     pendingPort: port,
     preset: isPresetId(r.preset) ? r.preset : null,
+    useCase: isPresetId(r.useCase) ? r.useCase : null,
     model: typeof r.model === 'string' && r.model ? r.model : null,
     downloadId: typeof r.downloadId === 'string' && r.downloadId ? r.downloadId : null,
   };
@@ -147,4 +150,36 @@ export function stepSearch(search: string, step: Step): string {
   const params = new URLSearchParams(search);
   params.set('step', String(step));
   return params.toString();
+}
+
+/** The progress fields kept in `settings.global.wizard` (the manager's names). */
+export interface WizardServerProgress {
+  step: Step | null;
+  pending_port: number | null;
+  use_case: PresetId | null;
+  model: string | null;
+}
+
+/** What settings.json holds for the wizard; `reached` and `downloadId` stay in this browser. */
+export function toServerProgress(p: WizardProgress): WizardServerProgress {
+  return { step: p.step, pending_port: p.pendingPort, use_case: p.useCase, model: p.model };
+}
+
+/**
+ * Settings win where they hold a value (another browser may have moved on); the browser's own
+ * copy fills what settings lack, and `reached` never goes back.
+ */
+export function mergeServerProgress(local: WizardProgress, server: (Partial<WizardServerProgress> & { preset?: unknown }) | null | undefined): WizardProgress {
+  if (!server) return local;
+  const step = isStep(server.step) ? server.step : local.step;
+  const port = typeof server.pending_port === 'number' && Number.isInteger(server.pending_port) && server.pending_port >= 1 && server.pending_port <= 65535 ? server.pending_port : null;
+  return {
+    ...local,
+    step,
+    reached: Math.max(local.reached, step) as Step,
+    pendingPort: port ?? local.pendingPort,
+    preset: isPresetId(server.preset) ? server.preset : local.preset,
+    useCase: isPresetId(server.use_case) ? server.use_case : local.useCase,
+    model: typeof server.model === 'string' && server.model ? server.model : local.model,
+  };
 }

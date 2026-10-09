@@ -399,6 +399,18 @@ export function defaultInstalled(models: readonly Pick<InstalledModel, 'id' | 'l
   return installedChoices(models.map((m) => ({ format: 'mlx' as const, size_bytes: 0, ...m })), [], activeId)[0]?.id ?? null;
 }
 
+// ---------- step 5: settings written at Ready ----------
+
+/**
+ * What step 5 writes with `markCompleted` (SPEC §10.2, D14, D94): the loaded model becomes
+ * `routing.default_model` (requests with an empty model name go there when the engine is
+ * stopped), and the port typed in step 2 is applied. Other routing and server keys are kept.
+ */
+export function startSettings(doc: { global: Record<string, unknown> }, model: string | null, port: number | null): void {
+  if (model) doc.global.routing = { ...((doc.global.routing ?? {}) as object), default_model: model };
+  if (port) doc.global.server = { ...((doc.global.server ?? { host: '127.0.0.1', port: 8000 }) as object), port };
+}
+
 // ---------- step 5: endpoints ----------
 
 export function endpoints(origin: string): { openai: string; anthropic: string } {
@@ -412,13 +424,6 @@ export function curlSample(origin: string, model: string, withKey: boolean): str
   lines.push(`  -d '${JSON.stringify({ model, messages: [{ role: 'user', content: 'Hello' }] })}'`);
   return lines.join('\n');
 }
-
-/** The PATH block SPEC §12.1 describes, as one pasteable command (no manager route yet). */
-export const PATH_COMMAND = [
-  'for f in ~/.zprofile ~/.bash_profile; do',
-  "  grep -q '# >>> splash-gui >>>' \"$f\" 2>/dev/null || printf '\\n# >>> splash-gui >>>\\nexport PATH=\"$HOME/.splash/bin:$PATH\"\\n# <<< splash-gui <<<\\n' >> \"$f\"",
-  'done',
-].join('\n');
 
 /** The origin the manager will answer on after a port change (W2 redirect). */
 export function movedOrigin(current: string, port: number): string {

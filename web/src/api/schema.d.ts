@@ -320,6 +320,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/app/check-updates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check App Updates
+         * @description Ask the menu bar app to run its Sparkle check (SPEC §19, docs/ui/05 §3.17; PKG-9).
+         *
+         *     The check runs in the app, so the manager only relays it as an `app.check_updates`
+         *     event to the event streams opened with `client=menubar`. With none open, 409
+         *     `app_not_running`: the web then says `Open the menu bar app to update.`
+         */
+        post: operations["check_app_updates_api_admin_app_check_updates_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/alerts": {
         parameters: {
             query?: never;
@@ -922,7 +946,10 @@ export interface paths {
         get: operations["get_model_api_admin_models__model_id__get"];
         put?: never;
         post?: never;
-        /** Delete Model */
+        /**
+         * Delete Model
+         * @description `trash_source` (D67, `local/` models only): also move the model's `.gguf` to the Trash.
+         */
         delete: operations["delete_model_api_admin_models__model_id__delete"];
         options?: never;
         head?: never;
@@ -1600,6 +1627,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/shutdown": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Shutdown
+         * @description Stop the manager, for `splash stop` and `splash restart` (SPEC §12.2). It stops as
+         *     one SIGTERM does (§4.2): the answer goes out first, then the drain, the integration
+         *     restore and the engine stop, and the process exits 0. Only the CLI calls it.
+         */
+        post: operations["shutdown_api_admin_shutdown_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/logs/{source}": {
         parameters: {
             query?: never;
@@ -1952,6 +2001,47 @@ export interface paths {
          *     the browser it was opened in.
          */
         post: operations["exchange_api_admin_auth_exchange_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/uninstall/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Uninstall Plan
+         * @description What `POST /uninstall` would remove, with each folder's size (SPEC §19).
+         */
+        post: operations["uninstall_plan_api_admin_uninstall_plan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/uninstall": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Uninstall
+         * @description Run the SPEC §19 steps. A failed integration restore stops before anything is removed
+         *     (`409 restore_incomplete`, D36); every later step is skipped, so the user can retry.
+         */
+        post: operations["uninstall_api_admin_uninstall_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2553,6 +2643,10 @@ export interface components {
             kept_draft: boolean;
             /** Engine Stopped */
             engine_stopped: boolean;
+            /** Trashed */
+            trashed?: string[];
+            /** Trash Failed */
+            trash_failed?: string[];
         };
         /** DeletedBytes */
         DeletedBytes: {
@@ -2722,6 +2816,12 @@ export interface components {
             id: string;
             /** Model */
             model: string;
+            /**
+             * Kind
+             * @default model
+             * @enum {string}
+             */
+            kind: "model" | "draft";
             /** Revision */
             revision?: string | null;
             /** Draft Model */
@@ -4302,6 +4402,8 @@ export interface components {
         };
         /** ResolvedPaths */
         ResolvedPaths: {
+            /** Home */
+            home: string;
             /** Base */
             base: string;
             /** Models Dir */
@@ -4930,6 +5032,94 @@ export interface components {
              */
             theme: "light" | "dark" | "system";
         };
+        /**
+         * UninstallItem
+         * @description One entry of the data folder, or the models or cache folder, with its size.
+         */
+        UninstallItem: {
+            /** Path */
+            path: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "data" | "models" | "cache";
+            /** Bytes */
+            bytes: number;
+            /**
+             * Deletable
+             * @default true
+             */
+            deletable: boolean;
+        };
+        /** UninstallPlan */
+        UninstallPlan: {
+            /** Home */
+            home: string;
+            /** Items */
+            items: components["schemas"]["UninstallItem"][];
+            /** Models Bytes */
+            models_bytes: number;
+            /** Cache Bytes */
+            cache_bytes: number;
+            /** Data Bytes */
+            data_bytes: number;
+            /** Connected Integrations */
+            connected_integrations: string[];
+            /** Path Block Files */
+            path_block_files: string[];
+            /** Shim Installed */
+            shim_installed: boolean;
+            /**
+             * App Connected
+             * @default false
+             */
+            app_connected: boolean;
+            /** Steps */
+            steps: string[];
+        };
+        /** UninstallRequest */
+        UninstallRequest: {
+            /**
+             * Delete Data
+             * @default true
+             */
+            delete_data: boolean;
+            /**
+             * Delete Models
+             * @default false
+             */
+            delete_models: boolean;
+            /**
+             * Delete Cache
+             * @default false
+             */
+            delete_cache: boolean;
+            /**
+             * Stop
+             * @default true
+             */
+            stop: boolean;
+        };
+        /** UninstallResult */
+        UninstallResult: {
+            /** Restored */
+            restored: string[];
+            /** Path Block Removed */
+            path_block_removed: string[];
+            /** Shim Removed */
+            shim_removed: boolean;
+            /** Secrets Deleted */
+            secrets_deleted: number;
+            /** Deleted */
+            deleted: string[];
+            /** Kept */
+            kept: string[];
+            /** Freed Bytes */
+            freed_bytes: number;
+            /** Stopping */
+            stopping: boolean;
+        };
         /** UpdateInfo */
         UpdateInfo: {
             /**
@@ -5229,6 +5419,8 @@ export interface components {
             reason?: string | null;
             /** Projector */
             projector?: string | null;
+            /** Projector Bytes */
+            projector_bytes?: number | null;
         };
         /** VolumeInfo */
         VolumeInfo: {
@@ -5248,6 +5440,14 @@ export interface components {
             completed: boolean;
             /** Preset */
             preset?: ("coding" | "chat" | "speed") | null;
+            /** Step */
+            step?: (1 | 2 | 3 | 4 | 5) | null;
+            /** Pending Port */
+            pending_port?: number | null;
+            /** Use Case */
+            use_case?: ("coding" | "chat" | "speed") | null;
+            /** Model */
+            model?: string | null;
         };
         /** AlertCleared */
         AlertCleared: {
@@ -6038,6 +6238,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    check_app_updates_api_admin_app_check_updates_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -7326,6 +7555,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -7475,6 +7713,7 @@ export interface operations {
         parameters: {
             query?: {
                 confirm_active?: boolean;
+                trash_source?: boolean;
             };
             header?: never;
             path: {
@@ -9404,6 +9643,35 @@ export interface operations {
             };
         };
     };
+    shutdown_api_admin_shutdown_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     tail_api_admin_logs__source__get: {
         parameters: {
             query?: {
@@ -10055,6 +10323,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    uninstall_plan_api_admin_uninstall_plan_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UninstallPlan"];
+                };
+            };
+        };
+    };
+    uninstall_api_admin_uninstall_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["UninstallRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UninstallResult"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

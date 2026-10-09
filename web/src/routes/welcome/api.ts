@@ -1,8 +1,8 @@
 /**
  * Typed calls the wizard makes (docs/api.md §2, §3, §6, §7, §12.4). Routes that may still be
  * stubs (501 `not_implemented`) are wrapped so the steps can show their designed fallback.
- * Missing routes are listed in the page report as API requests (POST /system/open-terminal,
- * POST /cli/install-path, `wizard.step` in settings).
+ * Missing routes are listed in the page report as API requests (POST /cli/install-path,
+ * `wizard.step` in settings). The Homebrew installer is `POST /system/brew/install`.
  */
 
 import { api, ApiError } from '../../api/client';
@@ -18,6 +18,7 @@ import type {
   ImportCandidates,
   InstalledModels,
   JobAccepted,
+  OpenTerminalResult,
   PresetList,
   SettingsDocument,
   SettingsResponse,
@@ -27,7 +28,7 @@ import type {
   StorageInfo,
 } from '../../api/models';
 import { loadSettings } from '../../store';
-import type { PresetId } from './steps';
+import type { PresetId, WizardServerProgress } from './steps';
 
 /** A stub route (501) — the feature is not built into the manager yet. */
 export function notBuilt(err: unknown): boolean {
@@ -49,6 +50,20 @@ async function orNull<T>(p: Promise<T>): Promise<T | null> {
 export const getBrew = (signal?: AbortSignal) => api.read<BrewInfo>('/system/brew', undefined, signal);
 /** null = the doctor is a stub. */
 export const getDoctor = (signal?: AbortSignal) => orNull(api.read<DoctorReport>('/doctor', undefined, signal));
+
+/**
+ * Opens Terminal with the official Homebrew installer (SPEC §10.2; system/api.py `POST /system/brew/install`).
+ * A 409 means Homebrew is already there, which the poll shows, so it is not an error.
+ */
+export async function openBrewInstaller(): Promise<void> {
+  try {
+    await api.post<OpenTerminalResult>('/system/brew/install');
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 409) return;
+    throw err;
+  }
+}
+
 export const installEngine = () => api.post<JobAccepted>('/engine/install');
 export const upgradeEngine = () => api.post<JobAccepted>('/engine/upgrade');
 export const getEngine = () => api.get<EngineView>('/engine');
@@ -72,11 +87,26 @@ function clone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T;
 }
 
+/** Wizard writes and every other settings write run one after another: each one reads the document the one before it wrote. */
+let wizardQueue: Promise<unknown> = Promise.resolve();
+
+function queued<T>(task: () => Promise<T>): Promise<T> {
+  const next = wizardQueue.then(task);
+  wizardQueue = next.catch(() => undefined);
+  return next;
+}
+
 /**
  * Read-modify-write of settings.json (PUT replaces the whole document, docs/api.md §6.1).
  * Reads a fresh copy first so other clients' edits are kept, then refreshes the store.
+ * Queued with the wizard's writes, so two edits never read the same document and drop one.
  */
-export async function saveSettings(edit: (doc: Doc) => void): Promise<SettingsSaveResult> {
+export function saveSettings(edit: (doc: Doc) => void): Promise<SettingsSaveResult> {
+  return queued(() => saveSettingsNow(edit));
+}
+
+/** The read-modify-write itself. Call it only inside `queued`, or it waits for itself. */
+async function saveSettingsNow(edit: (doc: Doc) => void): Promise<SettingsSaveResult> {
   const current = await getSettings();
   const doc = clone(current.settings) as Doc;
   doc.global ??= {};
@@ -96,11 +126,30 @@ export function withEdit(doc: SettingsDocument, edit: (doc: Doc) => void): Setti
   return next;
 }
 
+/** Keeps the wizard's place in `settings.global.wizard` (F3). Rejects when the manager refuses it. */
+export function saveWizardProgress(progress: WizardServerProgress): Promise<SettingsSaveResult> {
+  return queued(() =>
+    saveSettingsNow((doc) => {
+      doc.global.wizard = { ...(doc.global.wizard ?? { completed: false }), ...progress };
+    }),
+  );
+}
+
+/** Finishing setup also clears the progress, so the next run starts from step 1. */
 export async function markCompleted(extra?: (doc: Doc) => void): Promise<SettingsSaveResult> {
-  return saveSettings((doc) => {
-    doc.global.wizard = { ...(doc.global.wizard ?? { completed: false }), completed: true };
-    extra?.(doc);
-  });
+  return queued(() =>
+    saveSettingsNow((doc) => {
+      doc.global.wizard = {
+        ...(doc.global.wizard ?? { completed: false }),
+        completed: true,
+        step: null,
+        pending_port: null,
+        use_case: null,
+        model: null,
+      };
+      extra?.(doc);
+    }),
+  );
 }
 
 // ---------- storage ----------

@@ -43,4 +43,18 @@ test('step 2 shows the listening port as current and refuses a busy one', async 
   await expect(page.getByText('Step 3 of 5', { exact: false })).toBeVisible();
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('splash-gui-wizard') ?? '{}'));
   expect(saved.pendingPort).toBe(manager.port);
+  // F3: the same progress is in settings, so another browser would resume it.
+  await expect
+    .poll(async () => (await manager.api<{ settings: { global: { wizard: { pending_port: number | null; step: number | null } } } }>('GET', '/settings')).body.settings.global.wizard)
+    .toMatchObject({ pending_port: manager.port, step: 3 });
+});
+
+test('a browser with no saved progress resumes at the step settings hold (F3)', async ({ page, manager }) => {
+  const current = await manager.api<{ settings: Record<string, unknown> }>('GET', '/settings');
+  const doc = current.body.settings as { global: { wizard: Record<string, unknown> } };
+  doc.global.wizard = { ...doc.global.wizard, step: 3, pending_port: manager.port, use_case: 'chat', model: null };
+  const saved = await manager.api('PUT', '/settings', doc);
+  expect(saved.status).toBe(200);
+  await page.goto('/admin/welcome');
+  await expect(page.getByText('Step 3 of 5', { exact: false })).toBeVisible();
 });

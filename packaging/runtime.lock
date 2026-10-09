@@ -1,0 +1,15 @@
+# Pinned bundled Python runtime (PKG-2, docs/plans/packaging.md). Read by packaging/scripts/build-runtime.sh.
+#
+# Source: python-build-standalone (astral-sh), official GitHub release 20261003, CPython 3.13.16,
+# target aarch64-apple-darwin, the install_only_stripped archive. The SHA-256 matches the release's
+# SHA256SUMS asset and the asset digest the GitHub API reports (checked 2026-10-07).
+# Change every line together when the runtime moves to a new release.
+#
+# Shell syntax: KEY=VALUE, no spaces around "=", no command substitution.
+
+PBS_RELEASE=20261003
+PBS_PYTHON=3.13.16
+PBS_TARGET=aarch64-apple-darwin
+PBS_ARCHIVE=cpython-3.13.16+20261003-aarch64-apple-darwin-install_only_stripped.tar.gz
+PBS_URL=https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.13.16%2B20261003-aarch64-apple-darwin-install_only_stripped.tar.gz
+PBS_SHA256=9e01f63bbb08576cd9c8bc2d0564d098cb30c8453a0cd4bcf6aef458f6d2a147

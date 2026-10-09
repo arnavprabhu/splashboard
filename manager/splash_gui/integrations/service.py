@@ -8,6 +8,7 @@ import contextlib
 import json
 import logging
 import os
+import plistlib
 import re
 import shlex
 import shutil
@@ -49,7 +50,8 @@ if TYPE_CHECKING:
     from ..state import ManagerState
 
 CLIENTS = {
-    "claude": ("Claude Code", "https://code.claude.com/docs/en/setup"),
+    # Install links: splash/install/clients.py INSTALL_URLS (SPEC §10.7; tested).
+    "claude": ("Claude Code", "https://code.claude.com/docs/en/overview"),
     "codex": ("Codex CLI", "https://developers.openai.com/codex/cli/"),
     "opencode": ("OpenCode", "https://opencode.ai/docs/"),
     "hermes": (
@@ -80,6 +82,16 @@ def _version_key(text: str | None) -> tuple[int, ...]:
 def untested(name: str, version: str | None) -> bool:
     tested = TESTED_VERSIONS.get(name)
     return tested is None or version is None or _version_key(version) < _version_key(tested)
+
+
+def bundle_id(app: Path) -> str | None:
+    """The app's CFBundleIdentifier from its Info.plist, or None when it cannot be read."""
+    try:
+        with (app / "Contents" / "Info.plist").open("rb") as handle:
+            value = plistlib.load(handle).get("CFBundleIdentifier")
+    except (OSError, plistlib.InvalidFileException, ValueError, AttributeError):
+        return None
+    return str(value) if value else None
 
 
 def through_link(path: Path) -> Path:
@@ -476,6 +488,14 @@ class IntegrationsService:
         app = self.app(name)
         label = app.stem if app else "Claude" if name == "claude-desktop" else "Codex"
         result = await asyncio.to_thread(self.state.macos.quit_app, label)
+        if result.returncode and name == "codex-app" and app is not None:
+            # SPEC §11.3.2: quitting by name can fail; the app's bundle id is the fallback.
+            # An unreadable Info.plist falls back to the Codex id only for Codex.app.
+            fallback = bundle_id(app) or (CODEX_BUNDLE_ID if app.name == "Codex.app" else None)
+            if fallback:
+                result = await asyncio.to_thread(
+                    self.state.macos.quit_app, label, bundle_id=fallback
+                )
         if result.returncode:
             raise ApiError(409, "Could not quit " + label, "app_quit_failed")
         deadline = time.monotonic() + (30 if name == "claude-desktop" else 5)
@@ -838,7 +858,19 @@ class IntegrationsService:
                 "has_more": False,
             }
 
+        def no_model() -> Response:
+            from ..proxy.pipeline import ProxyError
+
+            return ProxyError(
+                503,
+                "Splash GUI: no model loaded",
+                "engine_unavailable",
+                headers={"Retry-After": "5"},
+            ).response(anthropic=True)
+
         async def messages(request: Request) -> Response:
+            from ..proxy.pipeline import ProxyError
+
             try:
                 body = await request.json()
             except ValueError:
@@ -855,17 +887,21 @@ class IntegrationsService:
                 or self.state.settings.current.global_.routing.default_model
             )
             if not model:
-                from ..proxy.pipeline import ProxyError
-
-                return ProxyError(
-                    503,
-                    "Splash GUI: no model loaded",
-                    "engine_unavailable",
-                    headers={"Retry-After": "5"},
-                ).response(anthropic=True)
+                return no_model()
+            proxy = self.state.proxy
+            supervisor = proxy.sup
+            if supervisor is not None and not supervisor.accepting:
+                # SPEC §11.3.1: the engine is stopped while connected, so the gateway
+                # loads the mapped model first (the same routing the proxy runs, §7.4).
+                # If that fails, the answer is the overload message, not the load's error.
+                # A busy engine keeps the proxy's own message (switch while in flight).
+                try:
+                    await proxy.route(request, model)
+                except (ProxyError, ApiError):
+                    return no_model()
             return cast(
                 Response,
-                await self.state.proxy.handle(
+                await proxy.handle(
                     request,
                     request.url.path,
                     body_override=body,

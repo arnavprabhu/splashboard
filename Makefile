@@ -5,7 +5,11 @@
 #   make web        build the web admin (web/dist)
 #   make macos      build the menu bar app (swift build)
 #   make bundle     build "macos/build/Splash GUI.app" (ad-hoc signed)
-#   make test       unit and integration tests: manager, fake engine, web (vitest + Playwright), macOS
+#   make runtime    build the bundled Python runtime, build/package/manager/python (PKG-2)
+#   make app        build the self-contained build/package/Splash GUI.app (PKG-4: web, runtime, menu bar app)
+#   make dmg        build build/package/<Name>-<version>.dmg from that app (PKG-7)
+#   make notarize   TARGET=<app or dmg> ARGS="--keychain-profile NAME": notarize and staple (PKG-8; needs Developer ID)
+#   make test       unit and integration tests: manager, fake engine, packaging scripts, web (vitest + Playwright), macOS
 #   make test-real  contract tests against the installed Splash and the live Hub (SPEC §20.2)
 #   make lint       ruff, mypy, tsc
 
@@ -27,7 +31,7 @@ else
 DEV_ENV :=
 endif
 
-.PHONY: help dev manager web web-deps manager-deps macos bundle test test-manager test-fake test-web test-e2e test-macos test-real lint
+.PHONY: help dev manager web web-deps manager-deps macos bundle runtime app dmg notarize test test-manager test-fake test-packaging test-web test-e2e test-macos test-real lint
 
 help:
 	@sed -n 's/^#   //p' $(MAKEFILE_LIST)
@@ -58,13 +62,40 @@ macos:
 bundle:
 	macos/scripts/bundle.sh
 
-test: test-manager test-fake test-web test-e2e test-macos
+## Bundled Python runtime for the packaged app: python-build-standalone (pinned in packaging/runtime.lock) plus splash_gui.
+runtime:
+	packaging/scripts/build-runtime.sh
+
+## The self-contained app (PKG-4): make web, make runtime, swift build -c release, then one bundle with the
+## bundled runtime (Contents/Resources/manager), the web admin (Contents/Resources/web) and the agent plist.
+app:
+	packaging/scripts/build-app.sh
+
+dmg:
+	packaging/scripts/make-dmg.sh
+
+notarize:
+	@test -n "$(TARGET)" || { echo 'usage: make notarize TARGET=<app or dmg> ARGS="--keychain-profile NAME"'; exit 1; }
+	packaging/scripts/notarize.sh $(ARGS) "$(TARGET)"
+
+test: test-manager test-fake test-packaging test-web test-e2e test-macos
 
 test-manager: manager-deps
 	cd manager && SPLASH_GUI_SECRETS=memory uv run pytest
 
 test-fake:
 	uv run --no-project --with pytest pytest scripts/fake_splash/tests
+
+## Packaging scripts (PKG-4, PKG-6): the sign.sh shell tests and the pytest suite under packaging/. They need no network
+## and no signing identity: sign.sh and build-app.sh run on fixtures in temp folders, never on a real app.
+test-packaging:
+	bash packaging/tests/test_sign.sh
+	bash packaging/tests/test_dmg.sh
+	bash packaging/tests/test_notarize.sh
+	cd macos && swift package resolve >/dev/null  # Sparkle's generate_appcast and sign_update
+	bash packaging/tests/test_appcast.sh
+	bash packaging/tests/test_cask.sh
+	uv run --no-project --with pytest pytest packaging/tests
 
 test-web: web-deps
 	cd web && pnpm typecheck && pnpm test

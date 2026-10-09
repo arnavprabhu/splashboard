@@ -3,19 +3,25 @@
 from __future__ import annotations
 
 import subprocess
+import threading
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from splash_gui.engine import discovery as d
+from splash_gui.engine import serve_options
 from splash_gui.engine.serve_options import (
+    EngineOptions,
     EngineOptionsCache,
     parse_helper_output,
     run_helper,
 )
 
-from .conftest import HAVE_SPLASH, SPLASH_PKG, write_script
+from .conftest import HAVE_SPLASH, LOOPBACK_CLIENT, SPLASH_PKG, write_script
 
 
 def fake_pkg(root: Path, version: str = "1.3.0", *, release: bool = True) -> Path:
@@ -259,3 +265,53 @@ def test_helper_against_real_splash() -> None:
     assert flags["--queue-size"].default == 32
     assert flags["--api-key"].secret and flags["--api-key"].environment == "SPLASH_API_KEY"
     assert options.unknown() == []  # Splash 1.3.0 has no option Appendix A doesn't map
+
+
+def test_concurrent_reads_run_the_helper_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The startup read and a first Settings load share one helper run (SPEC §8.4)."""
+    calls: list[d.EngineInfo] = []
+    started, release = threading.Event(), threading.Event()
+
+    def slow_helper(engine: d.EngineInfo, timeout: float = 20) -> EngineOptions:
+        calls.append(engine)
+        started.set()
+        release.wait(5)
+        return EngineOptions(available=True, version="1.3.0")
+
+    monkeypatch.setattr(serve_options, "run_helper", slow_helper)
+    cache = EngineOptionsCache()
+    info = d.EngineInfo(found=True, cli=Path("/opt/splash/bin/splash"), version="1.3.0")
+    results: list[EngineOptions] = []
+    readers = [threading.Thread(target=lambda: results.append(cache.get(info))) for _ in range(3)]
+    readers[0].start()
+    assert started.wait(5)
+    for reader in readers[1:]:
+        reader.start()
+    time.sleep(0.1)  # let the other readers reach the cache while the helper runs
+    release.set()
+    for reader in readers:
+        reader.join(5)
+    assert len(calls) == 1
+    assert len(results) == 3 and all(result is results[0] for result in results)
+
+
+def test_the_serve_options_are_read_at_startup(
+    app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC §8.4: the manager reads the helper as it starts, so Settings does not wait."""
+    started = threading.Event()
+    calls: list[d.EngineInfo] = []
+
+    def helper(engine: d.EngineInfo, timeout: float = 20) -> EngineOptions:
+        calls.append(engine)
+        started.set()
+        return EngineOptions(available=False, errors=("stub helper",))
+
+    monkeypatch.setattr(serve_options, "run_helper", helper)
+    token = app.state.manager.auth.cli_token()
+    headers = {"Authorization": f"Bearer {token}"}
+    with TestClient(app, client=LOOPBACK_CLIENT, headers=headers) as client:
+        assert started.wait(10), "the helper did not run at startup"
+        body = client.get("/api/admin/settings/schema").json()
+    assert [call.version for call in calls] == ["1.3.0"]  # read once; Settings reuses it
+    assert body["engine_options"]["errors"] == ["stub helper"]

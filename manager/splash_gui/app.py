@@ -14,6 +14,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import threading
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +43,7 @@ from .logs.api import router as logs_router
 from .mcp.api import router as mcp_router
 from .metrics.api import router as metrics_router
 from .models.api import router as models_router
+from .packaged import bundle_root
 from .paths import Paths
 from .proxy.router import router as proxy_router
 from .schemas import SSE_MODELS
@@ -51,6 +53,7 @@ from .settings.store import SettingsStore
 from .state import ManagerState
 from .storage.api import router as storage_router
 from .system.api import router as system_router
+from .uninstall import router as uninstall_router
 from .usage.api import router as usage_router
 
 log = logging.getLogger(__name__)
@@ -79,13 +82,19 @@ ADMIN_ROUTERS: tuple[tuple[str, APIRouter], ...] = (
     ("Data", data_router),
     ("Storage", storage_router),
     ("Auth", auth_router),
+    ("Uninstall", uninstall_router),
 )
 
 
 def default_web_dist() -> Path:
+    """The web admin's built files: the env override, then the bundle's own copy when
+    this runs from `Splash GUI.app` (PKG-3), then the source tree's `web/dist`."""
     override = os.environ.get(WEB_DIST_ENV)
     if override:
         return Path(override).expanduser()
+    root = bundle_root()
+    if root is not None:
+        return root / "Contents" / "Resources" / "web"
     return Path(__file__).resolve().parents[2] / "web" / "dist"
 
 
@@ -162,7 +171,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     state.events.attach(asyncio.get_running_loop())
     with contextlib.suppress(Exception):
         await asyncio.to_thread(state.engine)
+    _read_engine_options_in_background(state)
     _ensure_shim(state)
+    _migrate_keychain_prefix(state)
     _migrate_mcp_secrets(state)
     core = [state.proxy, state.supervisor, state.metrics]
     services = subsystem_services(state)
@@ -181,6 +192,42 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         with contextlib.suppress(Exception):
             await state.jobs.shutdown()
         state.usage.close_open_sessions()
+
+
+def _read_engine_options_in_background(state: ManagerState) -> None:
+    """SPEC §8.4: read the engine's serve options as the manager starts, on a daemon
+    thread, so the first Settings load does not wait for the helper (up to 20 s).
+    A failure is logged; Settings then shows the helper's error as before."""
+
+    def read() -> None:
+        try:
+            state.engine_options.get(state.engine())
+        except Exception:
+            log.warning("could not read the engine's serve options", exc_info=True)
+
+    threading.Thread(target=read, name="serve-options", daemon=True).start()
+
+
+def _migrate_keychain_prefix(state: ManagerState) -> None:
+    """PKG-16 (D62): move Keychain items from an earlier service prefix to KEYCHAIN_PREFIX, before
+    anything reads them. A no-op until LEGACY_PREFIXES names one."""
+    from .mcp.secrets import _current_values, secret_name
+    from .secrets import KEYCHAIN_PREFIX, LEGACY_PREFIXES, SecretName, migrate_prefix, suffix_of
+
+    if not LEGACY_PREFIXES:
+        return
+    suffixes = [suffix_of(name) for name in SecretName]
+    with contextlib.suppress(Exception):
+        for server, kind, key in _current_values(state.settings.current):
+            suffixes.append(suffix_of(secret_name(server, kind, key)))
+    for old in LEGACY_PREFIXES:
+        try:
+            report = migrate_prefix(state.secrets.backend, suffixes, old, KEYCHAIN_PREFIX)
+        except Exception:
+            log.warning("could not move Keychain items from %s", old, exc_info=True)
+            continue
+        if any(report.values()):
+            log.info("Keychain items from %s: %s", old, report)
 
 
 def _migrate_mcp_secrets(state: ManagerState) -> None:

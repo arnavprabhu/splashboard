@@ -44,8 +44,22 @@ public struct SMAppServiceWrapper: AppService, @unchecked Sendable {
 }
 
 public enum ManagerAgent {
-    public static let label = "ai.splashgui.manager"
-    public static let plistName = "ai.splashgui.manager.plist"
+    /// Info.plist key that scripts/bundle.sh writes from packaging/identity.env (PKG-1).
+    public static let labelInfoKey = "SplashGUIAgentLabel"
+    /// The label when the bundle does not carry one (`swift run`, `swift test`).
+    public static let fallbackLabel = "ai.splashgui.manager"
+
+    /// The agent label from an Info.plist dictionary, or the fallback when the key is missing or empty.
+    public static func resolveLabel(info: [String: Any]?) -> String {
+        if let value = info?[labelInfoKey] as? String, !value.isEmpty { return value }
+        return fallbackLabel
+    }
+
+    /// The agent plist name that scripts/bundle.sh writes: `<label>.plist`.
+    public static func plistName(forLabel label: String) -> String { "\(label).plist" }
+
+    public static let label: String = resolveLabel(info: Bundle.main.infoDictionary)
+    public static let plistName: String = plistName(forLabel: label)
 
     /// True when the running app bundle carries the agent plist (scripts/bundle.sh writes it).
     public static func plistInBundle(_ bundle: Bundle = .main) -> Bool {
@@ -59,6 +73,7 @@ public enum ManagerAgent {
 /// The manager agent is registered when the app needs the manager (see `ManagerController`)
 /// and unregistered when the app quits with "stop server" — so it comes back at login only
 /// together with the app. This avoids killing a running manager when the toggle changes.
+/// The toggle never registers or unregisters the agent (SPEC §4.2, D87; the keep-running residual is §22 Q42).
 public final class LoginItemController: Sendable {
     public struct Outcome: Sendable, Equatable {
         public var status: AppServiceStatus
@@ -87,4 +102,13 @@ public final class LoginItemController: Sendable {
     }
 
     public var status: AppServiceStatus { mainApp.status }
+
+    /// Remove Splash GUI data (PKG-12): the app no longer opens at login, whatever the setting says.
+    /// Returns nil when no login item is left, else why it could not be removed (re-read after the call).
+    public func unregisterForRemoval() -> String? {
+        guard mainApp.status == .enabled || mainApp.status == .requiresApproval else { return nil }
+        do { try mainApp.unregister() } catch { return error.localizedDescription }
+        let after = mainApp.status
+        return after == .enabled || after == .requiresApproval ? "it is still registered" : nil
+    }
 }

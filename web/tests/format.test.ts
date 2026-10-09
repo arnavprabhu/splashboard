@@ -13,6 +13,7 @@ import {
   formatRelativeTime,
   formatTokPerSec,
   formatTokens,
+  tildePath,
 } from '../src/lib/format';
 
 describe('formatBytes', () => {
@@ -119,5 +120,30 @@ describe('formatRelativeTime', () => {
     expect(formatRelativeTime(new Date(now - 120_000).toISOString(), now)).toBe('2 min ago');
     expect(formatRelativeTime('not a date', now)).toBe(DASH);
     expect(formatRelativeTime(null, now)).toBe(DASH);
+  });
+});
+
+describe('tildePath', () => {
+  it('shortens the home folder to ~ when it is known', () => {
+    expect(tildePath('/Users/arnav/.splash/cache', '/Users/arnav')).toBe('~/.splash/cache');
+    expect(tildePath('/Users/arnav', '/Users/arnav')).toBe('~');
+    expect(tildePath('/home/me/x', '/home/me')).toBe('~/x');
+    expect(tildePath('/Users/arnav/x', '/Users/arnav/')).toBe('~/x');
+  });
+
+  it('leaves other users\' folders alone, even under /Users', () => {
+    expect(tildePath('/Users/Shared/x', '/Users/bob')).toBe('/Users/Shared/x');
+    expect(tildePath('/Users/bob2/x', '/Users/bob')).toBe('/Users/bob2/x');
+    expect(tildePath('/Users/bobby', '/Users/bob')).toBe('/Users/bobby');
+  });
+
+  it('leaves every other path alone', () => {
+    expect(tildePath('/Volumes/Fast SSD/cache', '/Users/arnav')).toBe('/Volumes/Fast SSD/cache');
+    expect(tildePath('~/.splash/cache', '/Users/arnav')).toBe('~/.splash/cache');
+  });
+
+  it('changes nothing while the home folder is unknown', () => {
+    expect(tildePath('/Users/arnav/.splash/cache')).toBe('/Users/arnav/.splash/cache');
+    expect(tildePath('/Users/arnav/.splash/cache', null)).toBe('/Users/arnav/.splash/cache');
   });
 });

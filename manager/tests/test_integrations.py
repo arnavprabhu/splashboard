@@ -9,7 +9,9 @@ are stubbed, and the filesystem under test is a throwaway `$HOME`.
 
 from __future__ import annotations
 
+import ast
 import json
+import plistlib
 import subprocess
 import time
 from collections.abc import Callable, Coroutine
@@ -62,7 +64,7 @@ def service(client, fake_home, monkeypatch) -> IntegrationsService:
     monkeypatch.setattr(
         integration.state.macos,
         "quit_app",
-        lambda label: subprocess.CompletedProcess(["osascript"], 0, "", ""),
+        lambda label, bundle_id=None: subprocess.CompletedProcess(["osascript"], 0, "", ""),
     )
     # A served model, so the Codex catalog and routing list have something in them.
     monkeypatch.setattr(
@@ -224,6 +226,126 @@ async def test_connecting_a_running_app_needs_confirmation(service, monkeypatch)
 
     result = await service.connect("codex-app", confirm=True)
     assert result.state == "connected"
+
+
+async def test_codex_quit_falls_back_to_the_bundle_id(service, monkeypatch):
+    """SPEC §11.3.2: quitting the Codex app by name can fail; it then quits by bundle id."""
+    from splash_gui.integrations.service import CODEX_BUNDLE_ID
+
+    calls: list[tuple[str, str | None]] = []
+    stopped = False
+
+    def quit_app(label: str, bundle_id: str | None = None) -> subprocess.CompletedProcess[str]:
+        nonlocal stopped
+        calls.append((label, bundle_id))
+        ok = bundle_id == CODEX_BUNDLE_ID
+        stopped = stopped or ok
+        return subprocess.CompletedProcess(["osascript"], 0 if ok else 1, "", "")
+
+    monkeypatch.setattr(service.state.macos, "quit_app", quit_app)
+    monkeypatch.setattr(service, "running", lambda name: not stopped)
+
+    assert await service.quit_app("codex-app") is True
+    assert len(calls) == 2
+    assert calls[0][1] is None, "the name is tried first"
+    assert calls[1] == (calls[0][0], CODEX_BUNDLE_ID)
+
+
+def _app_bundle(root: Path, name: str, info: bytes | None) -> Path:
+    """A fake app bundle; `info` is the raw Info.plist, or None for no plist at all."""
+    app = root / name
+    (app / "Contents").mkdir(parents=True)
+    if info is not None:
+        (app / "Contents" / "Info.plist").write_bytes(info)
+    return app
+
+
+def _quit_recorder(monkeypatch, service, accepted: str | None) -> list[tuple[str, str | None]]:
+    """Fakes osascript: quitting by name fails, and quitting by `accepted` id succeeds."""
+    calls: list[tuple[str, str | None]] = []
+    stopped = False
+
+    def quit_app(label: str, bundle_id: str | None = None) -> subprocess.CompletedProcess[str]:
+        nonlocal stopped
+        calls.append((label, bundle_id))
+        ok = accepted is not None and bundle_id == accepted
+        stopped = stopped or ok
+        return subprocess.CompletedProcess(["osascript"], 0 if ok else 1, "", "")
+
+    monkeypatch.setattr(service.state.macos, "quit_app", quit_app)
+    monkeypatch.setattr(service, "running", lambda name: not stopped)
+    return calls
+
+
+async def test_quit_falls_back_to_the_bundle_id_of_the_app_found(service, monkeypatch, tmp_path):
+    """SPEC §11.3.2: the fallback is the located app's own CFBundleIdentifier, not a fixed one."""
+    plist = plistlib.dumps({"CFBundleIdentifier": "com.example.chatgpt"})
+    app = _app_bundle(tmp_path, "ChatGPT.app", plist)
+    monkeypatch.setattr(service, "app", lambda name: app)
+    calls = _quit_recorder(monkeypatch, service, accepted="com.example.chatgpt")
+
+    assert await service.quit_app("codex-app") is True
+    assert calls == [("ChatGPT", None), ("ChatGPT", "com.example.chatgpt")]
+
+
+@pytest.mark.parametrize(
+    ("name", "info", "expected"),
+    [
+        # An unreadable plist: only Codex.app keeps the Codex id as its fallback.
+        ("Codex.app", None, "com.openai.codex"),
+        ("Codex.app", b"not a plist", "com.openai.codex"),
+        ("ChatGPT.app", None, None),
+        ("ChatGPT.app", b"not a plist", None),
+        # A plist with no bundle id is unreadable for this purpose too.
+        ("ChatGPT.app", plistlib.dumps({"CFBundleName": "ChatGPT"}), None),
+    ],
+)
+async def test_quit_fallback_when_the_bundle_id_is_unreadable(
+    service, monkeypatch, tmp_path, name, info, expected
+):
+    app = _app_bundle(tmp_path, name, info)
+    monkeypatch.setattr(service, "app", lambda kind: app)
+    calls = _quit_recorder(monkeypatch, service, accepted=expected)
+
+    if expected is None:
+        with pytest.raises(ApiError) as caught:
+            await service.quit_app("codex-app")
+        assert caught.value.code == "app_quit_failed"
+        assert calls == [(app.stem, None)], "no bundle id is guessed for ChatGPT.app"
+    else:
+        assert await service.quit_app("codex-app") is True
+        assert calls[-1] == (app.stem, expected)
+
+
+async def test_a_failed_quit_by_bundle_id_is_reported(service, monkeypatch):
+    monkeypatch.setattr(
+        service.state.macos,
+        "quit_app",
+        lambda label, bundle_id=None: subprocess.CompletedProcess(["osascript"], 1, "", ""),
+    )
+    monkeypatch.setattr(service, "running", lambda name: True)
+    with pytest.raises(ApiError) as caught:
+        await service.quit_app("codex-app")
+    assert caught.value.code == "app_quit_failed"
+
+
+def test_running_matches_the_app_binaries_only(service, monkeypatch):
+    """The Codex and ChatGPT app binaries match; helpers and CLIs do not."""
+    import re
+
+    patterns: list[str] = []
+
+    def pgrep(*args: str, **kwargs: Any) -> list[int]:
+        patterns.append(args[-1])
+        return []
+
+    monkeypatch.setattr(service.state.macos, "pgrep", pgrep)
+    IntegrationsService.running(service, "codex-app")
+    (pattern,) = patterns
+    assert re.search(pattern, "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT")
+    assert re.search(pattern, "/Applications/Codex.app/Contents/MacOS/Codex")
+    assert not re.search(pattern, "/Applications/ChatGPT Helper (Renderer).app/Contents/MacOS/x")
+    assert not re.search(pattern, "/opt/homebrew/bin/codex")
 
 
 async def test_connecting_an_app_that_is_not_installed_is_a_404(service, monkeypatch):
@@ -1004,6 +1126,23 @@ def test_cli_rows_say_what_changes(service):
         str(service.home / ".hermes/profiles/splash/config.yaml")
     ]
     assert rows["pi"].changes.files == [str(service.home / ".pi/agent/models.json")]
+
+
+def test_cli_install_links_match_splash_clients(service):
+    """SPEC §10.7: each CLI row's Install link is the URL in splash/install/clients.py."""
+    reference = Path(__file__).resolve().parents[2] / "splash" / "install" / "clients.py"
+    if not reference.is_file():
+        pytest.skip("the splash/ reference clone is not checked out")
+    tree = ast.parse(reference.read_text(encoding="utf-8"))
+    install_urls = next(
+        ast.literal_eval(node.value)
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "INSTALL_URLS" for t in node.targets)
+    )
+    rows = {row.name: row for row in service.listing().cli}
+    for name, url in install_urls.items():
+        assert rows[name].install_url == url, name
 
 
 def test_hermes_and_pi_entries_are_listed_and_removed_with_a_backup(service):

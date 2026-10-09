@@ -10,6 +10,8 @@ import { isProjector } from './logic';
 
 export interface VariantTableProps {
   variants: readonly VariantOut[];
+  /** The vision projector row (SPEC §9.1, `projectorRow`): listed last, labelled, never selectable. */
+  projector?: VariantOut | null;
   /** Radio selection (Download by ID). */
   selected?: string | null;
   onSelect?: (name: string) => void;
@@ -22,10 +24,10 @@ export interface VariantTableProps {
 }
 
 /** GGUF variants (SPEC §9.1, D8): size, bits, tier, fit, Recommended, disabled rows with reasons. */
-export function VariantTable({ variants, selected, onSelect, onDownload, installed, pending, caption }: VariantTableProps) {
+export function VariantTable({ variants, projector, selected, onSelect, onDownload, installed, pending, caption }: VariantTableProps) {
   const group = useId();
   const waiting = new Set(pending ?? []);
-  const rows = [...variants].sort((a, b) => Number(isProjector(a.name)) - Number(isProjector(b.name)));
+  const rows = [...variants, ...(projector ? [projector] : [])].sort((a, b) => Number(isProjector(a.name)) - Number(isProjector(b.name)));
   const columns: Column<VariantOut>[] = [
     {
       key: 'name',

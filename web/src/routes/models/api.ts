@@ -72,8 +72,12 @@ export async function getModel(id: string, signal?: AbortSignal): Promise<ModelD
   }
 }
 
-export function deleteModel(id: string, confirmActive: boolean): Promise<DeleteModelResult> {
-  return api.del<DeleteModelResult>(`/models/${modelPath(id)}`, confirmActive ? { confirm_active: true } : undefined);
+/** DELETE /models/{id}; `trashSource` (D67, local/ models only) also moves the .gguf to the Trash. */
+export function deleteModel(id: string, confirmActive: boolean, trashSource = false): Promise<DeleteModelResult> {
+  const query: Record<string, true> = {};
+  if (confirmActive) query.confirm_active = true;
+  if (trashSource) query.trash_source = true;
+  return api.del<DeleteModelResult>(`/models/${modelPath(id)}`, Object.keys(query).length ? query : undefined);
 }
 
 export function verifyModel(id: string, full: boolean): Promise<JobAccepted> {

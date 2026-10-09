@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Response
 
 from ..errors import ApiError, error_responses
 from ..paths import Paths
-from ..schemas import RcFileStatus, ShimInstallRequest, ShimStatus
+from ..schemas import OkResponse, RcFileStatus, ShimInstallRequest, ShimStatus
 from ..state import ManagerState, get_state
 from . import install as shim
 
@@ -67,3 +67,20 @@ def delete_shim(state: State, remove_path: bool = True) -> Response:
     if not shim.remove_shim(paths):
         raise ApiError(404, "The shim was not installed", "shim_not_installed")
     return Response(status_code=204)
+
+
+@router.post(
+    "/shutdown", status_code=202, response_model=OkResponse, responses=error_responses(503)
+)
+def shutdown(state: State) -> OkResponse:
+    """Stop the manager, for `splash stop` and `splash restart` (SPEC §12.2). It stops as
+    one SIGTERM does (§4.2): the answer goes out first, then the drain, the integration
+    restore and the engine stop, and the process exits 0. Only the CLI calls it."""
+    if state.request_shutdown is None:
+        raise ApiError(
+            503,
+            "This manager is not running under its server, so it cannot be stopped from the API",
+            "shutdown_unavailable",
+        )
+    state.request_shutdown()
+    return OkResponse()

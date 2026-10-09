@@ -8,11 +8,12 @@ token (D10); `hf.endpoint` replaces https://huggingface.co for mirrors. Tests se
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeGuard
 
 import httpx
 
@@ -23,7 +24,13 @@ if TYPE_CHECKING:
 
 DEFAULT_ENDPOINT = "https://huggingface.co"
 TIMEOUT_S = 15.0
+# SPEC §9.2: the Hub filters on these tags (`filter=` ANDs, so one request per tag).
+SEARCH_TAGS = ("mlx", "gguf")
 _FRONT_MATTER = re.compile(r"\A---\s*\n.*?\n---\s*(\n|\Z)", re.DOTALL)
+# A Hub blob ID (a file's LFS sha256, or a git object ID for a small file) names a file in
+# the Hub cache, and downloads and removal join it into a path, so only this shape is kept
+# (SPEC §9.4). The downloads queue checks it again when it loads downloads.json.
+BLOB_ID = re.compile(r"[0-9a-f]{40,64}")
 
 
 class HubError(Exception):
@@ -35,6 +42,12 @@ class HubError(Exception):
 
 def strip_front_matter(text: str) -> str:
     return _FRONT_MATTER.sub("", text, count=1).lstrip("\n")
+
+
+def is_blob_id(value: object) -> TypeGuard[str]:
+    """Whether `value` is a Hub blob ID, the only kind of value that may name a file in
+    the blobs folder (`BLOB_ID`)."""
+    return isinstance(value, str) and BLOB_ID.fullmatch(value) is not None
 
 
 def login_token() -> str | None:
@@ -110,19 +123,41 @@ class HfClient:
         return response
 
     async def search(self, query: str, sort: str, limit: int) -> list[dict[str, Any]]:
+        """SPEC §9.2: MLX and GGUF repositories only. The Hub ANDs repeated `filter`
+        values, so each format is one request; the two sorted lists are merged by the
+        same key, de-duplicated and cut to `limit`."""
         sort_key = {"downloads": "downloads", "likes": "likes", "recent": "lastModified"}[sort]
-        response = await self._get(
-            "/api/models",
-            {
-                "search": query,
-                "sort": sort_key,
-                "direction": "-1",
-                "limit": str(limit),
-                "full": "true",
-            },
+        batches = await asyncio.gather(
+            *(
+                self._get(
+                    "/api/models",
+                    {
+                        "search": query,
+                        "filter": tag,
+                        "sort": sort_key,
+                        "direction": "-1",
+                        "limit": str(limit),
+                        "full": "true",
+                    },
+                )
+                for tag in SEARCH_TAGS
+            )
         )
-        data = response.json()
-        return [d for d in data if isinstance(d, dict)] if isinstance(data, list) else []
+        rows: dict[str, dict[str, Any]] = {}
+        for response in batches:
+            data = response.json()
+            for row in data if isinstance(data, list) else []:
+                if isinstance(row, dict):
+                    rows.setdefault(str(row.get("id") or row.get("modelId") or ""), row)
+
+        def order(row: dict[str, Any]) -> Any:
+            # Missing values sort last: ISO dates compare as text, counts as numbers.
+            value = row.get(sort_key)
+            if sort == "recent":
+                return value if isinstance(value, str) else ""
+            return value if isinstance(value, int | float) and not isinstance(value, bool) else -1
+
+        return sorted(rows.values(), key=order, reverse=True)[:limit]
 
     async def repo_info(self, repo_id: str, revision: str | None = None) -> RepoInfo:
         path = f"/api/models/{repo_id}" + (f"/revision/{revision}" if revision else "")
@@ -140,7 +175,9 @@ class HfClient:
                 size = lfs["size"]
             files[name] = size if isinstance(size, int) else None
             blob = (lfs or {}).get("sha256") or sibling.get("blobId")
-            if isinstance(blob, str):
+            # The blob ID names a file in the Hub cache (downloads and removal join it to the
+            # blobs folder), so only a hash is kept; anything else is ignored, not joined.
+            if is_blob_id(blob):
                 blobs[name] = blob
         card = data.get("cardData") if isinstance(data.get("cardData"), dict) else {}
         license_ = card.get("license") if isinstance(card.get("license"), str) else None

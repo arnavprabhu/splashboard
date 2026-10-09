@@ -26,7 +26,7 @@ import { CompatTag, FitTag, type CompatState } from "./models/bits";
 import { DownloadsPanel } from "./models/DownloadsPanel";
 import { useDownloadsPoll, useDrawerParam, useInstalled, useModelsTitle } from "./models/hooks";
 import { ModelDrawer } from "./models/ModelDrawer";
-import { checkModelId, diskCheck, formatLabel, hfUrl, isClefId, isLegacyId, isProjector, inspectProgress, MAX_LAZY_CHECKS, pickVariant, shortName } from "./models/logic";
+import { checkModelId, diskCheck, formatLabel, hfUrl, isClefId, isLegacyId, isProjector, inspectProgress, MAX_LAZY_CHECKS, pickVariant, projectorRow, shortName } from "./models/logic";
 import { VariantTable } from "./models/VariantTable";
 import { MODELS_TABS } from "./tabs";
 
@@ -396,12 +396,12 @@ function ById({ initial, free, memory, installedIds }: { initial: string; free: 
               </p>
             )}
             {result.badge === "checking" && variants.length > 0 && (
-              <VariantTable variants={variants} pending={result.pending} caption={t("downloader.variant")} installed={installedIds} />
+              <VariantTable variants={variants} projector={projectorRow(result.vision)} pending={result.pending} caption={t("downloader.variant")} installed={installedIds} />
             )}
             {result.compatible && (
               <>
                 {variants.length > 0 && (
-                  <VariantTable variants={variants} selected={variant} onSelect={setVariant} pending={result.pending} caption={t("downloader.variant")} installed={installedIds} />
+                  <VariantTable variants={variants} projector={projectorRow(result.vision)} selected={variant} onSelect={setVariant} pending={result.pending} caption={t("downloader.variant")} installed={installedIds} />
                 )}
                 <Disclosure summary={t("downloader.options")}>
                   {legacy ? (

@@ -3,8 +3,9 @@
 An alert is a standing condition shown in the global band until it clears or is
 dismissed; recurrences bump `count`. A notification is a one-off message for the
 menu bar app (or `osascript` when no menu bar app is listening, SPEC §4.2),
-rate-limited to one per condition every 10 minutes and filtered by the
-`notifications.*` settings.
+rate-limited to one per alert id every 10 minutes (the id is the condition, or
+`condition:subject` for a download, so each download notifies once; D88) and
+filtered by the `notifications.*` settings.
 """
 
 from __future__ import annotations

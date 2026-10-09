@@ -6,10 +6,12 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from splash_gui.engine.discovery import EngineInfo
+from splash_gui.engine.startup import ReadyEvent
 
 from .conftest import write_script
 from .fakeengine import MODEL, MODEL_27B, EngineHarness
@@ -256,10 +258,10 @@ def test_idle_unload_stops_the_process(harness_factory: Callable[..., EngineHarn
     assert h.client.put("/api/admin/settings", json=settings).status_code == 200
     h.load()
     h.sup.last_request_mono = time.monotonic() - 299
-    h.client.portal.call(h.sup.check_idle)  # type: ignore[union-attr]
+    portal(h).call(h.sup.check_idle)
     assert h.engine()["state"] == "ready"
     h.sup.last_request_mono = time.monotonic() - 301
-    h.client.portal.call(h.sup.check_idle)  # type: ignore[union-attr]
+    portal(h).call(h.sup.check_idle)
     assert h.wait_state("stopped")["state"] == "stopped"
     assert h.state.usage.sessions()[0]["reason"] == "idle_unload"
 
@@ -532,3 +534,145 @@ def test_idle_release_setting_and_the_weights_block_drive_idle_released(
     h.wait_state("idle_released", timeout=10)
     raw = h.client.get("/api/admin/engine/status").json()
     assert raw["weights"]["released"] is True and raw["weights"]["idle_release_seconds"] == 0.5
+
+
+def test_a_crash_restart_waits_out_a_hold_instead_of_dropping_it(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """SPEC §6.5: a restart whose timer fires while a hold runs (a GGUF registration,
+    a model delete, a KV clear) used to return without re-arming. The engine then stayed
+    crashed until a manual restart."""
+    h = harness_factory()
+    h.load()
+    h.sup.hold_retry_s = 0.05
+    h.sup._holds.append("local_model")
+    try:
+        h.fake("POST", "/_fake/crash", {"code": 3})
+        h.wait_state("crashed", timeout=10)
+        # The first restart timer (0.05 s) fires inside the hold. It must stay armed.
+        time.sleep(0.5)
+        view = h.engine()
+        assert view["state"] == "crashed", view
+        assert view["restart"]["next_retry_at"] is not None
+        assert h.sup._restart_task is not None and not h.sup._restart_task.done()
+    finally:
+        h.sup._holds.remove("local_model")
+    view = h.wait_state("ready", timeout=10)
+    assert view["restart"]["next_retry_at"] is None
+
+
+def test_a_request_for_the_crashed_model_is_served_when_the_hold_ends(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    h = harness_factory()
+    h.load()
+    h.sup.hold_retry_s = 0.05
+    h.sup._holds.append("local_model")
+    h.fake("POST", "/_fake/crash", {"code": 3})
+    h.wait_state("crashed", timeout=10)
+    release = threading.Timer(0.5, h.sup._holds.remove, args=("local_model",))
+    release.start()
+    response = h.client.post(
+        "/v1/chat/completions",
+        json={"model": MODEL, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 2},
+    )
+    release.join()
+    assert response.status_code == 200, response.text
+    assert h.engine()["state"] in ("ready", "busy")
+
+
+def test_ready_needs_the_ready_line_or_three_ready_polls(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """SPEC §6.3: without the Ready line, three /ready 200 polls reach ready; two do not."""
+    h = harness_factory()
+    h.load()
+    run = h.sup._run
+    assert run is not None
+    h.sup._set("starting")
+    run.ready_line = False
+    run.ready_polls_ok = 0
+    for _ in range(2):
+        portal(h).call(h.sup._check_ready, run)
+    assert (h.sup.state, run.ready_polls_ok) == ("starting", 2)
+    portal(h).call(h.sup._check_ready, run)
+    assert h.sup.state == "ready"
+
+
+def test_an_engine_without_the_ready_line_still_reaches_ready(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """The fallback for an engine that words its Ready line differently (D92)."""
+    h = harness_factory()
+    real_apply = h.sup._apply
+
+    def without_ready_line(run: object, event: object) -> None:
+        if isinstance(event, ReadyEvent):
+            return
+        real_apply(run, event)
+
+    h.sup._apply = without_ready_line
+    view = h.load()
+    assert view["state"] == "ready", view
+    assert "Ready · " in (h.home / "logs" / "engine.log").read_text()
+    run = h.sup._run
+    assert run is not None and run.ready_line is False and run.ready_polls_ok >= 3
+
+
+def test_detect_restart_counts_a_build_change_or_a_counter_drop(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """SPEC §6.6: a drop in counters or a new identity.build_id means a restart."""
+    h = harness_factory()
+    sup = h.sup
+
+    def status(build: str, submitted: int) -> dict[str, object]:
+        return {"identity": {"cache": {"build_id": build}}, "requests": {"submitted": submitted}}
+
+    assert sup._detect_restart(status("a", 5)) is False, "the first look is no restart"
+    assert sup._detect_restart(status("a", 9)) is False
+    assert sup.restarts_detected == 0
+    assert sup._detect_restart(status("a", 2)) is True, "a counter went down"
+    assert sup._detect_restart(status("b", 2)) is True, "a new build id"
+    assert sup._detect_restart(status("b", 2)) is False, "nothing changed"
+    assert sup._detect_restart({}) is False, "missing fields are not a restart"
+    assert sup.restarts_detected == 2
+
+
+def test_a_new_process_starts_a_fresh_counter_baseline(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """_spawn clears the baseline, so the first poll of a new process (a crash restart
+    here, or a model switch) is not a drop. /status shows only Splash's own in-process
+    restarts (SPEC §6.6, §6.3 recovering)."""
+    h = harness_factory()
+    h.load()
+    chat = h.client.post(
+        "/v1/chat/completions",
+        json={"model": MODEL, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 2},
+    )
+    assert chat.status_code == 200, chat.text
+    portal(h).call(h.sup.poll_now)
+    h.fake("POST", "/_fake/crash", {"signal": "SIGKILL"})
+    h.wait_state("crashed", "starting", timeout=10)
+    h.wait_state("ready", timeout=20)
+    assert h.sup.restarts_detected == 0
+    assert "splash_gui_engine_restarts_detected_total 0" in h.client.get("/metrics").text
+
+
+def test_the_restart_gauge_exports_the_detected_count(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """No engine runs here, so no status poll can move the counter under the test."""
+    h = harness_factory()
+    sup = h.sup
+    sup._detect_restart({"requests": {"submitted": 5}})
+    sup._detect_restart({"requests": {"submitted": 1}})
+    assert sup.restarts_detected == 1
+    assert "splash_gui_engine_restarts_detected_total 1" in h.client.get("/metrics").text
+
+
+def portal(h: Any) -> Any:
+    """The test client's portal, which exists while the client is open."""
+    assert h.client.portal is not None
+    return h.client.portal

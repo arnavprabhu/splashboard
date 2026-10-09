@@ -10,9 +10,12 @@ A killed run leaves its uuid partial behind, and no later run can reuse it.
 
 The manager's own byte-resumable downloads of large LFS/Xet files (D61,
 `downloads/ranged.py`) write `<etag>.splashgui.incomplete` next to a sidecar
-`<etag>.splashgui.json` that records which remote file the bytes belong to. The next
-run continues that partial with `Range: bytes=N-`, so it is kept across pause and
-restart, counted as progress, and deleted on cancel or once nothing claims it.
+`<etag>.splashgui.json` that records which remote file the bytes belong to (D84: up
+to four Range segments fill one preallocated partial, and the sidecar records each
+segment's verified bytes, which are its progress). The next run continues each
+segment from its verified end (a one-stream partial from its size), so the partial is
+kept across pause and restart, counted as progress, and deleted on cancel or once
+nothing claims it.
 """
 
 from __future__ import annotations

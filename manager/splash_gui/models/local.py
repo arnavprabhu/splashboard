@@ -7,7 +7,8 @@ family (and so its DFlash2 draft) comes from the file's own header through Splas
 reader and matcher (`helpers/classify_gguf.py`), the draft is fetched into the Hub
 cache once (Splash resolves a draft online only when the Hub answered for the
 target, which a local repo never does), and Splash's own `prepare` runs offline to
-create the selection. The file itself is never moved or modified.
+create the selection. The draft is a Downloads job (D68), so a file waits for it
+instead of blocking. The file itself is never moved or modified.
 """
 
 from __future__ import annotations
@@ -40,6 +41,11 @@ POLL_S = 5.0
 RETRY_NETWORK_S = 600.0
 IGNORED_FILE = ".local-ignored.json"
 SLUG = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+class DraftOffline(RuntimeError):
+    """The family's draft is missing and Hugging Face is set to offline. SPEC §9.6: the
+    file fails with an alert and is retried only On Rescan, not on the 10 min backoff."""
 
 
 def repo_id_for(path: Path) -> str:
@@ -86,6 +92,10 @@ class LocalModels:
         self.sizes: dict[str, int] = {}
         self.stable: set[str] = set()  # candidate keys seen unchanged on two passes
         self.failed: dict[str, float] = {}  # candidate key → retry-after (monotonic)
+        # Verdicts of files waiting for their draft (D68), by candidate key; the file is
+        # not classified again until the draft is there.
+        self.waiting: dict[str, dict[str, Any]] = {}
+        self.draft_retry: dict[str, float] = {}  # draft repo → next queue time (monotonic)
         self.last: dict[str, dict[str, Any]] = {}  # file name → latest outcome
 
     # --- lifecycle -------------------------------------------------------------------
@@ -132,21 +142,47 @@ class LocalModels:
         else:
             yield
 
-    def tombstone(self, model: str) -> None:
-        """Record the model's file as ignored. Call before the selection is deleted: Splash
-        prunes the shell repo (it has no blobs) along with it."""
+    def sources(self, model: str) -> list[Path]:
+        """The model's source `.gguf` files: the models-folder entries its snapshot links
+        name. They are not resolved through, so an entry replaced by a symlink (into the
+        Hub cache, say) is still reported as that entry, and `delete` leaves it in place.
+        A projector is not a source; it stays where it is (D67)."""
         if not model.startswith(OWNER + "/"):
-            return
+            return []
         repo = repo_folder(self.state.settings.models_dir(), model.split(":")[0])
-        for link in repo.glob("snapshots/*/*.gguf"):
+        found: list[Path] = []
+        for link in sorted(repo.glob("snapshots/*/*.gguf")):
             if is_projector(link):
                 continue
             with contextlib.suppress(OSError):
-                target = link.resolve(strict=True)
-                info = target.stat()
-                self._save_ignored(
-                    self.ignored() | {Candidate(target, info.st_size, info.st_mtime_ns).key}
-                )
+                # A snapshot link is relative to its entry; normalise, do not resolve.
+                entry = link.parent / link.readlink() if link.is_symlink() else link
+                entry = Path(os.path.normpath(entry))
+                if os.path.lexists(entry):
+                    found.append(entry)
+        return found
+
+    @staticmethod
+    def key_of(path: Path) -> str | None:
+        """The candidate key of a models-folder entry: the entry's own stat, not a link's target."""
+        try:
+            info = path.lstat()
+        except OSError:
+            return None
+        return Candidate(path, info.st_size, info.st_mtime_ns).key
+
+    def unignore(self, key: str) -> None:
+        """Drop a tombstone whose file has left the folder (moved to the Trash), so a file
+        restored from the Trash is seen as new."""
+        self._save_ignored(self.ignored() - {key})
+
+    def tombstone(self, model: str) -> None:
+        """Record the model's file as ignored. Call before the selection is deleted: Splash
+        prunes the shell repo (it has no blobs) along with it."""
+        for path in self.sources(model):
+            key = self.key_of(path)
+            if key is not None:
+                self._save_ignored(self.ignored() | {key})
 
     def forget(self, model: str) -> None:
         """A local model was deleted: keep its file, stop re-importing it, drop the shell."""
@@ -206,6 +242,7 @@ class LocalModels:
             previous = self.sizes
             self.sizes = {item.key: item.size for item in seen}  # forget vanished files
             self.stable = {item.key for item in seen if previous.get(item.key) == item.size}
+            self.waiting = {k: v for k, v in self.waiting.items() if k in self.sizes}
             for item in seen:
                 settled = item.key in self.stable
                 if item.key in ignored or not settled:
@@ -223,28 +260,47 @@ class LocalModels:
                 fresh.append(item)
             if not fresh:
                 return added
-            engine = self.state.engine_cached()
-            if not engine.python or not engine.pkg:
-                return added  # Splash is not installed yet; the wizard comes first.
-            try:
-                verdicts = await self._classify(fresh)
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:
-                for item in fresh:
-                    self._fail(item, f"could not read the file's header: {error}", retry_later=True)
-                return added
+            # A file already waiting for its draft keeps its verdict; only new ones are read.
+            unread = [item for item in fresh if item.key not in self.waiting]
+            verdicts: dict[str, dict[str, Any]] = {}
+            if unread:
+                engine = self.state.engine_cached()
+                if not engine.python or not engine.pkg:
+                    return added  # Splash is not installed yet; the wizard comes first.
+                try:
+                    verdicts = await self._classify(unread)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    for item in unread:
+                        self._fail(
+                            item, f"could not read the file's header: {error}", retry_later=True
+                        )
+                    return added
             for item in fresh:
-                verdict = verdicts.get(str(item.path), {"error": "not classified"})
+                verdict = self.waiting.get(item.key) or verdicts.get(
+                    str(item.path), {"error": "not classified"}
+                )
                 try:
                     if "error" in verdict:
                         self._fail(item, verdict["error"], retry_later=False)
                         continue
-                    added.append(await self._register(item, verdict))
+                    registered = await self._register(item, verdict, force=retry)
+                    if registered is None:
+                        # Its draft is downloading (or the next try is not due yet).
+                        self.waiting[item.key] = verdict
+                        self.last[item.path.name] = {
+                            "waiting": "draft",
+                            "draft": verdict["draft_repo"],
+                            "family": verdict["family"],
+                        }
+                        continue
+                    self.waiting.pop(item.key, None)
+                    added.append(registered)
                 except asyncio.CancelledError:
                     raise
                 except Exception as error:
-                    self._fail(item, str(error), retry_later=True)
+                    self._fail(item, str(error), retry_later=not isinstance(error, DraftOffline))
         if added:
             for model in added:
                 self.state.events.publish(
@@ -309,22 +365,27 @@ class LocalModels:
     def _all_ggufs(self) -> list[Path]:
         return [c.path for c in self.candidates()]
 
-    async def _register(self, item: Candidate, verdict: dict[str, Any]) -> str:
+    async def _register(
+        self, item: Candidate, verdict: dict[str, Any], *, force: bool = False
+    ) -> str | None:
+        """Register the file; None when its draft is not there yet (the file waits)."""
         models_dir = self.state.settings.models_dir()
         repo_id = repo_id_for(item.path)
         revision = revision_for(item.path, item.size, item.mtime_ns)
         draft_repo = verdict["draft_repo"]
         # The draft first: offline or on a bad network a replacement must fail before the
         # model's earlier registration is touched.
-        await self._ensure_draft(draft_repo)
+        if not await self._ensure_draft(draft_repo, force=force):
+            return None
         if self.state.active_model() == repo_id:
             raise RuntimeError("this model is running and its file changed; stop it, then rescan")
         async with self.state.supervisor.hold("local_model"):
-            # A changed file under the same name replaces its earlier registration. Dropping
-            # it also deletes draft blobs nothing else pins, so the draft is ensured again.
+            # A changed file under the same name replaces its earlier registration. The draft
+            # stays through the drop, so it is still there for the new registration.
             if any(s.model == repo_id for s in read_all(splash_models_dir())):
-                await self.models.drop_selection(repo_id)
-                await self._ensure_draft(draft_repo)
+                await self.models.drop_selection(repo_id, keep_draft=True)
+                if not await self._ensure_draft(draft_repo, force=force):
+                    return None
             repo = repo_folder(models_dir, repo_id)
             shutil.rmtree(repo / "snapshots", ignore_errors=True)
             snapshot = repo / "snapshots" / revision
@@ -378,33 +439,30 @@ class LocalModels:
         except OSError:
             return False
 
-    async def _ensure_draft(self, draft_repo: str) -> None:
-        """The family's DFlash2 draft in the Hub cache, with its `refs/main`."""
+    async def _ensure_draft(self, draft_repo: str, *, force: bool = False) -> bool:
+        """True when the family's DFlash2 draft is in the Hub cache, with its `refs/main`.
+
+        Otherwise the draft is queued as a Downloads job (D68), unless one is queued,
+        running or paused already, and this returns False. A missing draft is queued at
+        most every 10 min (`force` skips that wait, for Rescan)."""
         models_dir = self.state.settings.models_dir()
         if self._draft_complete(repo_folder(models_dir, draft_repo)):
-            return
+            return True
         glob = self.state.settings.current.global_
         if glob.hf.offline:
-            raise RuntimeError(
+            raise DraftOffline(
                 f"{draft_repo} (this family's DFlash2 draft) is not downloaded and Hugging Face "
                 "is set to offline; turn offline off or download it, then rescan"
             )
-        from huggingface_hub import snapshot_download
-
-        def fetch() -> None:
-            snapshot_download(
-                draft_repo,
-                cache_dir=str(models_dir),
-                token=self.models.hf.token(),
-                endpoint=glob.hf.endpoint or None,
-            )
-
-        try:
-            await asyncio.to_thread(fetch)
-        except Exception as error:
-            raise RuntimeError(
-                f"could not download {draft_repo}, the DFlash2 draft for this model: {error}"
-            ) from error
+        downloads = self.state.downloads
+        if downloads.active_model(draft_repo):
+            return False
+        now = time.monotonic()
+        if not force and self.draft_retry.get(draft_repo, 0.0) > now:
+            return False
+        self.draft_retry[draft_repo] = now + RETRY_NETWORK_S
+        await downloads.queue_draft(draft_repo)
+        return False
 
     async def _prepare(
         self, repo_id: str, revision: str, *, language_only: bool, must: bool = False

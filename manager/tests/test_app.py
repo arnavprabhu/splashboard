@@ -28,13 +28,20 @@ SPEC_ROUTES = [
     ("post", "/engine/restart"),
     ("get", "/engine/status"),
     ("post", "/engine/raw/{path}"),
+    ("get", "/engine/raw/{path}"),
+    ("delete", "/engine/raw/{path}"),
+    ("get", "/alerts"),
+    ("post", "/alerts/{alert_id}/dismiss"),
     ("get", "/events"),
     ("get", "/metrics/live"),
     ("get", "/metrics/series"),
+    ("get", "/metrics/snapshot"),
+    ("post", "/metrics/reset"),
     ("get", "/settings"),
     ("put", "/settings"),
     ("post", "/settings/validate"),
     ("get", "/settings/schema"),
+    ("get", "/settings/launch-preview"),
     ("get", "/models"),
     ("get", "/models/{model_id}"),
     ("delete", "/models/{model_id}"),
@@ -58,6 +65,10 @@ SPEC_ROUTES = [
     ("delete", "/chats/{cid}"),
     ("get", "/chats/{cid}/export"),
     ("delete", "/chats"),
+    ("post", "/chats/attachments"),
+    ("get", "/chats/attachments/{name}"),
+    ("post", "/chats/{cid}/attachments"),
+    ("get", "/chats/{cid}/attachments/{name}"),
     ("get", "/mcp/servers"),
     ("put", "/mcp/servers"),
     ("post", "/mcp/tools"),
@@ -226,6 +237,7 @@ def test_get_settings(client: TestClient, paths: Paths) -> None:
     assert body["secrets"]["api_key_set"] is True
     assert body["resolved"]["models_dir"] == str(paths.models_dir)
     assert body["resolved"]["tmp_dir"] == str(paths.cache_dir / "tmp")
+    assert body["resolved"]["home"] == str(Path.home())
 
 
 def _settings(client: TestClient) -> dict[str, Any]:
@@ -646,3 +658,72 @@ def test_install_homebrew_opens_terminal_with_the_official_command(
     monkeypatch.setattr(system_api, "get_brew", lambda state: BrewInfo(installed=True))
     again = client.post("/api/admin/system/brew/install")
     assert again.status_code == 409 and again.json()["error"]["code"] == "brew_installed"
+
+
+def test_reveal_opens_the_fixed_folders_in_finder(app: Any, client: TestClient) -> None:
+    """POST /system/reveal (SPEC §9.3, §10.8) reveals only the fixed folders."""
+    from splash_gui.paths import splash_data_dir
+    from splash_gui.system.macos import RecordingMacOS
+
+    recorder = RecordingMacOS()
+    app.state.manager.macos = recorder
+    state = app.state.manager
+    data_dir = splash_data_dir()
+    for target, folder in (
+        ("logs_dir", state.paths.logs_dir),
+        ("models_dir", state.settings.models_dir()),
+        ("cache_dir", state.settings.cache_dir()),
+        ("splash_data_dir", data_dir),
+    ):
+        folder.mkdir(parents=True, exist_ok=True)
+        response = client.post("/api/admin/system/reveal", json={"target": target})
+        assert response.status_code == 200, target
+        assert response.json() == {"ok": True}
+        assert recorder.calls[-1] == ["/usr/bin/open", "-R", str(folder)]
+
+
+def test_reveal_refuses_paths_outside_the_allowed_targets(
+    app: Any, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from splash_gui.system.macos import CommandResult, RecordingMacOS
+
+    recorder = RecordingMacOS()
+    app.state.manager.macos = recorder
+    # `target` is a closed set: anything else never reaches Finder.
+    for body in ({"target": "/etc"}, {"target": "home"}, {}):
+        response = client.post("/api/admin/system/reveal", json=body)
+        assert response.status_code == 422, body
+    # A trace is named, not a path: traversal and sub-folders are refused.
+    for name in ("../../../../etc/passwd", "sub/splash-crash-g1-0.json", "notes.txt"):
+        response = client.post("/api/admin/system/reveal", json={"target": "trace", "id": name})
+        assert response.status_code == 400, name
+        assert response.json()["error"]["code"] == "invalid_trace"
+    # A trace that is named correctly but does not exist is a 404, not a reveal.
+    missing = client.post(
+        "/api/admin/system/reveal",
+        json={"target": "trace", "id": "splash-crash-g1-0.json"},
+    )
+    assert missing.status_code == 404
+    # A model that is not installed has no folder to reveal.
+    no_model = client.post("/api/admin/system/reveal", json={"target": "model", "id": "x/none"})
+    assert no_model.status_code == 404
+    assert recorder.calls == [], "nothing may reach Finder when the path is refused"
+
+    monkeypatch.setattr(recorder, "reveal", lambda path: CommandResult(1, "", "Finder is busy"))
+    failed = client.post("/api/admin/system/reveal", json={"target": "logs_dir"})
+    assert failed.status_code == 503
+    assert failed.json()["error"]["code"] == "reveal_failed"
+
+
+def test_reveal_needs_a_credential(app: Any, client: TestClient, browser: TestClient) -> None:
+    from splash_gui.system.macos import RecordingMacOS
+
+    recorder = RecordingMacOS()
+    app.state.manager.macos = recorder
+    plain = TestClient(app, client=("127.0.0.1", 50000))
+    refused = plain.post("/api/admin/system/reveal", json={"target": "logs_dir"})
+    assert refused.status_code in (401, 403)
+    signed_out = browser.post("/api/admin/system/reveal", json={"target": "logs_dir"})
+    assert signed_out.status_code == 401
+    assert signed_out.json()["error"]["code"] == "auth_required"
+    assert recorder.calls == []

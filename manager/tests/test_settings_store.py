@@ -351,3 +351,59 @@ def test_coding_24gb_applies_language_only() -> None:
     )
     assert raw["models"]["unsloth/Qwen3.8-27B-GGUF:UD-IQ3_XXS"]["serve"] == {"language_only": True}
     assert validate_document(raw).ok
+
+
+# The coding preset's context (SPEC §8.6: 128K, or the largest that fits) --------------
+
+MLX_27B = "mlx-community/Qwen3.8-27B-4bit"
+
+
+def test_the_coding_context_is_128k_on_every_shipped_tier() -> None:
+    from splash_gui.settings.presets import preset_settings
+
+    for gb in (24, 36, 48, 64, 128):
+        assert preset_settings("coding", gb * GIB)["serve.max_context"] == "128K", gb
+    assert preset_settings("coding")["serve.max_context"] == "128K", "unknown memory keeps 128K"
+    assert preset_settings("chat", 64 * GIB)["serve.max_context"] == "auto"
+    raw = apply_preset(SettingsDocument(), "coding", None, 64 * GIB)
+    assert raw["global"]["serve"]["max_context"] == "128K"
+
+
+def test_the_kv_cache_the_context_takes_follows_the_engine_layout() -> None:
+    """runtime/ops/PagedKv.hpp: one INT8 byte per value plus a float scale per token and
+    head, for keys and values, on the full-attention layers only (every fourth layer)."""
+    from splash_gui.models import catalog as cat
+
+    assert cat.kv_bytes("Qwen3.8-27B", 128 * 1024) == 16 * 2 * 4 * (256 + 4) * 128 * 1024
+    assert cat.kv_bytes("Qwen3.8-27B", 128 * 1024, bf16=True) == 8 * GIB
+    assert cat.kv_bytes("Qwen3.6-35B-A3B", 128 * 1024) < cat.kv_bytes("Qwen3.8-27B", 128 * 1024)
+    small = cat.memory_need(10 * GIB, vision=False, kv=cat.kv_bytes("Qwen3.8-27B", 1024))
+    assert small == cat.memory_need(10 * GIB, vision=False), "a tiny context keeps the runway"
+
+
+def test_the_largest_context_step_that_is_not_wont_fit() -> None:
+    """On 29 GiB the 27B MLX pick's 128K estimate (27.7 GiB) is above `memsize − 3 GB`
+    but its 64K estimate (25.6 GiB) is not, so the preset steps down to 64K."""
+    from splash_gui.settings.presets import ModelPick, coding_context
+
+    pick = ModelPick(MLX_27B, "test")
+    assert coding_context(40 * GIB, pick) == "128K"
+    assert coding_context(29 * GIB, pick) == "64K"
+    assert coding_context(1 * GIB, pick) == "8K", "when no step fits, the smallest one"
+
+
+def test_each_step_is_the_largest_that_fits() -> None:
+    from splash_gui.models import catalog as cat
+    from splash_gui.settings.presets import CODING_CONTEXTS, ModelPick, coding_context
+
+    pick = ModelPick(MLX_27B, "test")
+    # Below about 27 GiB no step fits, and the smallest one is the answer (tested above).
+    for memory in (28 * GIB, 29 * GIB, 31 * GIB, 34 * GIB):
+        label = coding_context(memory, pick)
+        tokens = dict(CODING_CONTEXTS)[label]
+        need = cat.memory_need(20 * GIB, vision=True, kv=cat.kv_bytes("Qwen3.8-27B", tokens))
+        assert cat.fit_for(need, memory) != "wont_fit"
+        larger = [t for _, t in CODING_CONTEXTS if t > tokens]
+        for bigger in larger:
+            wider = cat.memory_need(20 * GIB, vision=True, kv=cat.kv_bytes("Qwen3.8-27B", bigger))
+            assert cat.fit_for(wider, memory) == "wont_fit", (memory, bigger)

@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from ..hubcache import repo_folder
 from ..settings import parsers as p
 
 Kind = Literal["assembly", "package"]
@@ -257,17 +258,73 @@ def installation_lock(models_root: Path, timeout: float = LOCK_TIMEOUT_S) -> Ite
 class DeletePlan:
     selections: list[Selection]
     remove: dict[Path, int]  # real files to delete -> bytes
-    shared: dict[Path, int]  # files of these selections kept for other installations
+    shared: dict[Path, int]  # kept: pinned elsewhere, linked by another repo, or not ours
     kept_draft: bool
 
 
-def plan_delete(all_selections: Iterable[Selection], models: set[str]) -> DeletePlan:
+def _linked_blobs(hub_cache: Path) -> dict[Path, set[str]]:
+    """Every blob a snapshot in the Hub cache links to, with the names of the repository folders
+    whose snapshots link it. `plan_delete` builds it once per call (one walk of each
+    `models--*/snapshots`), however many files the models it deletes have."""
+    links: dict[Path, set[str]] = {}
+    for folder in hub_cache.glob("models--*"):
+        for link in folder.glob("snapshots/**/*"):
+            with contextlib.suppress(OSError, RuntimeError):
+                if link.is_file():
+                    links.setdefault(link.resolve(strict=True), set()).add(folder.name)
+    return links
+
+
+def _owned_blob(ref: FileRef, repo_dir: Path, links: dict[Path, set[str]]) -> bool:
+    """A blob in the repository's own blobs/ that no other repository's snapshot links. The same
+    test for every ref, a local/ model's entries (D49) included: a link into another repository's
+    blob, from either side, leaves that blob to the other repository."""
+    real = ref.real
+    if real is None or real.parent != (repo_dir / "blobs").resolve():
+        return False
+    return not links.get(real, set()) - {repo_dir.name}
+
+
+def _owning_repo(selection: Selection, ref: FileRef) -> str | None:
+    """The Hub repository a ref belongs to: an assembly's draft/ ref its draft's, as the record
+    names it (sources.draft.repo, install/upstream.py `_install`), any other ref the model's own.
+    A legacy package's files are all its own, whatever their folders are called."""
+    if selection.kind == "package" or not ref.name.startswith("draft/"):
+        return selection.repo_id
+    repo = (selection.draft or {}).get("repo")
+    return repo if isinstance(repo, str) else None
+
+
+def _removable(
+    selection: Selection, ref: FileRef, hub_cache: Path, links: dict[Path, set[str]]
+) -> bool:
+    """Whether a file no other selection pins may be removed: only a blob in the blobs/ of the
+    Hub repository it belongs to, which no other repository links (`_owned_blob`). A local/
+    model's source .gguf is a file in the models folder, never a blob, so it is kept (D49). A
+    snapshot entry swapped for a link into another repository's blob frees nothing."""
+    repo = _owning_repo(selection, ref)
+    return repo is not None and _owned_blob(ref, repo_folder(hub_cache, repo), links)
+
+
+def plan_delete(
+    all_selections: Iterable[Selection],
+    models: set[str],
+    hub_cache: Path,
+    *,
+    keep_draft: bool = False,
+) -> DeletePlan:
+    """What deleting `models` removes. A file another selection pins is kept, and so is
+    every draft file with `keep_draft` (a replacement registration still needs it). Of the
+    rest, only what `_removable` allows is removed: a blob of the model's own Hub repo (or of
+    its draft's repo for draft/ files) that no other repo links, never a local model's source
+    file (D49)."""
     selections = list(all_selections)
     doomed = [s for s in selections if s.model in models]
     keep: set[Path] = set()
     for selection in selections:
         if selection.model not in models:
             keep |= selection.real_paths()
+    links: dict[Path, set[str]] = _linked_blobs(hub_cache) if doomed else {}
     remove: dict[Path, int] = {}
     shared: dict[Path, int] = {}
     kept_draft = False
@@ -275,10 +332,13 @@ def plan_delete(all_selections: Iterable[Selection], models: set[str]) -> Delete
         for ref in selection.files:
             if ref.real is None:
                 continue
-            if ref.real in keep:
+            is_draft = ref.name.startswith("draft/")
+            if ref.real in keep or (keep_draft and is_draft):
                 shared[ref.real] = ref.size
-                if ref.name.startswith("draft/"):
+                if is_draft:
                     kept_draft = True
+            elif not _removable(selection, ref, hub_cache, links):
+                shared[ref.real] = ref.size
             else:
                 remove[ref.real] = ref.size
     return DeletePlan(doomed, remove, shared, kept_draft)

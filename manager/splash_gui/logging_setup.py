@@ -27,11 +27,20 @@ class RedactingFilter(logging.Filter):
         self._known = known
 
     def filter(self, record: logging.LogRecord) -> bool:
+        known = tuple(self._known())
         message = record.getMessage()
-        redacted = redact_text(message, self._known())
+        redacted = redact_text(message, known)
         if redacted != message:
             record.msg = redacted
             record.args = None
+        # logging appends the traceback and the stack after the filters run, from
+        # exc_text and stack_info, so both are redacted here where it will read them.
+        if record.exc_info and not record.exc_text:
+            record.exc_text = logging.Formatter().formatException(record.exc_info)
+        if record.exc_text:
+            record.exc_text = redact_text(record.exc_text, known)
+        if record.stack_info:
+            record.stack_info = redact_text(record.stack_info, known)
         return True
 
 

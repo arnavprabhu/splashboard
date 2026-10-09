@@ -25,6 +25,8 @@ import type {
   SystemInfo,
   UpdateInfo,
   Versions,
+  UninstallPlan,
+  UninstallResult,
 } from '../../api/models';
 import type { McpServerView } from '../../api/mcp';
 import type { SettingsDoc } from '../../api/types';
@@ -105,8 +107,12 @@ export const settingsApi = {
   versions: (signal?: AbortSignal) => api.get<Versions>('/versions', undefined, signal),
   system: (signal?: AbortSignal) => api.read<SystemInfo>('/system', undefined, signal),
   checkEngineUpdate: () => api.post<UpdateInfo>('/engine/check-update'),
-  /** Native Sparkle check through the menu bar app (docs/ui/05 §3.17; not in the manager yet). */
+  /** Native Sparkle check through the menu bar app (docs/ui/05 §3.17; 409 when the app is not connected). */
   checkAppUpdate: () => api.post<unknown>('/app/check-updates'),
+  /** Remove Splash GUI data (SPEC §19, PKG-12). */
+  uninstallPlan: () => api.post<UninstallPlan>('/uninstall/plan'),
+  uninstall: (body: { delete_data: boolean; delete_models: boolean; delete_cache: boolean; stop: boolean }) =>
+    api.post<UninstallResult>('/uninstall', body),
   reveal: (target: string, id: string | null = null) => api.post<unknown>('/system/reveal', { target, id }),
   storage: (signal?: AbortSignal) => api.get<StorageInfo>('/storage', undefined, signal),
   moveStorage: (target: 'models' | 'cache', path: string) => api.post<unknown>('/storage/move', { target, path, move_files: true }),

@@ -112,6 +112,8 @@ test.describe('integrations', () => {
     await expect(opencode.getByTestId('profiles-opencode')).toContainText('Honoured');
     await expect(page.getByTestId('profiles-hermes')).toContainText('passed as --reasoning');
     await expect(page.getByTestId('profiles-pi')).toContainText(':no-think as off');
+    // profile IDs are case-sensitive: the mono spans must not inherit the .meta uppercase
+    await expect(page.getByTestId('profiles-claude').locator('.mono', { hasText: ':no-think' })).toHaveCSS('text-transform', 'none');
     // picking a profile adds --model to every command
     await page.getByRole('combobox', { name: 'Model for every command and snippet on this page' }).selectOption(`${CHAT.model}:no-think`);
     await expect(page.getByText(`$ splash launch claude --model ${CHAT.model}:no-think`)).toBeVisible();

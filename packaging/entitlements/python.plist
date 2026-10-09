@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for the bundled interpreter, Contents/Resources/manager/python/bin/* (docs/plans/
+  packaging.md, PKG-6; D86). Starts empty. Add com.apple.security.cs.allow-unsigned-executable-memory only when a
+  live lane shows a crash in ctypes or cffi under the hardened runtime, and record that lane's log in SPEC §1.
+-->
+<plist version="1.0">
+<dict>
+</dict>
+</plist>

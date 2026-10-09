@@ -12,7 +12,7 @@ import hashlib
 from typing import TYPE_CHECKING, Any
 
 from ..errors import ApiError
-from ..secrets import SecretsError, mask_secret
+from ..secrets import KEYCHAIN_PREFIX, SecretsError, mask_secret
 
 if TYPE_CHECKING:
     from ..secrets import SecretStore
@@ -24,7 +24,7 @@ KINDS = ("env", "headers")
 def secret_name(server: str, kind: str, key: str) -> str:
     """The Keychain service of one value: fixed characters whatever the key holds."""
     digest = hashlib.sha256(f"{server}\0{kind}\0{key}".encode()).hexdigest()[:32]
-    return f"ai.splashgui.mcp.{digest}"
+    return f"{KEYCHAIN_PREFIX}.mcp.{digest}"
 
 
 def ref(value: str) -> dict[str, Any]:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from pathlib import Path
 
 import pytest
@@ -173,3 +174,31 @@ def test_logs_are_redacted(paths: Paths) -> None:
 def test_redacting_filter_passes_clean_records() -> None:
     record = logging.LogRecord("x", logging.INFO, __file__, 1, "hello %s", ("world",), None)
     assert RedactingFilter().filter(record) and record.getMessage() == "hello world"
+
+
+# Not token-shaped, so only the known-value path can redact it.
+PLAIN_SECRET = "plain-known-value-42"
+
+
+def test_tracebacks_are_redacted(paths: Paths) -> None:
+    """Logging appends a traceback after the filters have run, so the filter redacts it."""
+    setup_logging(paths, known_secrets=lambda: (PLAIN_SECRET,))
+    try:
+        raise ValueError(f"upstream rejected {PLAIN_SECRET}")
+    except ValueError:
+        logging.getLogger("splash_gui.test").exception("request failed")
+    for handler in logging.getLogger("splash_gui").handlers:
+        handler.flush()
+    text = paths.manager_log.read_text()
+    assert "request failed" in text and "ValueError" in text
+    assert PLAIN_SECRET not in text and REDACTED in text
+
+
+def test_redacting_filter_redacts_the_formatted_traceback() -> None:
+    try:
+        raise ValueError(f"bad {PLAIN_SECRET}")
+    except ValueError:
+        record = logging.LogRecord("x", logging.ERROR, __file__, 1, "failed", None, sys.exc_info())
+    assert RedactingFilter(lambda: (PLAIN_SECRET,)).filter(record)
+    text = logging.Formatter("%(message)s").format(record)
+    assert PLAIN_SECRET not in text and "ValueError" in text and REDACTED in text

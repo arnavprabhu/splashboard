@@ -184,6 +184,33 @@ def test_status_alerts_raise_and_clear(app: FastAPI) -> None:
     assert not {"memory_critical", "memory_warning"} & conditions(app)
 
 
+def test_memory_critical_clears_on_a_poll_that_is_not_critical(app: FastAPI) -> None:
+    """memory_critical is driven by /status (SPEC §16.3). A raise from another source,
+    such as the old /ready 503 path, must not outlive the next poll that says the
+    pressure is normal, even though pressure never changed."""
+    hub = hub_of(app)
+    hub.on_status(status(), False)
+    app.state.manager.alerts.raise_alert(
+        "memory_critical", "Critical memory pressure", "/ready answered 503", source="status"
+    )
+    hub.on_status(status(), False)
+    assert "memory_critical" not in conditions(app)
+    hub.on_status(status(memory_governor__system_pressure="warning"), False)
+    app.state.manager.alerts.raise_alert(
+        "memory_critical", "Critical memory pressure", "", source="status"
+    )
+    hub.on_status(status(memory_governor__system_pressure="warning"), False)
+    assert "memory_critical" not in conditions(app)
+
+
+def test_a_transport_recovery_is_not_memory_pressure(app: FastAPI) -> None:
+    """Splash answers /ready 503 during transport recovery too (server/backend.py)."""
+    hub = hub_of(app)
+    hub.on_status(status(transport__recovering=True, transport__error="metal reset"), False)
+    assert "engine_recovering" in conditions(app)
+    assert "memory_critical" not in conditions(app)
+
+
 def test_disk_failures_and_write_cap_alert_only_when_they_grow(app: FastAPI) -> None:
     hub = hub_of(app)
     hub.on_status(status(disk__kv_copy_failures=2, disk__write_behind={"refused": 1}), False)

@@ -142,3 +142,16 @@ export function formatTokens(tokens: Num): string {
 export function formatIndex(i: number): string {
   return String(i).padStart(2, '0');
 }
+
+/**
+ * A path with the user's home folder shortened to `~`: with home "/Users/me",
+ * "/Users/me/.splash/cache" -> "~/.splash/cache". Only paths under home change
+ * ("/Users/Shared" and "/Users/me2" stay), and nothing changes while home is unknown.
+ */
+export function tildePath(path: string, home?: string | null): string {
+  const base = home?.replace(/\/+$/, '');
+  if (!base) return path;
+  if (path === base) return '~';
+  if (path.startsWith(`${base}/`)) return `~${path.slice(base.length)}`;
+  return path;
+}

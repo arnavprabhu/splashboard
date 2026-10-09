@@ -86,10 +86,12 @@ export function restartLabelOf(field: SchemaField, model: string | null | undefi
   return null;
 }
 
-function flagText(field: SchemaField): string | undefined {
+/** The flag chip: the Splash flag, or the env var. A manager-only setting has neither, so it
+ * shows no chip; its key stays in the "?" disclosure (SPEC §10.9). */
+export function flagText(field: SchemaField): string | undefined {
   if (field.flag) return field.flag;
   if (field.env) return `env ${field.env}`;
-  return field.key;
+  return undefined;
 }
 
 /** The "?" disclosure: Splash's own help text verbatim, then our note. */

@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import fcntl
 import json
 import os
+import plistlib
 import re
 import subprocess
 import sys
@@ -19,7 +21,7 @@ from typing import Any
 
 import httpx
 
-from .. import SERVICE, __version__
+from .. import SERVICE, __version__, packaged
 from ..engine.discovery import discover
 from ..paths import Paths
 from ..secrets import SecretName, SecretStore, backend_from_env
@@ -282,7 +284,8 @@ EXAMPLES = {
     "launch": "splash launch claude\n  splash launch codex --print",
     "config": "splash config get\n  splash config get serve.max_context\n"
     "  splash config set routing.default_model mlx-community/Qwen3.8-27B-4bit",
-    "doctor": "splash doctor\n  splash doctor --json",
+    "doctor": "splash doctor\n  splash doctor --json\n  splash doctor --uninstall\n"
+    "  splash doctor --uninstall --yes --delete-cache",
     "version": "splash version --json",
 }
 
@@ -311,6 +314,13 @@ def parser() -> argparse.ArgumentParser:
             sub.add_argument("--no-verify", action="store_true")
         if name == "rm":
             sub.add_argument("--yes", action="store_true")
+        if name == "doctor":
+            sub.add_argument(
+                "--uninstall", action="store_true", help="remove Splash GUI data (SPEC §19)"
+            )
+            sub.add_argument("--yes", action="store_true", help="do not ask before removing")
+            sub.add_argument("--delete-models", action="store_true", help="also delete models")
+            sub.add_argument("--delete-cache", action="store_true", help="also delete the cache")
         if name == "run":
             sub.add_argument("prompt", nargs="*")
         if name == "open":
@@ -1019,6 +1029,8 @@ def cmd_config(ctx: Ctx, client: Client) -> int:
 
 def cmd_doctor(ctx: Ctx, client: Client) -> int:
     """Local checks always; the manager's `POST /doctor` items when it answers."""
+    if getattr(ctx.args, "uninstall", False):
+        return cmd_uninstall(ctx, client)
     paths = client.paths
     local: list[doctor_checks.Check] = []
     manager: list[doctor_checks.Check] = []
@@ -1067,6 +1079,98 @@ def cmd_doctor(ctx: Ctx, client: Client) -> int:
     else:
         print("\n".join(doctor_checks.render(checks, ctx.out)))
     return 1 if counts["fail"] else 0
+
+
+def agent_label() -> str:
+    """The manager LaunchAgent's label: the bundle's `SplashGUIAgentLabel` when this runs from
+    the app (PKG-1), else the development bundle's default."""
+    root = packaged.bundle_root()
+    if root is not None:
+        with contextlib.suppress(Exception):
+            info = plistlib.loads((root / "Contents" / "Info.plist").read_bytes())
+            label = info.get("SplashGUIAgentLabel")
+            if isinstance(label, str) and label:
+                return label
+    return "ai.splashgui.manager"
+
+
+def agent_pid(label: str) -> int | None:
+    """The pid launchd reports for `gui/<uid>/<label>`, or None when it is not loaded."""
+    try:
+        out = subprocess.run(
+            ["/bin/launchctl", "print", f"gui/{os.getuid()}/{label}"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    found = re.search(r"^\s*pid = (\d+)", out.stdout, re.MULTILINE)
+    return int(found.group(1)) if out.returncode == 0 and found else None
+
+
+def cmd_uninstall(ctx: Ctx, client: Client) -> int:
+    """`splash doctor --uninstall` (SPEC §19, PKG-12): the manager's `POST /uninstall`, with each
+    size shown and models and cache asked about separately. When the manager runs as the app's
+    LaunchAgent, the agent is booted out afterwards (a stopped KeepAlive agent would start again);
+    only when launchd's pid for it is this manager's, so another install is never touched."""
+    require(client)
+    args = ctx.args
+    plan = client.request("POST", "/uninstall/plan")
+    interactive = sys.stdin.isatty()
+    if not args.yes and not interactive:
+        raise CliError("Remove Splash GUI data? Pass --yes to confirm.", exit_code=EXIT_USAGE)
+    summary = sys.stderr if ctx.json else sys.stdout  # --json keeps stdout for the result
+    print(f"Splash GUI data in {plan['home']}:", file=summary)
+    print(f"  data (settings, chats, usage, logs)  {fmt_bytes(plan['data_bytes'])}", file=summary)
+    print(f"  models                               {fmt_bytes(plan['models_bytes'])}", file=summary)
+    print(f"  cache                                {fmt_bytes(plan['cache_bytes'])}", file=summary)
+    for step in plan["steps"]:
+        print(f"  · {step}", file=summary)
+    delete_models = bool(args.delete_models)
+    delete_cache = bool(args.delete_cache)
+    if not args.yes:
+        if not delete_models and plan["models_bytes"]:
+            answer = input(f"Also delete models ({fmt_bytes(plan['models_bytes'])})? [y/N] ")
+            delete_models = answer.strip().lower() == "y"
+        if not delete_cache and plan["cache_bytes"]:
+            answer = input(f"Also delete the cache ({fmt_bytes(plan['cache_bytes'])})? [y/N] ")
+            delete_cache = answer.strip().lower() == "y"
+        if input("Remove Splash GUI data now? [y/N] ").strip().lower() != "y":
+            ctx.note("Nothing was removed.")
+            return EXIT_FAILED
+    label = agent_label()
+    pid, _ = manager_pid(client.paths)
+    by_agent = pid is not None and agent_pid(label) == pid
+    result = client.request(
+        "POST",
+        "/uninstall",
+        {
+            "delete_data": True,
+            "delete_models": delete_models,
+            "delete_cache": delete_cache,
+            "stop": not by_agent,
+        },
+    )
+    if by_agent:
+        subprocess.run(
+            ["/bin/launchctl", "bootout", f"gui/{os.getuid()}/{label}"],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+    if ctx.json:
+        ctx.emit_json(result)
+        return 0
+    restored = ", ".join(result["restored"]) or "nothing connected"
+    print(f"Restored: {restored}")
+    print(f"PATH block removed from: {', '.join(result['path_block_removed']) or 'none'}")
+    print(f"Deleted {len(result['deleted'])} items ({fmt_bytes(result['freed_bytes'])}); kept:")
+    for kept in result["kept"]:
+        print(f"  {kept}")
+    print("The manager has stopped. Drag Splash GUI.app to the Trash to finish.")
+    return 0
 
 
 # load / run / launch ---------------------------------------------------------------
@@ -1195,6 +1299,63 @@ def cmd_load(ctx: Ctx, client: Client) -> int:
     return 0
 
 
+def restore_desktop(client: Client, name: str) -> int:
+    """`splash launch claude-desktop|codex-app --restore` (SPEC §11.3, §11.4): an explicit
+    Disconnect. With the manager down the restore runs here, from `state.json`, and it
+    reopens the app when it was running, as Disconnect does through the manager."""
+    if client.running():
+        client.request("POST", f"/integrations/{name}/disconnect")
+        return 0
+    import asyncio
+
+    from ..app import AppConfig, build_state
+    from ..integrations.service import IntegrationsService
+
+    state = build_state(AppConfig(paths=client.paths))
+    service = IntegrationsService(state)
+
+    async def restore() -> None:
+        await service.start()
+        await service.restore_one(name, reopen=True)
+
+    asyncio.run(restore())
+    return 0
+
+
+def connect_desktop(ctx: Ctx, client: Client, name: str) -> int:
+    """`splash launch claude-desktop|codex-app` (SPEC §11.3.1 step 1, docs/ui/11 §9.4).
+    Connecting restarts a running app, so the manager answers 409
+    `restart_confirmation_required` until the restart is confirmed. On a TTY the user is
+    asked first; off a TTY the command fails and nothing is changed."""
+    client.start(note=not ctx.quiet)
+    path = f"/integrations/{name}/connect"
+    try:
+        client.request("POST", path, {"confirm_restart": False})
+        return 0
+    except ApiFailure as error:
+        if error.code != "restart_confirmation_required":
+            raise
+    label = "Claude" if name == "claude-desktop" else "Codex"
+    if not sys.stdin.isatty():
+        raise CliError(
+            f"{label} is running, and connecting restarts it.",
+            exit_code=EXIT_USAGE,
+            fix=f"quit {label} and run this again, or run it in a terminal to confirm",
+        )
+    try:
+        answer = input(
+            f"{label} will restart. Your previous configuration is backed up and restored "
+            "when you disconnect or quit Splash GUI. Continue? [y/N] "
+        )
+    except EOFError:
+        answer = ""
+    if answer.strip().lower() not in ("y", "yes"):
+        ctx.note("Not connected.")
+        return EXIT_FAILED
+    client.request("POST", path, {"confirm_restart": True})
+    return 0
+
+
 def launch(ctx: Ctx, client: Client, passthrough_args: list[str]) -> int:
     args = ctx.args
     if args.client in DESKTOP_CLIENTS:
@@ -1206,25 +1367,9 @@ def launch(ctx: Ctx, client: Client, passthrough_args: list[str]) -> int:
             )
             print(f"{args.client}: {action}")
             return 0
-        if args.restore and not client.running():
-            import asyncio
-
-            from ..app import AppConfig, build_state
-            from ..integrations.service import IntegrationsService
-
-            state = build_state(AppConfig(paths=client.paths))
-            service = IntegrationsService(state)
-
-            async def restore() -> None:
-                await service.start()
-                await service.restore_one(args.client, reopen=False)
-
-            asyncio.run(restore())
-            return 0
-        client.start(note=not ctx.quiet)
-        action = "disconnect" if args.restore else "connect"
-        client.request("POST", f"/integrations/{args.client}/{action}", {"confirm_restart": True})
-        return 0
+        if args.restore:
+            return restore_desktop(client, args.client)
+        return connect_desktop(ctx, client, args.client)
     loaded: str | None = None
     if args.print_only:
         # `--print` changes nothing (docs/ui/11 §9.3): it never starts the manager
@@ -1416,7 +1561,9 @@ def cmd_pull(ctx: Ctx, client: Client) -> int:
             percent = fmt_percent(progress, 0) if progress is not None else ""
             text = " ".join(p for p in (item["state"], percent, sizes, rate, eta) if p)
             if tty:
-                print(f"\r\033[K{args.model}: {text}", end="", file=sys.stderr, flush=True)
+                # The overall bar (docs/ui/11 §6.2), drawn from the manager's byte progress.
+                drawn = f"{ctx.err.bar(progress)} " if progress is not None else ""
+                print(f"\r\033[K{args.model}: {drawn}{text}", end="", file=sys.stderr, flush=True)
             elif item["state"] != last_state or time.monotonic() - last_line >= 5:
                 ctx.note(f"pull {args.model}: {text}")
                 last_line, last_state = time.monotonic(), item["state"]
@@ -1550,6 +1697,36 @@ def admin_url(client: Client, page: str) -> str:
     return f"{client.url}{link['url']}&next={urllib.parse.quote(target, safe='/')}"
 
 
+def manager_exited(paths: Paths) -> bool:
+    """The manager holds `run/manager.lock` for its whole life (`manager.instance_lock`),
+    and the OS releases the lock at exit. A lock that can be taken means the manager has
+    exited, after the lifespan shutdown restored the integrations (SPEC §4.2)."""
+    lock_path = paths.run_dir / "manager.lock"
+    if not lock_path.exists():
+        return True
+    with lock_path.open("a+") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+    return True
+
+
+def shut_down(client: Client) -> None:
+    """Ask the manager to stop (`POST /shutdown`, SPEC §12.2) and wait until it has exited.
+    The port stops answering before the restore ends, so the wait is on the lock: a
+    `start` that follows never races the restore for the configuration files."""
+    client.request("POST", "/shutdown")
+    deadline = time.monotonic() + 30
+    while not manager_exited(client.paths):
+        if time.monotonic() >= deadline:
+            raise CliError(
+                "Splash GUI is still shutting down.",
+                fix="check " + home_relative(client.paths.manager_log),
+            )
+        time.sleep(0.2)
+
+
 def dispatch(ctx: Ctx, client: Client, rest: list[str]) -> int:
     name = ctx.args.command
     if name == "launch":
@@ -1560,17 +1737,12 @@ def dispatch(ctx: Ctx, client: Client, rest: list[str]) -> int:
         return 0
     if name == "restart":
         if client.running():
-            client.request("POST", "/shutdown")
-            deadline = time.monotonic() + 30
-            while client.running() and time.monotonic() < deadline:
-                time.sleep(0.2)
-            if client.running():
-                raise CliError("Splash GUI is still shutting down.")
+            shut_down(client)
         client.start(ctx.args.foreground, note=not ctx.quiet)
         return 0
     if name == "stop":
         if client.running():
-            client.request("POST", "/shutdown")
+            shut_down(client)
             ctx.ok("Splash GUI stopped")
         else:
             ctx.note("Splash GUI is not running.")

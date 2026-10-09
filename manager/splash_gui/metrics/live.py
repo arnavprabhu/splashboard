@@ -426,6 +426,10 @@ class MetricsHub:
             else:
                 alerts.clear_condition("memory_critical")
                 alerts.clear_condition("memory_warning")
+        elif pressure in ("normal", "warning"):
+            # Every poll, not only a transition: /status is the source of memory_critical
+            # (SPEC §16.3), so a poll that no longer reports critical pressure clears it.
+            alerts.clear_condition("memory_critical")
         if restarted:
             self._failure_counts.clear()
             self._refused = None

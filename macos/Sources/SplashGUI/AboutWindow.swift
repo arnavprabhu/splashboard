@@ -66,14 +66,15 @@ struct AboutView: View {
             row("Status", v?.statusSchemaVersion.map { "schema \($0)" } ?? Format.unknown)
 
             HStack(spacing: 12) {
-                SquareButton("Check for Updates") { model.openAdmin("/admin/settings/about") }
-                    .disabled(!running)
+                SquareButton("Check for Updates") { Task { await model.checkForUpdates() } }
                 SquareButton("Upgrade Engine…") { model.openAdmin("/admin/settings/about") }
                     .disabled(!running)
             }
             .padding(.top, 20)
             HStack(spacing: 12) {
                 SquareButton("Re-run Welcome Wizard", action: rerunWizard).disabled(!running)
+                SquareButton("Remove Splash GUI Data…") { Task { await model.removeData() } }.disabled(!running)
+                SquareButton("Licenses", action: showLicenses)
             }
             .padding(.top, 10)
 
@@ -83,7 +84,6 @@ struct AboutView: View {
                 LinkText("Repository ↗") { NSWorkspace.shared.open(ProjectLinks.repository) }
                 LinkText("Issues ↗") { NSWorkspace.shared.open(ProjectLinks.issues) }
                 LinkText("Splash engine ↗") { NSWorkspace.shared.open(ProjectLinks.engineRepository) }
-                LinkText("Licenses ↗") { model.openAdmin("/admin/settings/about#licenses") }
             }
             .foregroundStyle(ink)
             .padding(.top, 10)
@@ -95,6 +95,16 @@ struct AboutView: View {
         .padding(32)
         .frame(width: 480, height: 560, alignment: .topLeading)
         .background(Tokens.bg(dark: dark))
+    }
+
+    /// PKG-5: the bundled THIRD_PARTY.txt in the default text viewer. The development bundle has none,
+    /// so it opens the web admin's Licenses section instead.
+    private func showLicenses() {
+        if let file = BundledLicenses.thirdPartyFile(in: Bundle.main.resourceURL) {
+            NSWorkspace.shared.open(file)
+        } else {
+            model.openAdmin("/admin/settings/about#licenses")
+        }
     }
 
     private func engineText(_ v: VersionsInfo?, running: Bool) -> String {

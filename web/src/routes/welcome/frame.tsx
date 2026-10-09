@@ -12,17 +12,27 @@ import type { SystemInfo } from '../../api/models';
 import { Button, toast, toastError } from '../../components';
 import { formatBytes } from '../../lib/format';
 import { t } from '../../strings/welcome';
-import { markCompleted } from './api';
+import { markCompleted, saveWizardProgress } from './api';
 import { closeWelcome } from './host';
-import { canSkip, clearProgress, loadProgress, prevStep, railState, saveProgress, STEPS, STEP_KEYS, type Step, type WizardProgress } from './steps';
+import { settings } from '../../store';
+import { canSkip, clearProgress, loadProgress, mergeServerProgress, prevStep, railState, saveProgress, STEPS, STEP_KEYS, toServerProgress, type Step, type WizardProgress, type WizardServerProgress } from './steps';
 
 // ---------- progress (persisted, W8) ----------
 
 export const progress = signal<WizardProgress>(loadProgress());
 
+/** Local copy first (it also holds `reached` and the download id), then settings (F3). */
 export function updateProgress(patch: Partial<WizardProgress>): void {
   progress.value = { ...progress.value, ...patch };
   saveProgress(progress.value);
+  // A failed write keeps the local copy, the fallback when settings cannot be saved.
+  saveWizardProgress(toServerProgress(progress.value)).catch(() => undefined);
+}
+
+/** Takes the progress settings hold (another browser may have written it) over the local copy. */
+export function hydrateProgress(): void {
+  const wizard = settings.value?.settings.global?.wizard as Partial<WizardServerProgress> | undefined;
+  progress.value = mergeServerProgress(progress.value, wizard);
 }
 
 export function resetProgress(): void {
@@ -155,7 +165,7 @@ export function StepFooter({ onContinue, continueLabel, continueDisabled, contin
     setSkipping(true);
     try {
       await markCompleted();
-      clearProgress();
+      resetProgress();
       toast(t('welcome.skip.toast'));
       if (hosted) await closeWelcome(true).catch(() => undefined);
       navigate('/status');

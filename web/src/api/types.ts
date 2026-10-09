@@ -110,6 +110,8 @@ export interface SettingsDoc {
 /** `GET /api/admin/settings`. */
 export interface SettingsResponse {
   settings: SettingsDoc;
+  /** The folders Splash actually uses (SPEC §8.2); the defaults unless storage moves them. */
+  resolved?: { home?: string; cache_dir?: string };
   read_only?: boolean;
   load_warnings?: string[];
   [extra: string]: unknown;

@@ -262,7 +262,14 @@ def test_reset_restores_defaults_and_keeps_data_settings(app: FastAPI, client: T
     g["serve"]["queue_size"] = 4
     g["routing"]["load_timeout"] = 60
     g["storage"]["models_dir"] = "/tmp/elsewhere-models"
-    g["wizard"] = {"completed": True, "preset": "chat"}
+    g["wizard"] = {
+        "completed": True,
+        "preset": "chat",
+        "step": 3,
+        "pending_port": 9100,
+        "use_case": "coding",
+        "model": MODEL,
+    }
     g["chat"]["mcp_servers"] = {"calc": {"command": "x"}}
     document["models"] = {MODEL: {"serve": {"max_context": "64K"}}}
     assert client.put("/api/admin/settings", json=document).status_code == 200
@@ -272,7 +279,15 @@ def test_reset_restores_defaults_and_keeps_data_settings(app: FastAPI, client: T
     assert after["global"]["routing"]["load_timeout"] == 120
     assert after["models"] == {}
     assert after["global"]["storage"]["models_dir"] == "/tmp/elsewhere-models"
-    assert after["global"]["wizard"] == {"completed": True, "preset": "chat"}
+    # Completion and the applied preset are kept; the transient wizard progress is cleared.
+    assert after["global"]["wizard"] == {
+        "completed": True,
+        "preset": "chat",
+        "step": None,
+        "pending_port": None,
+        "use_case": None,
+        "model": None,
+    }
     assert after["global"]["chat"]["mcp_servers"] == {
         "calc": {
             "command": "x",
@@ -285,7 +300,12 @@ def test_reset_restores_defaults_and_keeps_data_settings(app: FastAPI, client: T
         }
     }
     assert result["engine_restarted"] is False
-    assert result["kept"] == ["global.storage", "global.wizard", "global.chat.mcp_servers"]
+    assert result["kept"] == [
+        "global.storage",
+        "global.wizard.completed",
+        "global.wizard.preset",
+        "global.chat.mcp_servers",
+    ]
     assert secrets.get(SecretName.HF_TOKEN), "secrets are kept"
 
 
@@ -556,3 +576,28 @@ def test_open_in_terminal_accepts_ids_and_profiles_only(svc: Any, client: TestCl
             "invalid_model_id"
         )
     assert len(svc.state.macos.calls) == calls, "nothing reached osascript"
+
+
+def test_wizard_progress_round_trips_through_settings(app: FastAPI, client: TestClient) -> None:
+    """The welcome wizard keeps its place in settings.global.wizard, so another browser
+    resumes it and step 5 still finds the port typed in step 2 (F3)."""
+    document = client.get("/api/admin/settings").json()["settings"]
+    document["global"]["wizard"].update(step=2, pending_port=18435, use_case="chat", model=MODEL)
+    assert client.put("/api/admin/settings", json=document).status_code == 200
+    wizard = client.get("/api/admin/settings").json()["settings"]["global"]["wizard"]
+    assert wizard["step"] == 2 and wizard["pending_port"] == 18435
+    assert wizard["use_case"] == "chat" and wizard["model"] == MODEL
+    saved = app.state.manager.settings.current.global_.wizard
+    assert (saved.step, saved.pending_port) == (2, 18435)
+
+    # A bad value is refused and the stored progress stays as it was.
+    document["global"]["wizard"]["step"] = 6
+    refused = client.put("/api/admin/settings", json=document)
+    assert refused.status_code == 422
+    assert app.state.manager.settings.current.global_.wizard.step == 2
+
+    # Finishing setup clears the pending parts (the web does this with a PUT).
+    document["global"]["wizard"].update(step=None, pending_port=None, use_case=None, model=None)
+    assert client.put("/api/admin/settings", json=document).status_code == 200
+    cleared = client.get("/api/admin/settings").json()["settings"]["global"]["wizard"]
+    assert cleared["step"] is None and cleared["pending_port"] is None
