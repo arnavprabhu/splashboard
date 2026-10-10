@@ -197,15 +197,19 @@ export function ModelDrawer({ id, installed, activeId, onClose, onDelete, onVeri
           )}
           {model && (
             <>
-              {isActive ? (
-                <Button onClick={() => void flows.unloadModel()}>{t('models.action.unload')}</Button>
-              ) : (
-                <Button onClick={() => void flows.loadModel(model.id)}>{t('models.action.load')}</Button>
+              {model.status !== 'unsupported' && (
+                <>
+                  {isActive ? (
+                    <Button onClick={() => void flows.unloadModel()}>{t('models.action.unload')}</Button>
+                  ) : (
+                    <Button onClick={() => void flows.loadModel(model.id)}>{t('models.action.load')}</Button>
+                  )}
+                  <Link href={modelSettingsPath(model.id)} class="btn">
+                    {t('models.action.settings')}
+                  </Link>
+                  {onVerify && <Button onClick={() => onVerify(model)}>{t('models.action.verify')}</Button>}
+                </>
               )}
-              <Link href={modelSettingsPath(model.id)} class="btn">
-                {t('models.action.settings')}
-              </Link>
-              {onVerify && <Button onClick={() => onVerify(model)}>{t('models.action.verify')}</Button>}
               {onDelete && <Button onClick={() => onDelete(model)}>{t('common.delete')}</Button>}
               <Button onClick={() => void flows.revealModel(model.id)}>{t('models.action.reveal')}</Button>
             </>
@@ -216,6 +220,12 @@ export function ModelDrawer({ id, installed, activeId, onClose, onDelete, onVeri
             </ExternalLink>
           )}
         </div>
+
+        {model?.notice && (
+          <Banner tone="warn" title={t('models.status.unsupported')}>
+            {model.notice}
+          </Banner>
+        )}
 
         {isClefId(id) && (
           <Banner tone="info" title={t('models.clef.title')}>

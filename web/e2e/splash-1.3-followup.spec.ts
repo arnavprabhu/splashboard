@@ -1,23 +1,23 @@
 /**
- * Splash 1.3.0 follow-up (2026-10-07): the plain MLX refusal with Splash's words as the detail
- *.
+ * The plain MLX refusal with Splash's words as the detail (Splash 1.3.1 wording).
  */
 import { expect, test } from '@playwright/test';
 
 import { mockManager } from './fixtures';
 
-const EIGHT_BIT = 'mlx-community/Qwen3.8-27B-8bit';
-const PLAIN = 'Splash runs MLX models only at 4-bit, group size 64.';
-const DETAIL = 'quantization language_model.model.embed_tokens bits mismatch: MLX 8, runtime 4';
+const SEVEN_BIT = 'mlx-community/Qwen3.8-27B-7bit';
+const PLAIN = 'Splash runs MLX models quantized as affine 2, 3, 4, 5, 6 or 8 bits (groups of 32, 64 or 128) or as mxfp4.';
+const DETAIL =
+  'quantization language_model.model.embed_tokens is affine 7-bit in groups of 64; MLX weights load as affine 2, 3, 4, 5, 6 or 8 bits in groups of 32, 64 or 128, or as mxfp4';
 
-test('An 8-bit MLX checkpoint leads with the plain line and keeps Splash’s reason as detail', async ({ page }) => {
+test('A 7-bit MLX checkpoint leads with the plain line and keeps Splash’s reason as detail', async ({ page }) => {
   await mockManager(page, {
     extra: (_m, path) => {
       if (path === '/inspect')
         return {
           json: {
-            id: EIGHT_BIT,
-            repo_id: EIGHT_BIT,
+            id: SEVEN_BIT,
+            repo_id: SEVEN_BIT,
             compatible: false,
             badge: 'incompatible',
             family: null,
@@ -33,7 +33,7 @@ test('An 8-bit MLX checkpoint leads with the plain line and keeps Splash’s rea
       return undefined;
     },
   });
-  await page.goto(`/admin/models/downloader?tab=id&id=${EIGHT_BIT}`);
+  await page.goto(`/admin/models/downloader?tab=id&id=${SEVEN_BIT}`);
   await expect(page.getByTestId('compat-reason')).toHaveText(PLAIN);
   await expect(page.getByTestId('compat-detail')).toHaveText(DETAIL);
 });

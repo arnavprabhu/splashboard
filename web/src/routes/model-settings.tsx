@@ -98,7 +98,6 @@ export default function ModelSettingsPage({ params = {} }: { params?: Record<str
                   form={form}
                   model={id}
                   memoryBytes={system.data?.memory_bytes ?? null}
-                  disabledReason={field.disabled_for_legacy && detail.data?.legacy ? t("settings.legacy") : null}
                 />
               ))}
           </div>

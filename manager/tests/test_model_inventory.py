@@ -482,3 +482,55 @@ def test_a_local_drop_in_is_never_asked_about(harness_factory) -> None:
         {"sources": {"target": {"revision": "legacy-snapshot-name"}}},
     )
     assert h.state.models.tracked_revision(hub) is None, "not a commit, nothing to compare"
+
+
+# --- Splash packages (no longer loaded) -------------------------------------
+
+
+def _installed_package(h: EngineHarness, repo: str, fmt: str) -> Path:
+    """A Splash package as an earlier Splash installed it: a selection link to its Hub
+    snapshot, which holds a manifest.json naming the package format."""
+    snapshot = h.home / "pkg-hub" / f"models--{repo.replace('/', '--')}" / "snapshots" / ("b" * 40)
+    snapshot.mkdir(parents=True)
+    (snapshot / "manifest.json").write_text(json.dumps({"format": {"name": fmt}}))
+    (snapshot / "weights.bin").write_bytes(b"w" * 64)
+    link = h.home / "fake-data" / "models" / repo
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(snapshot)
+    return link
+
+
+def test_an_installed_splash_package_is_listed_as_no_longer_loading(harness_factory) -> None:
+    """Splash 1.3.1 refuses Splash packages. One an earlier Splash installed is listed so it
+    can be deleted, with the MLX model to download instead, and is never offered to load."""
+    h = harness_factory(installed=(MODEL,))
+    _installed_package(h, "incoai/Qwen3.8-27B-Splash", "splash-packed-q4")
+    rows = {m["id"]: m for m in h.client.get("/api/admin/models").json()["models"]}
+    package = rows["incoai/Qwen3.8-27B-Splash"]
+    assert package["status"] == "unsupported" and package["format"] == "legacy"
+    assert package["family"] == "Qwen3.8-27B" and package["size_bytes"] > 0
+    assert "mlx-community/Qwen3.8-27B-4bit" in package["notice"]
+    assert rows[MODEL]["notice"] is None and rows[MODEL]["status"] != "unsupported"
+    assert "incoai/Qwen3.8-27B-Splash" not in h.state.installed_models()
+    assert MODEL in h.state.installed_models()
+    # Never asked about on the Hub.
+    calls: list[httpx.Request] = []
+    _hub_head(h, "c" * 40, calls)
+    _refresh(h)
+    assert not [c for c in calls if "Qwen3.8-27B-Splash" in str(c.url)]
+
+
+def test_an_installed_splash_package_can_be_deleted(harness_factory) -> None:
+    h = harness_factory(installed=(MODEL,))
+    link = _installed_package(h, "incoai/Qwen3.6-35B-A3B-Splash", "splash-packed-q4-moe")
+    row = next(
+        m
+        for m in h.client.get("/api/admin/models").json()["models"]
+        if m["id"] == "incoai/Qwen3.6-35B-A3B-Splash"
+    )
+    assert row["notice"].endswith(
+        "mlx-community/Qwen3.6-35B-A3B-4bit, which loads the same weights."
+    )
+    response = h.client.delete("/api/admin/models/incoai/Qwen3.6-35B-A3B-Splash")
+    assert response.status_code == 200, response.text
+    assert not link.exists() and not link.is_symlink()

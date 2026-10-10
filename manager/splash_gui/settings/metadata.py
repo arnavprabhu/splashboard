@@ -350,7 +350,7 @@ FIELDS: tuple[FieldMeta, ...] = (
         "size",
         "--max-cache-disk",
         warnings=(
-            "Below about one state (109 MiB for 35B, 187 MiB for 27B) Splash disables the tier.",
+            "Below about one state (64 MiB for 35B, 153 MiB for 27B) Splash disables the tier.",
         ),
     ),
     _serve(

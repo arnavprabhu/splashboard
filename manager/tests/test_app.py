@@ -207,7 +207,7 @@ def test_unknown_admin_route_is_json_404(client: TestClient) -> None:
 
 def test_engine_view_when_stopped(client: TestClient) -> None:
     body = client.get("/api/admin/engine").json()
-    assert body["state"] == "stopped" and body["engine"]["version"] == "1.3.0"
+    assert body["state"] == "stopped" and body["engine"]["version"] == "1.3.1"
     assert body["restart"]["auto_restart"] is True
     status = client.get("/api/admin/engine/status")
     assert status.status_code == 503 and status.headers["retry-after"] == "5"
@@ -217,7 +217,7 @@ def test_engine_view_when_stopped(client: TestClient) -> None:
 def test_versions(client: TestClient) -> None:
     body = client.get("/api/admin/versions").json()
     assert body["engine"]["support"] == "supported"
-    assert body["engine"]["supported_range"] == ">=1.3.0 <1.4.0"
+    assert body["engine"]["supported_range"] == ">=1.3.1 <1.4.0"
 
 
 def test_system(client: TestClient) -> None:
@@ -345,7 +345,7 @@ def test_schema(client: TestClient) -> None:
     mc = fields["serve.max_context"]
     assert mc["flag"] == "--max-context" and mc["applies"] == "restart"
     assert mc["scope"] == "GM" and mc["section"] == "memory_context" and mc["default"] == "auto"
-    assert fields["serve.revision"]["disabled_for_legacy"] is True
+    assert "disabled_for_legacy" not in fields["serve.revision"]
     # Each idle timer's help says what it does and names the other one.
     release = fields["serve.idle_release"]["help"]
     assert "keeps its process running" in release and "10 minutes by default" in release
@@ -600,7 +600,7 @@ def test_doctor_covers_the_spec_checks(client: TestClient) -> None:
         "integrations",
     }
     by = {c["id"]: c for c in report["checks"]}
-    assert by["engine"]["status"] == "ok" and "1.3.0" in by["engine"]["message"]
+    assert by["engine"]["status"] == "ok" and "1.3.1" in by["engine"]["message"]
     assert by["permissions"]["status"] == "ok"
     assert by["hf_token"]["status"] == "warn", "the suite never sees the developer's token"
     assert by["integrations"]["status"] == "ok"

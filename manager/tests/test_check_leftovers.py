@@ -112,7 +112,7 @@ def test_inspect_leaves_no_folder_behind(hub_harness: Any, monkeypatch: pytest.M
     folder = hubcache.repo_folder(models, REPO_ID)
 
     result = h.client.post(f"/api/admin/inspect?id={REPO_ID}&refresh=1").json()
-    assert result["compatible"] is False, "the 8-bit check itself still answers"
+    assert result["compatible"] is True, "the check itself still answers"
     assert not folder.exists(), "the check created the folder, so it is gone"
     assert not (models / ".locks" / folder.name).exists()
 

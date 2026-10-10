@@ -51,7 +51,7 @@ def test_a_full_run_is_saved_with_metrics(h: EngineHarness) -> None:
     assert started.status_code == 202, started.text
     run = wait_run(h, started.json()["run_id"])
     assert run["state"] == "done", run
-    assert run["model"] == MODEL and run["engine_version"] == "1.3.0"
+    assert run["model"] == MODEL and run["engine_version"] == "1.3.1"
     assert run["hardware"] and "power" in run and run["settings"]["version"] == 2
     scenarios = [(r["scenario"], r["params"]["value"]) for r in run["results"]]
     assert scenarios == [

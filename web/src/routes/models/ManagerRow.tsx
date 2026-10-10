@@ -61,6 +61,7 @@ function StatusTags({ model, download, verifying, accentUpdate }: Pick<ManagerRo
     );
   }
   if (model.status === 'broken') tags.push(<Tag key="broken" tone="ink">{t('models.status.broken')}</Tag>);
+  if (model.status === 'unsupported') tags.push(<Tag key="unsupported" tone="ink">{t('models.status.unsupported')}</Tag>);
   if (model.status === 'update_available' && !model.pinned) {
     tags.push(
       <Tag key="update" tone={accentUpdate ? 'acc' : 'ink'}>
@@ -115,6 +116,7 @@ export function ManagerRow(props: ManagerRowProps) {
           valueText={`${percent(itemProgress(download))} · ${downloadMeta(download)}`}
         />
       )}
+      {model?.notice && <p class="body" data-testid="model-notice">{model.notice}</p>}
       {verifyError && (
         <Banner
           tone="warn"
@@ -149,6 +151,15 @@ export function ManagerRow(props: ManagerRowProps) {
       <Link href="/models/downloader#downloads" class="btn" data-size="s">
         {t('models.dl.action.details')}
       </Link>
+    </>
+  ) : model?.status === 'unsupported' ? (
+    <>
+      <Button size="s" onClick={onDelete} aria-label={t('models.action.delete_label', { id })} data-testid="row-delete">
+        {t('common.delete')}
+      </Button>
+      <Button size="s" onClick={() => void flows.revealModel(id)} aria-label={t('models.action.reveal_label', { id })}>
+        {t('models.action.reveal')}
+      </Button>
     </>
   ) : model ? (
     <>
@@ -203,7 +214,7 @@ export function ManagerRow(props: ManagerRowProps) {
       status={active ? <StatusChip state={engineState.value} announce={false} /> : <StatusTags model={model} download={download} verifying={verifying} accentUpdate={props.accentUpdate} />}
       label={rowLabel(index, model?.format ?? null, id, size, model ? 1024 : 1000)}
       detail={detail}
-      body={dlActive || verifyError || install ? body : undefined}
+      body={dlActive || verifyError || install || model?.notice ? body : undefined}
       actions={actions}
       expanded={Boolean(dlActive)}
     />

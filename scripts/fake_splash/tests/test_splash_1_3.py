@@ -67,6 +67,7 @@ def test_weights_block_follows_idle_release(make_engine, tmp_path):
         "idle_release_seconds": 600.0,
         "released": False,
         "restores": 0,
+        "restore_failures": 0,
     }
     off = make_engine(args=["--no-webui", "--idle-release", "off"], base=tmp_path / "off")
     assert off.json("GET", "/status")[1]["weights"]["idle_release_seconds"] is None

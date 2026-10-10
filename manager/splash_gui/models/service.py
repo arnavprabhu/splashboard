@@ -43,7 +43,7 @@ from ..schemas import (
     VariantOut,
     VisionInfo,
 )
-from ..settings.parsers import parse_model_id, split_model_id
+from ..settings.parsers import PACKAGE_REPLACEMENTS, parse_model_id, split_model_id
 from ..system.macos import CommandResult
 from ..usage.db import iso
 from . import catalog as cat
@@ -90,6 +90,18 @@ def fingerprints(facts: dict[str, Any]) -> ModelFingerprints | None:
         max_context=facts.get("max_context"),
         vision=facts.get("vision"),
         recorded_at=facts.get("updated_at"),
+    )
+
+
+def package_notice(selection: Selection) -> str:
+    """The inventory's line for an installed Splash package, with the MLX model that
+    loads the same weights (install/models.py `refuse_package`)."""
+    family = selection.family or (
+        "Qwen3.6-35B-A3B" if "35b-a3b" in selection.repo_id.lower() else "Qwen3.8-27B"
+    )
+    return (
+        "Splash no longer loads Splash packages. Delete this one and download "
+        f"{PACKAGE_REPLACEMENTS[family]}, which loads the same weights."
     )
 
 
@@ -217,7 +229,13 @@ class Models:
             overrides = self.state.settings.current.models.get(selection.model)
             revision = overrides.serve.revision if overrides else None
             status = "ready" if all(ref.real for ref in selection.files) else "broken"
-            if status == "ready" and self.update_status(selection)[0]:
+            notice = None
+            if selection.kind == "package":
+                # Splash loads Splash packages no more (install/models.py `refuse_package`):
+                # listed so the user can delete one, never loaded.
+                status = "unsupported"
+                notice = package_notice(selection)
+            elif status == "ready" and self.update_status(selection)[0]:
                 status = "update_available"
             if self.state.active_model() == selection.model:
                 status = "loading" if self.state.supervisor.state == "starting" else "active"
@@ -240,7 +258,7 @@ class Models:
                     "revision": revision,
                     "commit": selection.commit,
                     "pinned": bool(revision and re.fullmatch("[0-9a-fA-F]{40}", revision)),
-                    "legacy": selection.kind == "package",
+                    "notice": notice,
                     "last_used_at": last_used.get(selection.model),
                     "status": status,
                     "draft": DraftRef(
@@ -309,10 +327,10 @@ class Models:
         """The branch an unpinned Hub model follows (`serve.revision`, else `main`).
         None for a pinned model, a `local/` drop-in, or one with no commit to compare."""
         commit = selection.commit
-        if selection.repo_id.startswith("local/") or not commit:
+        if selection.repo_id.startswith("local/") or not commit or selection.kind == "package":
             return None
         if not re.fullmatch("[0-9a-fA-F]{40}", commit):
-            return None  # a legacy package's snapshot name is not a commit to compare
+            return None
         overrides = self.state.settings.current.models.get(selection.model)
         revision = overrides.serve.revision if overrides else None
         if revision and re.fullmatch("[0-9a-fA-F]{40}", revision):
@@ -884,22 +902,15 @@ class Models:
         }
 
     async def catalog(self, refresh: bool = False) -> Catalog:
-        """The seed plus Splash's official list, grouped by
-        family then format, each row filled from the Hub (sizes, license, vision,
-        GGUF variants) with a memory estimate, a fit badge and the "Recommended
-        for this Mac" mark (the preset's pick for the wizard's use case, else coding)."""
-        from ..paths import splash_data_dir
-
+        """The seed, grouped by family then format, each row filled from the Hub
+        (sizes, license, vision, GGUF variants) with a memory estimate, a fit badge
+        and the "Recommended for this Mac" mark (the preset's pick for the wizard's
+        use case, else coding)."""
         if refresh:
             self.catalog_cache.clear()
         memory = self.state.memory_bytes()
         installed = {m.repo_id for m in self.inventory().models}
         rows = list(cat.SEED)
-        engine = self.state.engine_cached()
-        for repo in cat.official_ids(engine.pkg, splash_data_dir()):
-            family = cat.family_guess(repo)
-            if family and repo not in {r[1] for r in rows}:
-                rows.append((family, repo, "legacy", "Official catalog.", None))
         g = self.state.settings.current.global_
         pick_model = self.preset_pick()
         pick_repo = split_model_id(pick_model)[0] if pick_model else None
@@ -914,9 +925,7 @@ class Models:
             [None] * len(rows) if offline else await asyncio.gather(*(fetch(r[1]) for r in rows))
         )
         # Each family's draft is part of every MLX/GGUF download ("download size").
-        draft_ids = sorted(
-            {cat.DRAFT_REPOS[r[0]] for r in rows if r[2] != "legacy" and r[0] in cat.DRAFT_REPOS}
-        )
+        draft_ids = sorted({cat.DRAFT_REPOS[r[0]] for r in rows if r[0] in cat.DRAFT_REPOS})
         draft_infos: dict[str, Any] = (
             {}
             if offline
@@ -933,7 +942,7 @@ class Models:
             downloading `model` fetches (target + vision + draft), through the same
             `planned_files` as `/inspect`'s `download_plan`. The file set is Splash's
             own when `model` has been inspected, else estimated from the listing."""
-            draft_id = cat.DRAFT_REPOS.get(family) if kind != "legacy" else None
+            draft_id = cat.DRAFT_REPOS.get(family)
             draft = draft_infos.get(draft_id) if draft_id else None
             out: dict[str, int | None] = {}
             keys = ((False, "download_bytes"), (True, "language_only_download_bytes"))
@@ -953,7 +962,7 @@ class Models:
         families: list[CatalogFamily] = []
         for family in dict.fromkeys(row[0] for row in rows):
             groups = []
-            for fmt in ("mlx", "gguf", "legacy"):
+            for fmt in ("mlx", "gguf"):
                 entries = []
                 for (fam, repo, kind, notes, perf), info in zip(rows, infos, strict=True):
                     if fam != family or kind != fmt:
@@ -963,8 +972,6 @@ class Models:
                         refreshed = iso()
                     variants = facts.pop("variants", None)
                     facts.pop("recommended_variant", None)
-                    if kind == "legacy":
-                        facts.pop("vision", None)
                     # One rule, shared with /inspect (`cat.default_variant`).
                     default_variant = (
                         cat.default_variant(
@@ -1014,7 +1021,7 @@ class Models:
                             }
                         )
                     )
-                labels = {"mlx": "MLX 4-bit", "gguf": "GGUF", "legacy": "Splash package"}
+                labels = {"mlx": "MLX", "gguf": "GGUF"}
                 groups.append(CatalogGroup(format=fmt, label=labels[fmt], entries=entries))
             families.append(
                 CatalogFamily.model_validate(
@@ -1076,6 +1083,8 @@ def planned_files(
 def create(state: ManagerState) -> Models:
     service = Models(state)
     state.models = service
-    state.installed_models = lambda: frozenset(m.id for m in service.inventory().models)
+    state.installed_models = lambda: frozenset(
+        m.id for m in service.inventory().models if m.status != "unsupported"
+    )
     state.model_info = service.info
     return service

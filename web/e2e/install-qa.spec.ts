@@ -93,10 +93,10 @@ test('bug 3: the Downloader catalog sizes rows by download_bytes, and labels bar
   });
   await page.goto('/admin/models/downloader?tab=supported');
   const first = page.locator('.dlr-entry').nth(0);
-  await expect(first.locator('.dlr-entry-tags .label')).toHaveText('01 — MLX 4-bit · 19.9 GB');
+  await expect(first.locator('.dlr-entry-tags .label')).toHaveText('01 — MLX · 19.9 GB');
   await expect(first.getByRole('button', { name: 'Download · 19.9 GB' })).toBeVisible();
   const second = page.locator('.dlr-entry').nth(1);
-  await expect(second.locator('.dlr-entry-tags .label')).toHaveText('02 — MLX 4-bit · weights 21 GB');
+  await expect(second.locator('.dlr-entry-tags .label')).toHaveText('02 — MLX · weights 21 GB');
   await expect(second.getByRole('button', { name: 'Download', exact: true })).toBeVisible();
 });
 
@@ -118,7 +118,7 @@ test.describe('bug 4: engine install', () => {
       engine: INSTALLING,
       extra: (_method, path) => {
         if (path === '/downloads') return { json: { items: [] } };
-        if (path === '/models') return { json: { models: [{ id: MLX_27B, repo_id: MLX_27B, format: 'mlx', language_only: false, size_bytes: 1, unique_bytes: 1, pinned: false, legacy: false, status: 'loading' }], disk: {} } };
+        if (path === '/models') return { json: { models: [{ id: MLX_27B, repo_id: MLX_27B, format: 'mlx', language_only: false, size_bytes: 1, unique_bytes: 1, pinned: false, status: 'loading' }], disk: {} } };
         return undefined;
       },
     });

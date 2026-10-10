@@ -38,7 +38,7 @@ Splashboard is signed ad hoc and **not notarized**, so macOS blocks the first op
 
 ## Requirements
 - An Apple-silicon Mac with an **M3 or newer** and **macOS 26.4+** (Splash's own requirements).
-- [Homebrew](https://brew.sh) and the engine: `brew install incoai/tap/splash` (the welcome wizard can do this for you).
+- [Homebrew](https://brew.sh) and Splash 1.3.1 or a later 1.3 release: `brew install incoai/tap/splash` (the welcome wizard can do this for you; `brew upgrade incoai/tap/splash` updates an older engine).
 - For running from source: [`uv`](https://docs.astral.sh/uv/) (Python 3.12+), Node 22+ with [`pnpm`](https://pnpm.io) 11, and Xcode 27 / Swift 6 for the menu bar app.
 
 ## Quick start (from source)
@@ -83,12 +83,12 @@ agents ── /v1/* ─────────┘        settings · downloads 
 `make app` and `make dmg` build the self-contained app and its DMG; `.github/workflows/release.yml` builds and publishes a release from a `vX.Y.Z` tag, with Sparkle updates and a Homebrew cask.
 
 ## Built on Splash
-Splashboard is a front end for [**Splash**](https://github.com/incoai/splash), the local inference engine for Apple silicon by [inco.ai](https://inco.ai/blog/splash/). Splash does the inference, including its [DFlash 2](https://inco.ai/blog/dflash2/) speculative decoding, the model packaging and the agent launchers; Splashboard installs, configures, supervises and monitors it. Splash is Apache-2.0 and is installed separately from its own Homebrew tap (`incoai/tap/splash`). The test stand-in in `scripts/fake_splash/` contains code copied from Splash 1.3.0; [its NOTICE](scripts/fake_splash/NOTICE) lists the files.
+Splashboard is a front end for [**Splash**](https://github.com/incoai/splash), the local inference engine for Apple silicon by [inco.ai](https://inco.ai/blog/splash/). Splash does the inference, including its [DFlash 2](https://inco.ai/blog/dflash2/) speculative decoding, the model packaging and the agent launchers; Splashboard installs, configures, supervises and monitors it. Splash is Apache-2.0 and is installed separately from its own Homebrew tap (`incoai/tap/splash`). The test stand-in in `scripts/fake_splash/` contains code copied from Splash 1.3.1; [its NOTICE](scripts/fake_splash/NOTICE) lists the files.
 
 Splashboard is not an official inco.ai product and is not endorsed by inco.ai. Report engine problems to [Splash's issues](https://github.com/incoai/splash/issues), and problems with this app [here](https://github.com/arnavprabhu/splashboard/issues).
 
 ## Citing
-[`CITATION.cff`](CITATION.cff) cites Splashboard and, as a reference, Splash (inco.ai, version 1.3.0, <https://github.com/incoai/splash>). If you publish results measured with Splashboard, please cite Splash as the engine that produced them.
+[`CITATION.cff`](CITATION.cff) cites Splashboard and, as a reference, Splash (inco.ai, version 1.3.1, <https://github.com/incoai/splash>). If you publish results measured with Splashboard, please cite Splash as the engine that produced them.
 
 ## License
 [Apache-2.0](LICENSE). See [NOTICE](NOTICE). The Archivo font is under the SIL Open Font License (`web/src/assets/fonts/OFL.txt`). Splash is a separate project by its authors and is installed from its own Homebrew tap.

@@ -85,7 +85,7 @@ export const settingsApi = {
   saveProfiles: (model: string, body: { profiles?: Record<string, SamplingOverlay | null>; sampling_defaults?: SamplingOverlay }) =>
     api.put<ProfilesView>(`/models/${modelPath(model)}/profiles`, body),
   model: (model: string, signal?: AbortSignal) => api.get<ModelDetail>(`/models/${modelPath(model)}`, undefined, signal),
-  models: (signal?: AbortSignal) => api.get<{ models: Array<{ id: string; legacy?: boolean; status?: string }> }>('/models', undefined, signal),
+  models: (signal?: AbortSignal) => api.get<{ models: Array<{ id: string; status?: string }> }>('/models', undefined, signal),
 
   mcpServers: (signal?: AbortSignal) => api.get<{ servers: Record<string, McpServerView> }>('/mcp/servers', undefined, signal),
   saveMcpServers: (servers: Record<string, McpServerView>) => api.put<{ servers: Record<string, McpServerView> }>('/mcp/servers', { servers }),

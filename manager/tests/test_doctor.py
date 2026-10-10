@@ -141,6 +141,6 @@ def fake_brew(prefix: Path) -> str:
     brew.write_text(f"#!/bin/sh\n[ \"$1\" = shellenv ] && echo '{export}'\n")
     brew.chmod(0o755)
     engine = bin_dir / "splash"
-    engine.write_text("#!/bin/sh\necho 'Splash 1.3.0'\n")
+    engine.write_text("#!/bin/sh\necho 'Splash 1.3.1'\n")
     engine.chmod(0o755)
     return f'eval "$({prefix}/bin/brew shellenv)"\n'

@@ -196,7 +196,7 @@ def classify_error(text: str) -> EngineError | None:
         )
     if (
         "no supported model has this architecture" in lowered
-        or "requires an mlx affine 4-bit" in lowered
+        or "which splash no longer loads" in lowered
         or explain_refusal(text)[1] is not None
         or "stores tensors splash cannot load" in lowered
         or "unsupported gguf" in lowered

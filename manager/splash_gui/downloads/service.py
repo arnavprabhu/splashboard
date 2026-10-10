@@ -254,11 +254,7 @@ class Downloads:
                 if inspection.reason_detail
                 else None,
             )
-        if (
-            not body.language_only
-            and not inspection.vision.available
-            and inspection.format != "legacy"
-        ):
+        if not body.language_only and not inspection.vision.available:
             raise ApiError(
                 422,
                 inspection.vision.reason or "Use language-only for this model",

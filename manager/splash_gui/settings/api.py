@@ -354,7 +354,6 @@ def get_effective(state: State, model: Annotated[str | None, Query()] = None) ->
     }
     return EffectiveSettings(
         model=model,
-        legacy=p.is_legacy_package(model) if model else False,
         values=values,
         profiles=_profiles_out(doc, model) if model else [],
         sampling_defaults=sampling_defaults(doc, model) if model else {},

@@ -26,7 +26,7 @@ import { CompatTag, FitTag, type CompatState } from "./models/bits";
 import { DownloadsPanel } from "./models/DownloadsPanel";
 import { useDownloadsPoll, useDrawerParam, useInstalled, useModelsTitle } from "./models/hooks";
 import { ModelDrawer } from "./models/ModelDrawer";
-import { checkModelId, diskCheck, formatLabel, hfUrl, isClefId, isLegacyId, isProjector, inspectProgress, MAX_LAZY_CHECKS, pickVariant, projectorRow, shortName } from "./models/logic";
+import { checkModelId, diskCheck, formatLabel, hfUrl, isClefId, isProjector, inspectProgress, MAX_LAZY_CHECKS, pickVariant, projectorRow, shortName } from "./models/logic";
 import { VariantTable } from "./models/VariantTable";
 import { MODELS_TABS } from "./tabs";
 
@@ -327,7 +327,6 @@ function ById({ initial, free, memory, installedIds }: { initial: string; free: 
   const repo = result?.repo_id ?? id.split(":")[0] ?? "";
   const variants = (result?.variants ?? []).filter((x) => !isProjector(x.name));
   const chosen: VariantOut | undefined = variants.find((x) => x.name === variant);
-  const legacy = isLegacyId(repo) || result?.format === "legacy";
   // The manager's plan is for the requested/recommended variant; another pick falls back to its size.
   const lang = languageOnly || result?.badge === "text_only";
   const rawPlan = lang ? result?.language_only_plan : result?.download_plan;
@@ -404,25 +403,21 @@ function ById({ initial, free, memory, installedIds }: { initial: string; free: 
                   <VariantTable variants={variants} projector={projectorRow(result.vision)} selected={variant} onSelect={setVariant} pending={result.pending} caption={t("downloader.variant")} installed={installedIds} />
                 )}
                 <Disclosure summary={t("downloader.options")}>
-                  {legacy ? (
-                    <p class="meta">{t("downloader.legacy_disabled")}</p>
-                  ) : (
-                    <div class="stack">
-                      <label class="cluster">
-                        <span class="label">{t("downloader.revision")}</span>
-                        <TextInput class="mono" value={revision} placeholder="main" onChange={setRevision} />
-                      </label>
-                      <label class="cluster">
-                        <span class="label">{t("downloader.draft_override")}</span>
-                        <TextInput class="mono" value={draft} placeholder="auto" onChange={setDraft} />
-                      </label>
-                      <div class="cluster">
-                        <Toggle checked={languageOnly} disabled={result.badge === "text_only"} onChange={setLanguageOnly} label={t("downloader.language_only")} />
-                        <span class="label">{t("downloader.language_only")}</span>
-                        <span class="meta flag mono">--language-only</span>
-                      </div>
+                  <div class="stack">
+                    <label class="cluster">
+                      <span class="label">{t("downloader.revision")}</span>
+                      <TextInput class="mono" value={revision} placeholder="main" onChange={setRevision} />
+                    </label>
+                    <label class="cluster">
+                      <span class="label">{t("downloader.draft_override")}</span>
+                      <TextInput class="mono" value={draft} placeholder="auto" onChange={setDraft} />
+                    </label>
+                    <div class="cluster">
+                      <Toggle checked={languageOnly} disabled={result.badge === "text_only"} onChange={setLanguageOnly} label={t("downloader.language_only")} />
+                      <span class="label">{t("downloader.language_only")}</span>
+                      <span class="meta flag mono">--language-only</span>
                     </div>
-                  )}
+                  </div>
                 </Disclosure>
                 {result.badge === "text_only" && <p class="meta">{t("downloader.text_forced")}</p>}
                 {plan ? (
@@ -483,14 +478,9 @@ function ById({ initial, free, memory, installedIds }: { initial: string; free: 
 
 // ---------- Search ----------
 
-/**
- * A search hit's format is a guess from its name and tags (`format_guess`): "MLX 4-bit" only once the
- * check says Splash can load it (Splash takes MLX at 4-bit, group size 64 only); before, just "MLX".
- */
-export function searchFormat(guess: SearchResult["format_guess"], id: string, state: CompatState): string {
-  if (guess === "unknown") return DASH;
-  if (guess === "mlx" && state !== "compatible" && state !== "text_only") return t("downloader.format.mlx");
-  return formatLabel(guess, id);
+/** A search hit's format is a guess from its name and tags (`format_guess`). */
+export function searchFormat(guess: SearchResult["format_guess"], id: string): string {
+  return guess === "unknown" ? DASH : formatLabel(guess, id);
 }
 
 function SearchRow({ r, index, state, onVisible, onOpen }: { r: SearchResult; index: number; state: CompatState; onVisible: () => void; onOpen: () => void }) {
@@ -517,7 +507,7 @@ function SearchRow({ r, index, state, onVisible, onOpen }: { r: SearchResult; in
         <span class="cluster dlr-entry-tags">
           <CompatTag state={state} />
           <span class="label">
-            {String(index).padStart(2, "0")} — {searchFormat(r.format_guess, r.id, state)}
+            {String(index).padStart(2, "0")} — {searchFormat(r.format_guess, r.id)}
             {r.downloads != null ? ` · ${t("downloader.downloads_n", { n: formatCompact(r.downloads) })}` : ""}
           </span>
         </span>

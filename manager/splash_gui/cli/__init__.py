@@ -450,10 +450,10 @@ def manager_pid(paths: Paths) -> tuple[int | None, float | None]:
 
 
 def format_label(row: dict[str, Any] | None) -> str:
-    """The FORMAT column: `MLX 4b` (Splash serves only 4-bit MLX) or `GGUF`."""
+    """The FORMAT column: `MLX`, `GGUF`, or `Package` for an installed Splash package."""
     if not row:
         return DASH
-    return "MLX 4b" if row.get("format") == "mlx" else "GGUF"
+    return {"mlx": "MLX", "legacy": "Package"}.get(str(row.get("format")), "GGUF")
 
 
 STATE_LABELS = {
@@ -490,7 +490,11 @@ def snapshot(client: Client) -> dict[str, Any]:
 
 
 def most_recent(installed: list[dict[str, Any]]) -> str | None:
-    usable = [m for m in installed if m.get("status") not in ("downloading", "paused", "broken")]
+    usable = [
+        m
+        for m in installed
+        if m.get("status") not in ("downloading", "paused", "broken", "unsupported")
+    ]
     if not usable:
         return None
     ordered = sorted(usable, key=lambda m: m.get("last_used_at") or "", reverse=True)
@@ -638,7 +642,7 @@ def status_lines(data: dict[str, Any], style: Style) -> list[str]:
     state = e.get("state") or "stopped"
     if state in SERVING_STATES:
         details = [
-            {"mlx": "MLX 4-bit", "gguf": "GGUF"}.get(e.get("format") or ""),
+            {"mlx": "MLX", "gguf": "GGUF"}.get(e.get("format") or ""),
             e.get("variant") if e.get("format") == "gguf" else None,
             f"{fmt_tokens(e['max_context'])} context" if e.get("max_context") else None,
             "vision" if e.get("vision") else None,
@@ -770,6 +774,8 @@ def ls_status(model: dict[str, Any]) -> str:
         return "update available"
     if status == "broken":
         return "broken (re-verify)"
+    if status == "unsupported":
+        return "no longer loads"
     if status == "ready":
         return "pinned" if model.get("pinned") else ""
     return str(status or "")

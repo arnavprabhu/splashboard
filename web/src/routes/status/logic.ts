@@ -111,8 +111,8 @@ export function metaKeys(m: MetaInput): Array<'format' | 'context' | 'kv' | 'vis
 export function formatLabel(m: Pick<InstalledModel, 'format' | 'variant'> | null | undefined): string | null {
   if (!m) return null;
   if (m.format === 'gguf') return m.variant ? `GGUF ${m.variant}` : 'GGUF';
-  if (m.format === 'mlx') return 'MLX 4-bit';
-  if (m.format === 'legacy') return 'Legacy';
+  if (m.format === 'mlx') return 'MLX';
+  if (m.format === 'legacy') return 'Splash package';
   return null;
 }
 

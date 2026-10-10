@@ -4,7 +4,7 @@ test.describe('shell against the real manager', () => {
   test('nav shows the fake engine version and a stopped chip', async ({ page }) => {
     await page.goto('/admin/status');
     await expect(page.getByRole('navigation', { name: 'Main' })).toBeVisible();
-    await expect(page.locator('.navband').getByText('Splash 1.3.0')).toBeVisible();
+    await expect(page.locator('.navband').getByText('Splash 1.3.1')).toBeVisible();
     await expect(page.locator('.navband .chip')).toHaveAttribute('data-live', 'false');
   });
 

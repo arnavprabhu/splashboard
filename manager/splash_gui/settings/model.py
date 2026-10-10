@@ -1,7 +1,7 @@
 """The settings document as pydantic models.
 
 Single-field checks live here, mirroring Splash's parsers; checks that involve
-more than one field (and per-model legacy rules) live in `validation.py`.
+more than one field (and per-model rules) live in `validation.py`.
 """
 
 from __future__ import annotations

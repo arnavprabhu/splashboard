@@ -16,8 +16,6 @@ from .effective import get_path
 from .metadata import FIELDS, SECTIONS, FieldMeta
 from .model import GlobalSettings, ModelServeOverrides
 
-LEGACY_DISABLED = frozenset({"serve.revision", "serve.draft_model", "serve.language_only"})
-
 _DEFAULT_GLOBAL = GlobalSettings()
 _DEFAULT_MODEL = ModelServeOverrides()
 
@@ -187,7 +185,6 @@ def _field(meta: FieldMeta, options: dict[str, EngineOptionOut], default: Any) -
         storage=meta.storage,
         default=default,
         warnings=list(meta.warnings),
-        disabled_for_legacy=meta.key in LEGACY_DISABLED,
         engine=options.get(meta.engine_option) if meta.engine_option else None,
     )
 

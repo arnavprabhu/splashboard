@@ -124,8 +124,11 @@ def test_errors_are_classified() -> None:
         "error: cannot install a/b: no supported model has this architecture "
         "(hidden_size=4096); "
         "supported: Qwen3.8-27B, Qwen3.6-35B-A3B": "incompatible",
-        "error: this model requires an MLX affine 4-bit/group-64 checkpoint or "
-        "a supported GGUF": "incompatible",
+        "error: cannot install a/b: this model requires an MLX checkpoint (affine 2, 3, 4, 5, "
+        "6 or 8 bits in groups of 32, 64 or 128, or mxfp4) or a supported GGUF": "incompatible",
+        "error: incoai/Qwen3.8-27B-Splash is a Splash package, which Splash no longer loads; "
+        "serve the MLX model of its family instead: splash serve --model "
+        "mlx-community/Qwen3.8-27B-4bit": "incompatible",
         "error: Splash is already serving (PID 1, model m, port 8000); "
         "stop it with Ctrl+C first": "port_in_use",
         "error: cannot install a/b: 404 Client Error. Repository Not Found": "unknown_model",
@@ -135,16 +138,20 @@ def test_errors_are_classified() -> None:
         events = StartupParser().feed(line)
         assert len(events) == 1 and isinstance(events[0], ErrorEvent), line
         assert events[0].error.kind == kind, (line, events[0].error)
-    eight_bit = (
-        "error: cannot install a/b: quantization language_model.model.embed_tokens "
-        "bits mismatch: MLX 8, runtime 4"
+    seven_bit = (
+        "error: cannot install a/b: quantization language_model.model.embed_tokens is affine "
+        "7-bit in groups of 64; MLX weights load as affine 2, 3, 4, 5, 6 or 8 bits in groups "
+        "of 32, 64 or 128, or as mxfp4"
     )
-    refused = StartupParser().feed(eight_bit)[0]
+    refused = StartupParser().feed(seven_bit)[0]
     assert isinstance(refused, ErrorEvent)
     # The plain line leads; the engine's words stay in `raw`.
     assert refused.error.kind == "incompatible"
-    assert refused.error.message == "Splash runs MLX models only at 4-bit, group size 64."
-    assert refused.error.raw == [eight_bit]
+    assert refused.error.message == (
+        "Splash runs MLX models quantized as affine 2, 3, 4, 5, 6 or 8 bits "
+        "(groups of 32, 64 or 128) or as mxfp4."
+    )
+    assert refused.error.raw == [seven_bit]
     gated_error = StartupParser().feed(gated)[0]
     assert isinstance(gated_error, ErrorEvent)
     assert gated_error.error.message == "This model requires a Hugging Face token"

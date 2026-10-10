@@ -2967,8 +2967,6 @@ export interface components {
         EffectiveSettings: {
             /** Model */
             model: string | null;
-            /** Legacy */
-            legacy: boolean;
             /** Values */
             values: {
                 [key: string]: components["schemas"]["EffectiveValueOut"];
@@ -3538,18 +3536,15 @@ export interface components {
              * @default false
              */
             pinned: boolean;
-            /**
-             * Legacy
-             * @default false
-             */
-            legacy: boolean;
+            /** Notice */
+            notice?: string | null;
             /** Last Used At */
             last_used_at?: string | null;
             /**
              * Status
              * @enum {string}
              */
-            status: "active" | "loading" | "ready" | "downloading" | "paused" | "verifying" | "update_available" | "broken";
+            status: "active" | "loading" | "ready" | "downloading" | "paused" | "verifying" | "update_available" | "broken" | "unsupported";
             /** Progress */
             progress?: number | null;
             draft?: components["schemas"]["DraftRef"] | null;
@@ -4080,18 +4075,15 @@ export interface components {
              * @default false
              */
             pinned: boolean;
-            /**
-             * Legacy
-             * @default false
-             */
-            legacy: boolean;
+            /** Notice */
+            notice?: string | null;
             /** Last Used At */
             last_used_at?: string | null;
             /**
              * Status
              * @enum {string}
              */
-            status: "active" | "loading" | "ready" | "downloading" | "paused" | "verifying" | "update_available" | "broken";
+            status: "active" | "loading" | "ready" | "downloading" | "paused" | "verifying" | "update_available" | "broken" | "unsupported";
             /** Progress */
             progress?: number | null;
             draft?: components["schemas"]["DraftRef"] | null;
@@ -4594,11 +4586,6 @@ export interface components {
             default?: unknown;
             /** Warnings */
             warnings?: string[];
-            /**
-             * Disabled For Legacy
-             * @default false
-             */
-            disabled_for_legacy: boolean;
             engine?: components["schemas"]["EngineOptionOut"] | null;
         };
         /** SchemaSection */

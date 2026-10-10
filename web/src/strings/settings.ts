@@ -338,7 +338,6 @@ export const settingsStrings = {
   "settings.about.thing_system": "this Mac",
   // per-model settings
   "settings.model.subtitle": "Settings for this model",
-  "settings.legacy": "Not available for legacy Splash packages.",
   "settings.model.back": "← Models",
   "settings.model.sections": "Model settings sections",
   "settings.model.section.overrides": "Engine overrides",

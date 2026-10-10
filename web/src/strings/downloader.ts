@@ -54,7 +54,6 @@ export const downloaderStrings = {
   "downloader.revision": "Revision",
   "downloader.draft_override": "Draft override",
   "downloader.language_only": "Language-only",
-  "downloader.legacy_disabled": "Not available for legacy Splash packages.",
   "downloader.size": "Size {size}",
   "downloader.plan_present": "already on disk",
   "downloader.plan_line": "{remaining} to download of {total} · {free} free",

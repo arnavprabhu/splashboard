@@ -5,7 +5,7 @@ import { CHAT, INTEGRATIONS, MCP_SERVERS, SETTINGS, V1_MODELS, mockManager } fro
 
 const READY = { state: 'ready', model: CHAT.model, engine: { found: true, version: '1.2.0', support: 'supported' }, maximum_context_tokens: 262144, requests_in_flight: 0 };
 const field = (key: string, section: string, control: string, extra: Record<string, unknown> = {}) => ({
-  key, label: key, help: '', section, control, applies: 'live', scope: 'G', flag: null, advanced: false, storage: 'settings', default: null, disabled_for_legacy: false, ...extra,
+  key, label: key, help: '', section, control, applies: 'live', scope: 'G', flag: null, advanced: false, storage: 'settings', default: null, ...extra,
 });
 const SCHEMA = {
   sections: [],

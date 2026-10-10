@@ -23,7 +23,12 @@ GGUF_35B = "unsloth/Qwen3.6-35B-A3B-GGUF"
 GGUF_27B = "prism-ml/Ternary-Bonsai-2-27B-gguf"
 MLX_35B = "mlx-community/Qwen3.6-35B-A3B-4bit"
 MLX_8BIT = "mlx-community/Qwen3.6-35B-A3B-8bit"
+MLX_7BIT = "mlx-community/Qwen3.6-35B-A3B-7bit"
 LEGACY = "incoai/Qwen3.6-35B-A3B-Splash"
+PLAIN_MLX = (
+    "Splash runs MLX models quantized as affine 2, 3, 4, 5, 6 or 8 bits "
+    "(groups of 32, 64 or 128) or as mxfp4."
+)
 
 
 def hub_module() -> Any:
@@ -88,30 +93,36 @@ def test_mlx_repo_is_compatible_with_a_draft(hub_harness):
     assert result["draft"] == "incoai/Qwen3.6-35B-A3B-DFlash2"
 
 
-def test_8bit_mlx_is_rejected_with_the_reason(hub_harness):
-    """Splash only has kernels for affine 4-bit group 64, so this must not be
-    offered as downloadable."""
+def test_8bit_mlx_is_compatible(hub_harness):
+    """Splash 1.3.1 loads MLX checkpoints at 2, 3, 4, 5, 6 and 8 bits."""
+    result = inspect(hub_harness(), MLX_8BIT)
+    assert result["compatible"] is True and result["format"] == "mlx"
+    assert result["family"] == "Qwen3.6-35B-A3B"
+
+
+def test_7bit_mlx_is_rejected_with_the_reason(hub_harness):
+    """Splash has no kernels for affine 7-bit, so this must not be offered as
+    downloadable."""
     harness = hub_harness()
-    result = inspect(harness, MLX_8BIT)
+    result = inspect(harness, MLX_7BIT)
     assert result["compatible"] is False
     assert result["badge"] == "incompatible"
     # A plain line first; the engine's model-check wording stays as the detail.
-    assert result["reason"] == "Splash runs MLX models only at 4-bit, group size 64."
-    assert result["reason_detail"].endswith("bits mismatch: MLX 8, runtime 4")
+    assert result["reason"] == PLAIN_MLX
+    detail = result["reason_detail"]
+    assert "quantization is affine 7-bit in groups of 64; MLX weights load as" in detail
 
 
 def test_a_refused_mlx_download_leads_with_the_plain_line(hub_harness):
-    """POST /downloads refuses the 8-bit checkpoint with the plain line, then
+    """POST /downloads refuses the 7-bit checkpoint with the plain line, then
     Splash's own words, so the CLI and web toasts show both."""
     harness = hub_harness()
-    response = harness.client.post("/api/admin/downloads", json={"id": MLX_8BIT})
+    response = harness.client.post("/api/admin/downloads", json={"id": MLX_7BIT})
     assert response.status_code == 422, response.text
     error = response.json()["error"]
     assert error["code"] == "incompatible"
-    assert error["message"].startswith(
-        "Splash runs MLX models only at 4-bit, group size 64. Splash's check: quantization "
-    )
-    assert error["details"]["reason_detail"].endswith("bits mismatch: MLX 8, runtime 4")
+    assert error["message"].startswith(f"{PLAIN_MLX} Splash's check: quantization is affine 7-bit")
+    assert "MLX weights load as" in error["details"]["reason_detail"]
 
 
 def test_the_dense_family_is_distinguished_from_the_moe(hub_harness):
@@ -122,12 +133,14 @@ def test_the_dense_family_is_distinguished_from_the_moe(hub_harness):
     assert inspect(harness, MODEL_27B)["family"] == "Qwen3.8-27B"
 
 
-def test_legacy_package_is_compatible_and_reports_the_legacy_format(hub_harness):
-    harness = hub_harness()
-    result = inspect(harness, LEGACY)
-    assert result["compatible"] is True
-    assert result["format"] == "legacy"
-    assert result["family"] == "Qwen3.6-35B-A3B"
+def test_a_splash_package_is_refused_with_its_mlx_model(hub_harness):
+    """Splash 1.3.1 no longer loads Splash packages; its refusal names the MLX model."""
+    result = inspect(hub_harness(), LEGACY)
+    assert result["compatible"] is False and result["badge"] == "incompatible"
+    assert result["reason"] == (
+        f"{LEGACY} is a Splash package, which Splash no longer loads; serve the MLX model of "
+        "its family instead: splash serve --model mlx-community/Qwen3.6-35B-A3B-4bit"
+    )
 
 
 def test_variant_table_reports_loadability_and_a_recommendation(hub_harness):
@@ -223,7 +236,7 @@ def test_catalog_is_grouped_by_family_and_format(hub_harness):
             ids = [entry["id"] for entry in group["entries"]]
             assert ids
             assert all("/" in repo_id for repo_id in ids), "Full Hugging Face IDs only"
-            assert all(entry["format"] in ("mlx", "gguf", "legacy") for entry in group["entries"])
+            assert all(entry["format"] in ("mlx", "gguf") for entry in group["entries"])
 
 
 def test_model_card_comes_from_the_hub(hub_harness):
@@ -297,7 +310,7 @@ def test_the_helper_subprocess_really_runs_the_engines_modules(hub_harness):
     """Assert the fake engine's screening did the work rather than the manager
     guessing: a variant it cannot load comes back with the engine's own reason."""
     harness = hub_harness()
-    result = inspect(harness, MLX_8BIT)
+    result = inspect(harness, MLX_7BIT)
     assert result["reason"]
     assert result["family"] is None, "an unreadable quantization yields no family"
 
@@ -321,8 +334,8 @@ def test_engine_discovery_exposes_what_the_helper_needs(hub_harness):
 
 
 def test_acceptance_search_verdicts(hub_harness):
-    """HF search marks `mlx-community/Qwen3.8-27B-8bit` incompatible with
-    the reason, and `unsloth/Qwen3.8-27B-GGUF` compatible with a recommended
+    """HF search finds `mlx-community/Qwen3.8-27B-8bit` compatible (Splash 1.3.1
+    loads 8-bit MLX), and `unsloth/Qwen3.8-27B-GGUF` compatible with a recommended
     variant (on the user's 64 GB Mac)."""
     harness = hub_harness()
     harness.state.memory_bytes = lambda: 64 * 1024**3
@@ -332,10 +345,8 @@ def test_acceptance_search_verdicts(hub_harness):
     assert ids["unsloth/Qwen3.8-27B-GGUF"]["format_guess"] == "gguf"
 
     eight = inspect(harness, "mlx-community/Qwen3.8-27B-8bit")
-    assert eight["compatible"] is False and eight["badge"] == "incompatible"
-    assert eight["family"] in (None, "Qwen3.8-27B")
-    assert eight["reason"] == "Splash runs MLX models only at 4-bit, group size 64."
-    assert "bits mismatch: MLX 8" in eight["reason_detail"], eight["reason_detail"]
+    assert eight["compatible"] is True and eight["badge"] == "compatible", eight
+    assert eight["family"] == "Qwen3.8-27B"
 
     gguf = inspect(harness, "unsloth/Qwen3.8-27B-GGUF")
     assert gguf["compatible"] is True and gguf["family"] == "Qwen3.8-27B"

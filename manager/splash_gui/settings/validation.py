@@ -15,8 +15,9 @@ from .model import SettingsDocument
 
 Severity = Literal["error", "warning"]
 
-# One state's size: below it Splash disables the SSD tier.
-MIN_USEFUL_CACHE_DISK = {"Qwen3.6-35B-A3B": 109 * 1024**2, "Qwen3.8-27B": 187 * 1024**2}
+# One state's size: below it Splash disables the SSD tier (splash/DEVELOPMENT.md
+# "--max-cache-disk", 1.3.1).
+MIN_USEFUL_CACHE_DISK = {"Qwen3.6-35B-A3B": 64 * 1024**2, "Qwen3.8-27B": 153 * 1024**2}
 
 # Flags the GUI sets itself; `engine.extra_flags` may not repeat them.
 MANAGED_FLAGS = frozenset(
@@ -157,7 +158,7 @@ def cross_field_issues(doc: SettingsDocument, context: ValidationContext) -> Ite
     if 0 < cache_bytes < max(MIN_USEFUL_CACHE_DISK.values()):
         yield Issue(
             ("global", "serve", "max_cache_disk"),
-            "Below about one state's size (109 MiB for 35B, 187 MiB for 27B) Splash "
+            "Below about one state's size (64 MiB for 35B, 153 MiB for 27B) Splash "
             "disables the SSD tier",
             severity="warning",
             code="too_small",
@@ -261,7 +262,6 @@ def cross_field_issues(doc: SettingsDocument, context: ValidationContext) -> Ite
 
 
 def _model_issues(doc: SettingsDocument, model_id: str) -> Iterable[Issue]:
-    entry = doc.models[model_id]
     values = effective_values(doc, model_id)
     base = ("models", model_id, "serve")
     if values["serve.announce_served_name"].value and not values["serve.served_model_names"].value:
@@ -270,19 +270,8 @@ def _model_issues(doc: SettingsDocument, model_id: str) -> Iterable[Issue]:
             "--announce-served-name needs --served-model-name",
             code="requires",
         )
-    if p.is_legacy_package(model_id):
-        _, variant = p.split_model_id(model_id)
-        if variant is not None:
-            yield Issue(
-                ("models", model_id),
-                "this runtime package has no variants; drop the :VARIANT suffix",
-                code="legacy",
-            )
-        for name in ("revision", "draft_model", "language_only"):
-            if name in entry.serve.model_fields_set and getattr(entry.serve, name):
-                yield Issue(
-                    (*base, name), "Not available for legacy Splash packages", code="legacy"
-                )
+    if refusal := p.package_refusal(model_id):
+        yield Issue(("models", model_id), refusal, severity="warning", code="package")
     if values["serve.kv_format"].source == "model" and values["serve.kv_format"].value == "bf16":
         yield Issue(
             (*base, "kv_format"),

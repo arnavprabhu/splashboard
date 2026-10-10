@@ -288,7 +288,7 @@ def test_stop_sequence_escalates_to_sigkill(
         found=True,
         cli=stubborn,
         source="setting",
-        version="1.3.0",
+        version="1.3.1",
         version_tuple=(1, 3, 0),
         support="supported",
     )
@@ -324,7 +324,7 @@ def test_startup_failure_is_failed_not_a_restart_loop(
         found=True,
         cli=broken,
         source="setting",
-        version="1.3.0",
+        version="1.3.1",
         version_tuple=(1, 3, 0),
         support="supported",
     )
@@ -506,7 +506,12 @@ def test_raw_status_passes_ane_ffn_and_weights_through(
         "ane_ms": 1258.4,
         "evaluations": 64,
     }
-    assert raw["weights"] == {"idle_release_seconds": 600.0, "released": False, "restores": 0}
+    assert raw["weights"] == {
+        "idle_release_seconds": 600.0,
+        "released": False,
+        "restores": 0,
+        "restore_failures": 0,
+    }
     assert raw["memory_plan"]["budget"]["ane_ffn_bytes"] == 229_703_680
 
 

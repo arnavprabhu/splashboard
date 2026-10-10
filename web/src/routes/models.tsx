@@ -433,7 +433,6 @@ function placeholder(id: string): InstalledModel {
     size_bytes: 0,
     unique_bytes: 0,
     pinned: false,
-    legacy: false,
     status: "active",
   } as InstalledModel;
 }

@@ -21,7 +21,7 @@ from .fakeengine import MODEL, MODEL_27B
 GGUF = "unsloth/Qwen3.6-35B-A3B-GGUF"
 GGUF_27B = "prism-ml/Ternary-Bonsai-2-27B-gguf"
 MLX = "mlx-community/Qwen3.6-35B-A3B-4bit"
-MLX_8BIT = "mlx-community/Qwen3.6-35B-A3B-8bit"
+MLX_7BIT = "mlx-community/Qwen3.6-35B-A3B-7bit"
 GGUF_NO_VISION = "unsloth/Qwen3.6-35B-A3B-GGUF-textonly"
 
 # Slow enough to pause and cancel mid-file, fast enough for a test suite.
@@ -483,7 +483,7 @@ def test_a_failed_download_raises_an_alert(hub_harness):
 def test_an_incompatible_model_is_refused_before_any_download(hub_harness):
     """Compatibility is checked before download, so nothing is fetched."""
     harness = hub_harness()
-    response = harness.client.post("/api/admin/downloads", json={"id": MLX_8BIT})
+    response = harness.client.post("/api/admin/downloads", json={"id": MLX_7BIT})
     assert response.status_code == 422, response.text
     body = response.json()["error"]
     assert body["code"] == "incompatible"

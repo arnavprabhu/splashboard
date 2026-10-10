@@ -76,6 +76,45 @@ class ModelError(RuntimeError):
     pass
 
 
+# --- From splash/install/models.py (1.3.1) ----------------------------------
+# Splash packages, the prebuilt format that predated upstream loading, are no
+# longer loaded: each package format names the MLX model of its family.
+PACKAGE_REPLACEMENTS = {
+    "splash-packed-q4": "mlx-community/Qwen3.8-27B-4bit",
+    "splash-packed-q4-moe": "mlx-community/Qwen3.6-35B-A3B-4bit",
+}
+# The fake installer never reads the Hub, so a package is known by its name.
+SPLASH_PACKAGE = re.compile(r"incoai/[A-Za-z0-9._-]+-Splash")
+
+
+def refuse_package(model, manifest, link=None):
+    """Raise for a Splash package, whose manifest.json names a package format,
+    with the MLX model to serve instead; another tool's manifest.json passes.
+    For a package an earlier release installed at link, a link to its Hub
+    snapshot, the message names the Hub cache folder holding its files, which
+    nothing reads any more."""
+    format_ = manifest.get("format") if isinstance(manifest, dict) else None
+    name = format_.get("name") if isinstance(format_, dict) else None
+    if name in PACKAGE_REPLACEMENTS:
+        snapshot = link.resolve() if link is not None and link.is_symlink() else None
+        files = ""
+        if snapshot and snapshot.parent.name == "snapshots":
+            folder = snapshot.parent.parent
+            if folder.name.startswith("models--"):
+                files = f" (its files in {folder} can be deleted)"
+        raise ModelError(
+            f"{model} is a Splash package, which Splash no longer loads{files}; "
+            f"serve the MLX model of its family instead: splash serve --model "
+            f"{PACKAGE_REPLACEMENTS[name]}"
+        )
+
+
+def package_manifest(repo_id: str) -> dict:
+    """The manifest.json a fake Splash package publishes."""
+    moe = "35b-a3b" in repo_id.lower()
+    return {"format": {"name": "splash-packed-q4-moe" if moe else "splash-packed-q4"}}
+
+
 def warn(message: str) -> None:
     print(f"Warning: {message}", file=sys.stderr, flush=True)
 
@@ -658,7 +697,10 @@ def prepare(selection: Selection) -> None:
     mode = os.environ.get("FAKE_SPLASH_DL_FAIL", "")
     offline = os.environ.get("HF_HUB_OFFLINE", "") not in ("", "0", "false", "False")
     installed = None
-    if installation_kind(selection.link) == ASSEMBLY:
+    kind = installation_kind(selection.link)
+    if kind == PACKAGE:
+        refuse_package(selection.model, read_json(selection.link / "manifest.json"), selection.link)
+    if kind == ASSEMBLY:
         try:
             installed = verify_assembly(selection.link)
         except (ModelError, OSError) as error:
@@ -688,6 +730,8 @@ def prepare(selection: Selection) -> None:
         )
         return
 
+    if installed is None and SPLASH_PACKAGE.fullmatch(selection.repo_id):
+        refuse_package(selection.model, package_manifest(selection.repo_id))
     family = family_of(selection.repo_id)
     context = f"cannot install {selection.model}"
     if family is None:
@@ -778,7 +822,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "prepare":
             prepare(selection)
         else:
-            if installation_kind(selection.link) != ASSEMBLY:
+            kind = installation_kind(selection.link)
+            if kind == PACKAGE:
+                refuse_package(args.model, read_json(selection.link / "manifest.json"), selection.link)
+            if kind != ASSEMBLY:
                 raise ModelError(f"{args.model} is not installed in {args.models}")
             if os.environ.get("FAKE_SPLASH_VERIFY_FAIL"):
                 raise ModelError("source content hash mismatch: " + selection.link.name)

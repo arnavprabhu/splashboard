@@ -153,6 +153,15 @@ struct ConfigTests {
         #expect(UsageToday(json: ["prompt_tokens": 10, "completion_tokens": 5]).totalTokens == 15)
     }
 
+    @Test func aSplashPackageSplashNoLongerLoadsIsListedButNotLoadable() {
+        let list = InstalledModel.list(json: ["models": [
+            ["id": "incoai/Qwen3.8-27B-Splash", "format": "legacy", "status": "unsupported"],
+        ]])
+        #expect(!list[0].isLoadable)
+        #expect(list[0].statusLabel == "No longer loads")
+        #expect(list[0].formatLabel == "Splash package")
+    }
+
     @Test func gpuExtraction() {
         #expect(IOKitGPUSampler.extract(from: ["PerformanceStatistics": ["Device Utilization %": NSNumber(value: 37)]]) == 37)
         #expect(IOKitGPUSampler.extract(from: ["PerformanceStatistics": ["Other": 1]]) == nil)

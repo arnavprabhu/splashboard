@@ -2,7 +2,7 @@
 
 Each function reproduces the logic and error message of its counterpart in
 splash/server/serve_options.py, server/origins.py, server/frontend.py and
-install/models.py at tag 1.3.0, so the GUI refuses exactly what Splash refuses.
+install/models.py at tag 1.3.1, so the GUI refuses exactly what Splash refuses.
 The parity test runs both under Splash's bundled Python when it is installed.
 Functions raise `ValueError` where Splash raises `argparse.ArgumentTypeError`.
 """
@@ -328,15 +328,28 @@ def is_commit(value: str | None) -> bool:
     return value is not None and re.fullmatch(r"[0-9a-fA-F]{40}", value) is not None
 
 
-LEGACY_PACKAGE = re.compile(r"incoai/[A-Za-z0-9._-]+-Splash")
+SPLASH_PACKAGE = re.compile(r"incoai/[A-Za-z0-9._-]+-Splash")
+# The MLX model that loads the same weights as each family's Splash package
+# (install/models.py `PACKAGE_REPLACEMENTS`).
+PACKAGE_REPLACEMENTS = {
+    "Qwen3.8-27B": "mlx-community/Qwen3.8-27B-4bit",
+    "Qwen3.6-35B-A3B": "mlx-community/Qwen3.6-35B-A3B-4bit",
+}
 
 
-def is_legacy_package(model_id: str) -> bool:
-    """Legacy Splash packages (`incoai/*-Splash`): no variant, revision,
-    language-only or draft. Splash itself decides from the repo's manifest.json;
-    the official catalog lists only these two names."""
+def package_refusal(model_id: str) -> str | None:
+    """Why Splash refuses a Splash package (`incoai/*-Splash`, the prebuilt format
+    that predated upstream loading), in Splash's words (install/models.py
+    `refuse_package`); None for any other model. Splash decides from the repo's
+    manifest.json; these names are the official packages and their community kin."""
     repo_id = model_id.partition(VARIANT_SEPARATOR)[0]
-    return LEGACY_PACKAGE.fullmatch(repo_id) is not None
+    if SPLASH_PACKAGE.fullmatch(repo_id) is None:
+        return None
+    family = "Qwen3.6-35B-A3B" if "35b-a3b" in repo_id.lower() else "Qwen3.8-27B"
+    return (
+        f"{repo_id} is a Splash package, which Splash no longer loads; serve the MLX model "
+        f"of its family instead: splash serve --model {PACKAGE_REPLACEMENTS[family]}"
+    )
 
 
 # Bind addresses -------------------------------------------------------------

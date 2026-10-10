@@ -357,18 +357,14 @@ def test_gguf_model_id_passes_through(paths: Paths) -> None:
     assert extra(spec, GGUF) == []
 
 
-def test_legacy_package_minimal(paths: Paths) -> None:
-    assert extra(launch(paths, model=LEGACY), LEGACY) == []
-
-
-def test_legacy_package_refuses_source_options() -> None:
+def test_a_splash_package_is_refused_before_launch() -> None:
+    """Splash 1.3.1 no longer loads Splash packages: the launch says so with the MLX model
+    to serve instead, in Splash's words, before the engine starts."""
     from splash_gui.engine.flags import serve_flags
     from splash_gui.settings.effective import effective_serve
 
-    raw = SettingsDocument().to_json_dict()
-    raw["models"][LEGACY] = {"serve": {"language_only": True}}
-    doc = SettingsDocument.model_validate(raw)  # bypasses cross-field validation on purpose
-    with pytest.raises(LaunchError, match="legacy"):
+    doc = SettingsDocument()
+    with pytest.raises(LaunchError, match=r"mlx-community/Qwen3\.8-27B-4bit"):
         serve_flags(effective_serve(doc, LEGACY), cache_dir=Path("/c"))
 
 
@@ -390,7 +386,7 @@ def test_display_is_shell_quoted(paths: Paths) -> None:
     assert text.endswith(f"--model {MLX} --port {PORT} --host 127.0.0.1 --no-webui")
 
 
-@pytest.mark.skipif(not HAVE_SPLASH, reason="Splash 1.3.0 is not installed via Homebrew")
+@pytest.mark.skipif(not HAVE_SPLASH, reason="Splash is not installed via Homebrew")
 def test_splash_launcher_accepts_our_argv(paths: Paths, tmp_path: Path) -> None:
     """Splash's own launcher parser reads the generated command as intended."""
     spec = launch(

@@ -86,9 +86,9 @@ export function brewStatus(brew: BrewInfo | null): CheckStatus {
   return brew.installed ? 'ok' : 'fail';
 }
 
-/** The lowest supported Splash version from the manager's `supported_range` (">=1.3.0 <1.4.0" → "1.3.0"). */
+/** The lowest supported Splash version from the manager's `supported_range` (">=1.3.1 <1.4.0" → "1.3.1"). */
 export function minimumEngine(range: string | null | undefined): string {
-  return /^\s*>=\s*(\d+\.\d+\.\d+)/.exec(range ?? '')?.[1] ?? '1.3.0';
+  return /^\s*>=\s*(\d+\.\d+\.\d+)/.exec(range ?? '')?.[1] ?? '1.3.1';
 }
 
 /** Splash: found and in the manager's supported range; newer minor = warning; older = blocking. */
@@ -302,7 +302,6 @@ export function downloadBytesOf(hit: CatalogHit | null, model: string, languageO
 function guessFormat(model: string): ModelRow['format'] {
   if (/:PQ2/i.test(model)) return 'pq2';
   if (/gguf/i.test(model)) return 'gguf';
-  if (/-Splash$/.test(splitModelId(model).repo)) return 'legacy';
   return 'mlx';
 }
 

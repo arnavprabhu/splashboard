@@ -2,9 +2,6 @@
 
 The seed lists repositories only; sizes, licenses, vision and the GGUF variant
 table come from the Hub at runtime (`HfClient.repo_info`, cached for a day).
-Splash's own official list (`install/completions/official-models.txt` in the
-package, refreshed into `<Splash data>/catalog/official-models.txt`,
-`install/catalog.py`) is merged in so a new official package appears by itself.
 
 The memory estimate:
 `target + draft (~0.7 GB) + vision (~0.9 GB unless language-only) + KV runway
@@ -51,13 +48,6 @@ SEED: list[tuple[str, str, str, str, str | None]] = [
         None,
     ),
     (
-        "Qwen3.8-27B",
-        "incoai/Qwen3.8-27B-Splash",
-        "legacy",
-        "Official catalog. No variant, revision or language-only.",
-        None,
-    ),
-    (
         "Qwen3.6-35B-A3B",
         "mlx-community/Qwen3.6-35B-A3B-4bit",
         "mlx",
@@ -70,13 +60,6 @@ SEED: list[tuple[str, str, str, str, str | None]] = [
         "gguf",
         "Recommended: UD-Q4_K_M (≥ 36 GB), UD-Q2_K_XL (24 GB, 256K context).",
         "UD-Q4_K_M ≈175 tok/s on an M5 Pro; UD-Q2_K_XL ≈145 tok/s on a 24 GB M6",
-    ),
-    (
-        "Qwen3.6-35B-A3B",
-        "incoai/Qwen3.6-35B-A3B-Splash",
-        "legacy",
-        "Official catalog.",
-        None,
     ),
 ]
 
@@ -154,33 +137,13 @@ def within_ceiling(name: str, size: int | None, ceiling: int | None) -> bool:
 
 
 def family_guess(repo_id: str) -> str | None:
-    """For grouping an official package only; support is decided by the config."""
+    """A guess from the name, for grouping only; support is decided by the config."""
     name = repo_id.lower()
     if "35b-a3b" in name:
         return "Qwen3.6-35B-A3B"
     if "27b" in name:
         return "Qwen3.8-27B"
     return None
-
-
-def official_ids(pkg: Path | None, data_dir: Path) -> list[str]:
-    """Splash's official package list: the bundled seed plus its refreshed cache."""
-    out: list[str] = []
-    for path in (
-        pkg / "install" / "completions" / "official-models.txt" if pkg else None,
-        data_dir / "catalog" / "official-models.txt",
-    ):
-        if path is None:
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        for line in text.splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "/" in line and line not in out:
-                out.append(line)
-    return out
 
 
 # The KV cache's geometry per family: (full-attention layers, KV heads, head dimension).
@@ -286,12 +249,15 @@ def gguf_variants(repo_id: str, files: dict[str, int | None]) -> list[Variant]:
 
 
 def projector(files: dict[str, int | None]) -> str | None:
-    """The vision projector Splash would take: BF16 preferred, F32 accepted, F16
-    refused (install/upstream.py `select_vision`; Splash reads the headers, this
-    goes by name)."""
+    """The vision projector Splash would take: BF16, F32 or F16, preferred in that
+    order (install/upstream.py `select_vision`; Splash reads the headers, this goes
+    by name)."""
     names = [f for f in files if "/" not in f and f.lower().endswith(".gguf") and is_projector(f)]
-    for kind in ("BF16", "F32"):
-        hit = next((f for f in names if kind in f.upper()), None)
+    for kind in ("BF16", "F32", "F16"):
+        hit = next(
+            (f for f in names if kind in f.upper() and (kind != "F16" or "BF16" not in f.upper())),
+            None,
+        )
         if hit:
             return hit
     return None
@@ -348,6 +314,12 @@ TOKENIZER_FILES = (
 )
 
 
+# Where an MLX repository keeps its image processor's configuration: a file of its
+# own, or processor_config.json, where newer Transformers releases save it
+# (splash/install/upstream.py `PROCESSOR_FILES`).
+PROCESSOR_FILES = ("preprocessor_config.json", "processor_config.json")
+
+
 def selected_files(
     fmt: str, files: dict[str, int | None], variant_files: list[str] | None, *, language_only: bool
 ) -> list[str]:
@@ -357,10 +329,7 @@ def selected_files(
       processor config unless language-only, the shard index and every root shard
       (language-only still fetches every shard holding a tensor);
     - GGUF (`_gguf_target`, :140-164): the variant's files, plus the projector unless
-      language-only (`variant_files` carries it last when there is one);
-    - legacy package: every file, as the compatibility helper lists it."""
-    if fmt == "legacy":
-        return list(files)
+      language-only (`variant_files` carries it last when there is one)."""
     if fmt == "gguf":
         chosen = list(variant_files or [])
         if language_only:
@@ -368,7 +337,7 @@ def selected_files(
         return chosen
     wanted = {"config.json", "model.safetensors.index.json", *TOKENIZER_FILES}
     if not language_only:
-        wanted.add("preprocessor_config.json")
+        wanted.update(PROCESSOR_FILES)
     return [
         name
         for name in files
@@ -377,7 +346,7 @@ def selected_files(
 
 
 def weights_bytes(files: dict[str, int | None]) -> int:
-    """An MLX/legacy repository's download: weights plus config and tokenizer files."""
+    """An MLX repository's download: weights plus config and tokenizer files."""
     return sum(size or 0 for name, size in files.items() if not name.lower().endswith(".md"))
 
 
@@ -419,7 +388,7 @@ def entry_facts(repo_id: str, fmt: str, info: Any, memory: int) -> dict[str, Any
             facts["recommended_variant"] = picked.name if picked else None
         return facts
     size = weights_bytes(files)
-    vision = "preprocessor_config.json" in files
+    vision = any(name in files for name in PROCESSOR_FILES)
     facts.update(
         size_bytes=size,
         vision=vision,

@@ -173,7 +173,7 @@ test.describe('settings', () => {
   const SCHEMA = {
     sections: [],
     fields: [
-      { key: 'server.port', label: 'Port', help: 'Where the API listens.', section: 'server_network', control: 'number', applies: 'restart', scope: 'G', flag: '--port', advanced: false, storage: 'settings', default: 8000, disabled_for_legacy: false },
+      { key: 'server.port', label: 'Port', help: 'Where the API listens.', section: 'server_network', control: 'number', applies: 'restart', scope: 'G', flag: '--port', advanced: false, storage: 'settings', default: 8000 },
     ],
     profile_fields: [],
     engine_options: { version: '1.2.0', options: [], unknown: [] },

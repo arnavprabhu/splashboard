@@ -266,11 +266,16 @@ def test_allowed_origin_pattern_message() -> None:
     assert "patterns such as tauri://* or http://*.example.com are not supported" in message
 
 
-def test_legacy_detection() -> None:
-    assert p.is_legacy_package("incoai/Qwen3.8-27B-Splash")
-    assert p.is_legacy_package("incoai/Qwen3.6-35B-A3B-Splash")
-    assert not p.is_legacy_package("mlx-community/Qwen3.8-27B-4bit")
-    assert not p.is_legacy_package("incoai/Qwen3.8-27B-DFlash2")
+def test_package_refusal() -> None:
+    """Splash packages get Splash 1.3.1's refusal with their family's MLX model."""
+    assert p.package_refusal("incoai/Qwen3.8-27B-Splash") == (
+        "incoai/Qwen3.8-27B-Splash is a Splash package, which Splash no longer loads; serve "
+        "the MLX model of its family instead: splash serve --model mlx-community/Qwen3.8-27B-4bit"
+    )
+    refusal = p.package_refusal("incoai/Qwen3.6-35B-A3B-Splash:Q4")
+    assert refusal and refusal.endswith("mlx-community/Qwen3.6-35B-A3B-4bit")
+    assert p.package_refusal("mlx-community/Qwen3.8-27B-4bit") is None
+    assert p.package_refusal("incoai/Qwen3.8-27B-DFlash2") is None
 
 
 def test_commit_pin_detection() -> None:
@@ -312,7 +317,7 @@ _SPLASH_SCRIPT = textwrap.dedent(
 )
 
 
-@pytest.mark.skipif(not HAVE_SPLASH, reason="Splash 1.3.0 is not installed via Homebrew")
+@pytest.mark.skipif(not HAVE_SPLASH, reason="Splash is not installed via Homebrew")
 def test_parity_with_splash_parsers(tmp_path: Path) -> None:
     """Run every case through Splash's own parsers (bundled Python) and compare."""
     result = subprocess.run(

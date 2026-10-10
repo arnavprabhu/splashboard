@@ -29,7 +29,7 @@ def run_cli(tmp_path, *args, env=None, timeout=30):
 
 def test_version_matches_real_wording(tmp_path):
     result = run_cli(tmp_path, "--version")
-    assert result.returncode == 0 and result.stdout == "Splash 1.3.0\n"
+    assert result.returncode == 0 and result.stdout == "Splash 1.3.1\n"
     if REAL_CLI.exists():
         real = subprocess.run([str(REAL_CLI), "--version"], capture_output=True, text=True, timeout=30)
         assert real.stdout == result.stdout

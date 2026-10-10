@@ -4,7 +4,7 @@ Parts of this folder come from Splash (https://github.com/incoai/splash), by inc
 licensed under the Apache License, Version 2.0. A copy of that license is in
 LICENSE.splash in this folder. Splash ships no NOTICE file.
 
-Copied unchanged from Splash 1.3.0:
+Copied unchanged from Splash 1.3.1:
   pkg/install/__init__.py
   pkg/install/clients.py
   pkg/install/families.py

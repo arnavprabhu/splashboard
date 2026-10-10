@@ -134,7 +134,6 @@ class EffectiveServe:
     """The engine settings for one model, as the flag builder needs them."""
 
     model: str
-    legacy: bool
     revision: str | None
     draft_model: str | None
     language_only: bool
@@ -165,7 +164,6 @@ def effective_serve(doc: SettingsDocument, model_id: str) -> EffectiveServe:
 
     return EffectiveServe(
         model=model_id,
-        legacy=p.is_legacy_package(model_id),
         revision=v("serve.revision"),
         draft_model=v("serve.draft_model"),
         language_only=bool(v("serve.language_only")),

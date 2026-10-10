@@ -14,7 +14,7 @@ const DIR = '/Users/arnav/.splash/models';
 const LOCAL = 'local/Qwen3.6-35B-A3B-UD-Q4_K_XL-GGUF';
 const HUB = 'mlx-community/Qwen3.8-27B-4bit';
 const DISK = { models_dir: DIR, cache_dir: '/Users/arnav/.splash/cache', models_bytes: 37.4 * GB, cache_bytes: 2.1 * GB, free_bytes: 300 * GB, total_bytes: 1000 * GB };
-const row = (id: string, extra: Record<string, unknown>) => ({ id, repo_id: id, language_only: false, unique_bytes: 0, pinned: false, legacy: false, status: 'ready', last_used_at: null, ...extra });
+const row = (id: string, extra: Record<string, unknown>) => ({ id, repo_id: id, language_only: false, unique_bytes: 0, pinned: false, status: 'ready', last_used_at: null, ...extra });
 const MODELS = [
   row(LOCAL, { family: 'Qwen3.6-35B-A3B', format: 'gguf', language_only: true, size_bytes: 21.7 * GB, unique_bytes: 21.7 * GB, commit: '9f2c4e1a7b' }),
   row(HUB, { family: 'Qwen3.8-27B', format: 'mlx', size_bytes: 15.7 * GB, unique_bytes: 15.7 * GB, commit: '4c0d1e2a9b', last_used_at: '2026-10-04T08:00:00Z' }),

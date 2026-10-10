@@ -12,6 +12,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 
 from .. import __version__
+from ..engine.discovery import SUPPORTED_RANGE
 from ..errors import ApiError, error_responses
 from ..schemas import (
     BrewInfo,
@@ -139,7 +140,7 @@ def doctor(state: State) -> DoctorReport:
             if engine.support in ("untested", "unknown")
             else "ok",
             message=(
-                f"Splash {engine.version} ({engine.source}); Splashboard supports >=1.3.0 <1.4.0"
+                f"Splash {engine.version} ({engine.source}); Splashboard supports {SUPPORTED_RANGE}"
                 if engine.found
                 else engine.error or "Splash is not installed"
             ),

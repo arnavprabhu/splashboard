@@ -191,7 +191,7 @@ def test_check_finds_a_newer_release(app: FastAPI, client: TestClient) -> None:
 def test_check_same_or_older_is_not_an_update(app: FastAPI, client: TestClient) -> None:
     updates = app.state.manager.updates
     updates.find_brew = lambda: None
-    updates.transport = releases("v1.3.0")
+    updates.transport = releases("v1.3.1")
     info = client.post("/api/admin/engine/check-update").json()
     assert info["available"] is False and info["version"] is None
 
@@ -283,4 +283,4 @@ def test_install_runs_brew_install(app: FastAPI, client: TestClient, tmp_path: P
     job = wait_job(client, client.post("/api/admin/engine/install").json()["job_id"])
     assert job["state"] == "done", job
     assert log.read_text().strip() == "install incoai/tap/splash"
-    assert job["message"].startswith("Splash 1.3.0")
+    assert job["message"].startswith("Splash 1.3.1")

@@ -147,6 +147,7 @@ class FakeConfig:
     reasoning: str = "auto"  # auto | always | never
     template: str = "patched"
     memory_pressure: str = "normal"
+    thermal_state: str = "nominal"  # nominal | fair | serious | critical (1.3.1)
     physical_memory: int = 64 * GIB
     host_available: int = 40 * GIB
     auto_context: int | None = None
@@ -178,6 +179,7 @@ class FakeConfig:
         config.reasoning = env.get("FAKE_SPLASH_REASONING", config.reasoning)
         config.template = env.get("FAKE_SPLASH_TEMPLATE", config.template)
         config.memory_pressure = env.get("FAKE_SPLASH_MEMORY_PRESSURE", config.memory_pressure)
+        config.thermal_state = env.get("FAKE_SPLASH_THERMAL_STATE", config.thermal_state)
         config.physical_memory = parse_size(env.get("FAKE_SPLASH_PHYSICAL_MEMORY"), config.physical_memory)
         config.host_available = parse_size(env.get("FAKE_SPLASH_HOST_AVAILABLE"), config.host_available)
         if env.get("FAKE_SPLASH_AUTO_CONTEXT"):
@@ -606,7 +608,7 @@ class FakeEngine:
         self.response_store = ResponseStore()
         self.latencies = LatencyMetrics()
         self.persistent: PersistentCache | None = None
-        self.build_id = hashlib.sha256(b"splash-1.3.0-fake").hexdigest()[:16]
+        self.build_id = hashlib.sha256(b"splash-1.3.1-fake").hexdigest()[:16]
         self.weights_released = False
         self.weights_restores = 0
         # Status.cpp appendAneFfn counters; the warmup runs one split command over
@@ -1319,6 +1321,8 @@ class FakeEngine:
             "ready": ready,
             "maximum_context_tokens": self.max_context,
             "memory_pressure": pressure,
+            # Status.cpp (1.3.1): ProcessInfo's thermal state; readiness ignores it.
+            "thermal_state": cfg.thermal_state,
             "admission": {
                 "waiting": c["queued"],
                 "waiting_memory": 0,
@@ -1379,6 +1383,7 @@ class FakeEngine:
                 "idle_release_seconds": None if math.isinf(self.idle_release_seconds) else self.idle_release_seconds,
                 "released": self.weights_released,
                 "restores": self.weights_restores,
+                "restore_failures": 0,
             },
             # Status.cpp appendAneFfn
             "ane_ffn": {
@@ -1419,6 +1424,7 @@ class FakeEngine:
                 "active_lanes": c["prefilling"] + c["decoding"],
                 "idle_gdn_cells": 0,
                 "idle_draft_rings": 0,
+                "idle_context_windows": 0,
                 "publications": c["publications"],
                 "evictions": c["evictions"],
                 "checkpoint_entries": 0,

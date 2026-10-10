@@ -132,11 +132,17 @@ def open_paths(paths: list[Path], timeout: float = 5.0) -> set[str] | None:
 
 
 # What a compatibility check fetches into the Hub cache: Splash's `Repository.file`
-# (`hf_hub_download`) for these metadata files (install/upstream.py, and the legacy
-# manifest in helpers/inspect_model.py). Weights and GGUF headers are read in place
+# (`hf_hub_download`) for these metadata files (install/upstream.py, and a Splash
+# package's manifest, read to refuse it). Weights and GGUF headers are read in place
 # over HTTP range requests (`Repository.open`), so a check downloads nothing else.
 CHECK_FILES = frozenset(
-    {"config.json", "preprocessor_config.json", "model.safetensors.index.json", "manifest.json"}
+    {
+        "config.json",
+        "preprocessor_config.json",
+        "processor_config.json",
+        "model.safetensors.index.json",
+        "manifest.json",
+    }
 )
 
 

@@ -40,7 +40,6 @@ export function readInstalled(v: unknown): InstalledModel | null {
     size_bytes: 0,
     unique_bytes: typeof v.size_bytes === 'number' ? v.size_bytes : 0,
     pinned: false,
-    legacy: false,
     status: 'ready',
     ...v,
   } as InstalledModel;

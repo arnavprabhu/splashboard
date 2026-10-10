@@ -103,9 +103,9 @@ class SharedReader(io.RawIOBase):
 
 
 def main() -> None:
-    from install import families, hub, models, upstream  # type: ignore[import-not-found]
+    from install import hub, models, upstream  # type: ignore[import-not-found]
 
-    # Splash 1.3.0 writes a GGUF's derived config and metadata into a scratch
+    # Splash 1.3 writes a GGUF's derived config and metadata into a scratch
     # directory, and the target carries the family the engine's model-check
     # found (splash/install/upstream.py:165-204).
     def inspect_target(choice: str | None, language_only: bool, scratch: str) -> Any:
@@ -197,20 +197,11 @@ def main() -> None:
         return out
 
     def screen_into(out: dict[str, Any], choice: str | None, scratch: str) -> None:
-        if "manifest.json" in repo.files and spec["repo"].startswith("incoai/"):
-            manifest = models.read_json(repo.file("manifest.json"))
-            if manifest.get("schema_version", manifest.get("version")) not in (3, 4):
-                raise ValueError("Unsupported legacy manifest schema")
-            family = families.named(spec["repo"].split("/")[-1].removesuffix("-Splash"))
-            out.update(
-                compatible=True,
-                family=family.name,
-                format="legacy",
-                vision=True,
-                draft=None,
-                files=list(repo.files),
-            )
-            return
+        if "manifest.json" in repo.files:
+            # A Splash package is refused with the MLX model to serve instead, as
+            # Splash's installer does (install/upstream.py `prepare`); another
+            # tool's manifest.json passes.
+            models.refuse_package(spec["repo"], models.read_json(repo.file("manifest.json")))
         # The full check (target plus vision) first: when it passes, the
         # language-only selection is the same files minus the projector, so
         # the target header is read once instead of twice.

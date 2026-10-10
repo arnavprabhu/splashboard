@@ -9,7 +9,7 @@ import { DASH, formatCompact, formatCount, formatDate, formatDuration, formatMs,
 import { useApi } from '../../lib/use-api';
 import { t } from '../../strings/status';
 import { resetMetrics, usageSummary } from './api';
-import { rawNum } from './logic';
+import { rawGet, rawNum } from './logic';
 
 export type Scope = 'session' | 'all';
 
@@ -186,6 +186,16 @@ export interface NumbersProps {
   frozen: boolean;
 }
 
+const THERMAL = ['fair', 'serious', 'critical'] as const;
+type Thermal = (typeof THERMAL)[number];
+
+/** The Mac's thermal state from `/status.thermal_state` (Splash 1.3.1+) when it is above
+ * nominal: Splash slows down to cool, so a slower decode has a reason on screen. */
+export function thermalState(raw: unknown): Thermal | null {
+  const state = rawGet(raw, 'thermal_state');
+  return (THERMAL as readonly unknown[]).includes(state) ? (state as Thermal) : null;
+}
+
 /** Numbers band. */
 export function NumbersBand({ scope, onScope, sample, sampleAt, raw, stopped, frozen }: NumbersProps) {
   const [gridRef, narrow] = useNarrow();
@@ -212,6 +222,7 @@ export function NumbersBand({ scope, onScope, sample, sampleAt, raw, stopped, fr
   const session = scope === 'session';
   const liveSample = session && !stopped ? sample : null;
   const stats = session ? sessionStats(liveSample, raw, narrow) : usageStats(summary.data, narrow);
+  const thermal = session && !stopped ? thermalState(raw) : null;
   const ageS = sampleAt ? Math.round((now - sampleAt) / 1000) : null;
   const stale = session && !stopped && (frozen || (ageS !== null && ageS > 5));
 
@@ -249,6 +260,11 @@ export function NumbersBand({ scope, onScope, sample, sampleAt, raw, stopped, fr
             {t('status.numbers.label')}
           </h2>
           {metas.length > 0 && <p class="meta">{metas.join(' · ')}</p>}
+          {thermal && (
+            <p class={thermal === 'fair' ? 'meta' : 'meta acc'} data-testid="thermal-state">
+              {t(`status.numbers.thermal.${thermal}`)}
+            </p>
+          )}
         </div>
         <div class="cluster">
           <SegmentedControl<Scope>

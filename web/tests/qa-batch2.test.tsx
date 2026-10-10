@@ -96,15 +96,12 @@ describe('row 12: Numbers with no requests show —', () => {
   });
 });
 
-describe('row 16: search hits claim 4-bit only once checked', () => {
+describe('row 16: search hits name their format, never a bit width', () => {
   const id = 'lmstudio-community/Qwen3.6-35B-A3B-MLX-8bit';
-  it('unchecked MLX is just MLX', () => {
-    expect(searchFormat('mlx', id, 'unchecked')).toBe('MLX');
-    expect(searchFormat('mlx', id, 'incompatible')).toBe('MLX');
-  });
-  it('compatible MLX is MLX 4-bit', () => {
-    expect(searchFormat('mlx', id, 'compatible')).toBe('MLX 4-bit');
-    expect(searchFormat('unknown', id, 'compatible')).toBe('—');
+  it('MLX is just MLX: Splash loads several MLX bit widths', () => {
+    expect(searchFormat('mlx', id)).toBe('MLX');
+    expect(searchFormat('gguf', 'unsloth/Qwen3.8-27B-GGUF')).toBe('GGUF');
+    expect(searchFormat('unknown', id)).toBe('—');
   });
 });
 

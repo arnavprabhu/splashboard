@@ -8,7 +8,7 @@ import { CHAT, USAGE, V1_MODELS, mockManager } from './fixtures';
 const GB = 1_000_000_000;
 const LONG = 'unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q2_K_XL';
 const DISCOVERY = { found: true, version: '1.2.0', support: 'supported' };
-const MODEL = { id: LONG, repo_id: 'unsloth/Qwen3.6-35B-A3B-GGUF', variant: 'UD-Q2_K_XL', family: 'Qwen3.6-35B-A3B', format: 'gguf', language_only: false, size_bytes: 13.3 * GB, unique_bytes: 13.3 * GB, pinned: false, legacy: false, status: 'ready', last_used_at: '2026-10-04T08:00:00Z', commit: '4c0d1e2a9b' };
+const MODEL = { id: LONG, repo_id: 'unsloth/Qwen3.6-35B-A3B-GGUF', variant: 'UD-Q2_K_XL', family: 'Qwen3.6-35B-A3B', format: 'gguf', language_only: false, size_bytes: 13.3 * GB, unique_bytes: 13.3 * GB, pinned: false, status: 'ready', last_used_at: '2026-10-04T08:00:00Z', commit: '4c0d1e2a9b' };
 const DISK = { models_dir: '/Users/arnav/.splash/models', cache_dir: '/Users/arnav/.splash/cache', models_bytes: 13.3 * GB, cache_bytes: 0, free_bytes: 300 * GB, total_bytes: 1000 * GB };
 
 test.describe('desktop, long IDs', () => {

@@ -72,13 +72,8 @@ def serve_flags(
     extra_flags: Sequence[ExtraFlag] = (),
 ) -> list[str]:
     """Every option after `--model/--port/--host/--no-webui`, in a fixed order."""
-    if serve.legacy:
-        _, variant = p.split_model_id(serve.model)
-        if variant is not None:
-            raise LaunchError("this runtime package has no variants; drop the :VARIANT suffix")
-        for name in ("revision", "draft_model", "language_only"):
-            if getattr(serve, name):
-                raise LaunchError(f"{name} is not available for legacy Splash packages")
+    if refusal := p.package_refusal(serve.model):
+        raise LaunchError(refusal)
     if serve.announce_served_name and not serve.served_model_names:
         raise LaunchError("--announce-served-name needs --served-model-name")
     cache_disk = p.parse_max_cache_disk(serve.max_cache_disk)

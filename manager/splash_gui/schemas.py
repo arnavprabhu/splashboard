@@ -103,7 +103,7 @@ class EngineDiscoveryInfo(ApiModel):
     source: Literal["setting", "env", "brew", "path"] | None = None
     version: str | None = None
     support: Literal["supported", "untested", "too_old", "unknown"] = "unknown"
-    supported_range: str = ">=1.3.0 <1.4.0"
+    supported_range: str = ">=1.3.1 <1.4.0"
     banner: str | None = None
     source_checkout: bool = False
     pkg: str | None = None
@@ -648,7 +648,6 @@ class SchemaField(ApiModel):
     storage: Literal["settings", "keychain"] = "settings"
     default: Any = None
     warnings: list[str] = Field(default_factory=list)
-    disabled_for_legacy: bool = False
     engine: EngineOptionOut | None = None
 
 
@@ -691,7 +690,6 @@ class ProfileOut(ApiModel):
 
 class EffectiveSettings(ApiModel):
     model: str | None
-    legacy: bool
     values: dict[str, EffectiveValueOut]
     profiles: list[ProfileOut] = Field(default_factory=list)
     sampling_defaults: dict[str, Any] = Field(default_factory=dict)
@@ -833,7 +831,8 @@ class InstalledModel(ApiModel):
     revision: str | None = None
     commit: str | None = None
     pinned: bool = False
-    legacy: bool = False
+    #: Why Splash no longer loads this model (status `unsupported`): an installed Splash package.
+    notice: str | None = None
     last_used_at: str | None = None
     status: Literal[
         "active",
@@ -844,6 +843,7 @@ class InstalledModel(ApiModel):
         "verifying",
         "update_available",
         "broken",
+        "unsupported",
     ]
     progress: float | None = None
     draft: DraftRef | None = None
@@ -976,8 +976,8 @@ class InspectResult(ApiModel):
     pending: list[str] = Field(default_factory=list)
     vision: VisionInfo
     draft: str | None = None
-    # A plain line; when Splash's own refusal is technical (an MLX checkpoint that
-    # is not 4-bit group 64), `reason_detail` keeps the engine's exact words.
+    # A plain line; when Splash's own refusal is technical (an MLX checkpoint in a
+    # quantization Splash has no kernels for), `reason_detail` keeps the engine's words.
     reason: str | None = None
     reason_detail: str | None = None
     memory_need_bytes: int | None = None

@@ -113,7 +113,6 @@ def test_effective_serve() -> None:
     serve = effective_serve(d, MLX)
     assert serve.offline and serve.persistent_cache and serve.max_cache_disk == "32G"
     assert serve.served_model_names == ("qwen27",) and serve.max_context == "128K"
-    assert serve.legacy is False
 
 
 def test_profile_reasoning_effort_reads_the_request_overlay() -> None:

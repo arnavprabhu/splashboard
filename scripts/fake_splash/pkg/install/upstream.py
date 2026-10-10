@@ -1,10 +1,10 @@
 # Derived from Splash (github.com/incoai/splash, Apache-2.0), modified by the Splashboard authors.
 # See LICENSE.splash and NOTICE in scripts/fake_splash.
-"""Small compatibility stand-in for splash/install/upstream.py (1.3.0).
+"""Small compatibility stand-in for splash/install/upstream.py (1.3.1).
 
 Mirrors its `Target`, `check_model` and the screening order of
 `inspect_target(repo, variant, language_only, scratch)`: a GGUF's variant must be
-selected and loadable, an MLX checkpoint must be affine 4-bit group 64, and vision
+selected and loadable, an MLX checkpoint must be quantized in a format the kernels hold, and vision
 needs a usable projector. The real `check_model` runs the engine's `model-check`;
 the fake has no engine, so `signatures.check` stands in for it, and an unsupported
 config fails here rather than in the manager.
@@ -47,18 +47,17 @@ def inspect_target(repo, variant, language_only, scratch):
 def select_vision(repo):
     """The one vision projector Splash can use, chosen by precision.
 
-    `splash/install/upstream.py select_vision` keeps only a `clip` projector
-    whose tensors are BF16 or F32, preferring BF16: an F16 projector has already
-    rounded small weights, and preparation never rounds a weight.
+    `splash/install/upstream.py select_vision` (1.3.1) keeps only a `clip` projector
+    whose tensors are BF16, F32 or F16, preferred in that order.
     """
-    usable: dict[str, list[str]] = {"BF16": [], "F32": []}
+    usable: dict[str, list[str]] = {"BF16": [], "F32": [], "F16": []}
     found: list[str] = []
     for name in sorted(n for n in repo.files if "mmproj" in Path(n).stem.lower()):
         precision = next((p for p in ("BF16", "F32", "F16") if p in name), None)
         found.append(f"{name} (clip: {precision or 'unknown'})")
         if precision in usable:
             usable[precision].append(name)
-    for precision in ("BF16", "F32"):
+    for precision in ("BF16", "F32", "F16"):
         if len(usable[precision]) == 1:
             return usable[precision][0]
         if len(usable[precision]) > 1:
@@ -68,7 +67,7 @@ def select_vision(repo):
                 + ", describe no single tower; use --language-only to serve text only"
             )
     raise models.ModelError(
-        "the GGUF repository has no BF16 or F32 vision projector ("
+        "the GGUF repository has no BF16, F32 or F16 vision projector ("
         + ("; ".join(found) or "no GGUF named mmproj")
         + "); use --language-only to serve text only"
     )
@@ -149,26 +148,59 @@ def _inspect_seconds(name):
     return seconds
 
 
+# The affine formats the block kernels hold (metal/abi/QuantFormat.h): bits and group sizes.
+AFFINE_BITS = (2, 3, 4, 5, 6, 8)
+AFFINE_GROUPS = (32, 64, 128)
+# Where an MLX repository keeps its image processor's configuration (upstream.py `PROCESSOR_FILES`).
+PROCESSOR_FILES = ("preprocessor_config.json", "processor_config.json")
+
+
+def _require_quantization(entry, label, module):
+    """ModelDescriptor.mm `requireQuantization` (1.3.1) for one entry: an affine format
+    the kernels hold, or mxfp4 4-bit in groups of 32. A module's entry that omits bits or
+    group size takes its mode's default."""
+    mode = entry.get("mode", "affine")
+    if not isinstance(mode, str):
+        raise models.ModelError(f"{label} mode must be a string")
+    affine = mode == "affine"
+
+    def number(key, default):
+        value = entry.get(key)
+        if module and value is None:
+            return default
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or value != int(value) or value < 0:
+            raise models.ModelError(f"{label} {key} must be a whole number")
+        return int(value)
+
+    bits, group = number("bits", 4), number("group_size", 64 if affine else 32)
+    ok = bits in AFFINE_BITS and group in AFFINE_GROUPS if affine else (mode == "mxfp4" and bits == 4 and group == 32)
+    if not ok:
+        raise models.ModelError(
+            f"{label} is {mode} {bits}-bit in groups of {group}; MLX weights load as affine 2, 3, 4, 5, 6 "
+            "or 8 bits in groups of 32, 64 or 128, or as mxfp4"
+        )
+
+
 def _mlx_target(repo, language_only, scratch):
     config = scratch / "config.json"
     config.write_bytes(models.json_bytes(repo.json("config.json")))
     family = check_model("mlx-affine", "none", config)
-    # The engine model-check's wording (ModelDescriptor.mm validateQuantization and
-    # requireNumber, 1.3.0), naming the first module it checks.
+    # The engine model-check's wording (ModelDescriptor.mm requireQuantization, 1.3.1).
     quant = repo.json("config.json").get("quantization")
     if not isinstance(quant, dict):
-        raise models.ModelError("this model requires an MLX affine 4-bit/group-64 checkpoint or a supported GGUF")
-    label = "quantization language_model.model.embed_tokens"
-    if quant.get("bits") != 4:
-        raise models.ModelError(f"{label} bits mismatch: MLX {quant.get('bits')}, runtime 4")
-    if quant.get("group_size") != 64:
-        raise models.ModelError(f"{label} group_size mismatch: MLX {quant.get('group_size')}, runtime 64")
-    if quant.get("mode", "affine") != "affine":
-        raise models.ModelError(f"{label} mode must be affine")
+        raise models.ModelError(
+            "this model requires an MLX checkpoint (affine 2, 3, 4, 5, 6 or 8 bits in groups of 32, 64 or 128, "
+            "or mxfp4) or a supported GGUF"
+        )
+    _require_quantization(quant, "quantization", False)
+    for module, entry in quant.items():
+        if isinstance(entry, dict):
+            _require_quantization(entry, f"quantization {module}", True)
     files = {name: name for name in sorted(repo.files)}
     files.setdefault("config.json", "config.json")
     if language_only:
-        # upstream.py `_mlx_target` (1.3.0, :208-243): the processor config is read
-        # and linked only when vision is on.
-        files.pop("preprocessor_config.json", None)
+        # upstream.py `_mlx_target` (1.3.1): the processor config is read only when
+        # vision is on.
+        for name in PROCESSOR_FILES:
+            files.pop(name, None)
     return Target("mlx-affine", "none" if language_only else "safetensors", config, None, family, files)

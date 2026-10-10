@@ -24,10 +24,11 @@ SHIM_MARKER = "SPLASH_GUI_SHIM"
 # The `splash` script pip and uv install for this package (`[project.scripts]`). It is our
 # CLI too, so it is never the engine: taking it would make the CLI exec itself forever.
 ENTRY_POINT_MARKER = "from splash_gui.cli import"
-# 1.3.0 is the first with the engine's model-check, which the helpers call.
-SUPPORTED_MIN = (1, 3, 0)
+# 1.3.1 is the first that loads every MLX quantization the GUI offers and refuses
+# Splash packages, which the GUI no longer lists.
+SUPPORTED_MIN = (1, 3, 1)
 SUPPORTED_BELOW = (1, 4, 0)
-SUPPORTED_RANGE = ">=1.3.0 <1.4.0"
+SUPPORTED_RANGE = ">=1.3.1 <1.4.0"
 BREW_TIMEOUT_S = 10
 VERSION_TIMEOUT_S = 15
 _VERSION_RE = re.compile(r"Splash\s+(\d+)\.(\d+)\.(\d+)(\S*)")
@@ -70,7 +71,7 @@ class EngineInfo:
             major, minor, _ = self.version_tuple
             return f"GUI untested with Splash {major}.{minor}"
         if self.support == "too_old" and self.version:
-            return f"Splash {self.version} is older than 1.3.0; upgrade the engine"
+            return f"Splash {self.version} is older than 1.3.1; upgrade the engine"
         return None
 
     def as_dict(self) -> dict[str, object]:

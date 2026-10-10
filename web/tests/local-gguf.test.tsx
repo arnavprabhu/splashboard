@@ -107,7 +107,7 @@ describe('LocalDrop', () => {
 
 describe('Local tag on Manager rows', () => {
   const model = (id: string) =>
-    ({ id, repo_id: id, format: 'gguf', family: 'Qwen3.6-35B-A3B', language_only: true, size_bytes: 21e9, unique_bytes: 21e9, pinned: false, legacy: false, status: 'ready' }) as InstalledModel;
+    ({ id, repo_id: id, format: 'gguf', family: 'Qwen3.6-35B-A3B', language_only: true, size_bytes: 21e9, unique_bytes: 21e9, pinned: false, status: 'ready' }) as InstalledModel;
   const noop = () => undefined;
   const row = (id: string) =>
     render(<ManagerRow id={id} model={model(id)} index={1} active={false} onOpen={noop} onUnload={noop} onVerify={noop} onUpdate={noop} onDelete={noop} onCancel={noop} />);

@@ -67,18 +67,23 @@ def test_catalog_offline_keeps_the_rows_without_hub_data(hub_harness) -> None:
     payload = h.client.get("/api/admin/catalog").json()
     assert payload["offline"] is True and payload["refreshed_at"] is None
     rows = entries(payload)
-    assert len(rows) >= 7
+    assert len(rows) >= 5
     assert all(r["size_bytes"] is None for r in rows.values())
 
 
-def test_catalog_merges_splash_s_official_list(hub_harness) -> None:
+def test_catalog_lists_no_splash_packages(hub_harness) -> None:
+    """Splash 1.3.1 no longer loads Splash packages: an official list an earlier Splash
+    left behind is not merged in."""
     h = hub_harness()
     official = h.home / "fake-data" / "catalog" / "official-models.txt"
     official.parent.mkdir(parents=True, exist_ok=True)
     official.write_text("# refreshed\nincoai/Qwen3.8-27B-Splash\nincoai/Qwen3.9-27B-Splash\n")
-    rows = entries(h.client.get("/api/admin/catalog").json())
-    assert rows["incoai/Qwen3.9-27B-Splash"]["format"] == "legacy"
-    assert rows["incoai/Qwen3.9-27B-Splash"]["family"] == "Qwen3.8-27B"
+    payload = h.client.get("/api/admin/catalog").json()
+    rows = entries(payload)
+    assert not [r for r in rows if r.endswith("-Splash")]
+    assert {r["format"] for r in rows.values()} == {"mlx", "gguf"}
+    for family in payload["families"]:
+        assert [g["format"] for g in family["groups"]] == ["mlx", "gguf"]
 
 
 @pytest.mark.parametrize(
@@ -423,3 +428,56 @@ def test_language_only_selection_drops_prism_s_projector() -> None:
     chosen = cat.selected_files("gguf", BONSAI_GGUF, files, language_only=True)
     assert chosen == ["Ternary-Bonsai-2-27B-PQ2_0.gguf"]
     assert cat.selected_files("gguf", BONSAI_GGUF, files, language_only=False) == files
+
+
+def test_an_f16_projector_serves_images_from_splash_1_3_1() -> None:
+    """Splash 1.3.1 takes a BF16, F32 or F16 clip projector, in that order."""
+    assert (
+        cat.projector({"mmproj-F16.gguf": 1, "Qwen3.8-27B-UD-Q4_K_M.gguf": 2}) == "mmproj-F16.gguf"
+    )
+    both: dict[str, int | None] = {
+        "mmproj-F16.gguf": 1,
+        "mmproj-BF16.gguf": 1,
+        "mmproj-F32.gguf": 1,
+    }
+    assert cat.projector(both) == "mmproj-BF16.gguf"
+    assert cat.projector({"mmproj-F16.gguf": 1, "mmproj-F32.gguf": 1}) == "mmproj-F32.gguf"
+    assert cat.projector({"mmproj-Q8_0.gguf": 1}) is None
+
+
+def test_an_mlx_repo_with_processor_config_has_vision() -> None:
+    """Newer Transformers releases save the image processor in processor_config.json,
+    which Splash 1.3.1 reads (install/upstream.py `PROCESSOR_FILES`)."""
+    files: dict[str, int | None] = {
+        "config.json": 1,
+        "processor_config.json": 1,
+        "tokenizer.json": 1,
+        "model.safetensors": 10,
+    }
+    facts = cat.entry_facts("someone/Qwen3.8-27B-6bit", "mlx", _Info(files), 64 * GIB)
+    assert facts["vision"] is True
+    selected = cat.selected_files("mlx", files, None, language_only=False)
+    assert "processor_config.json" in selected
+    assert "processor_config.json" not in cat.selected_files("mlx", files, None, language_only=True)
+
+
+def test_mlx_refusals_get_a_plain_line() -> None:
+    from splash_gui.models.compat import MLX_QUANTIZATION, MLX_UNQUANTIZED, explain_refusal
+
+    seven = (
+        "quantization language_model.model.embed_tokens is affine 7-bit in groups of 64; MLX "
+        "weights load as affine 2, 3, 4, 5, 6 or 8 bits in groups of 32, 64 or 128, or as mxfp4"
+    )
+    assert explain_refusal(seven) == (MLX_QUANTIZATION, seven)
+    bf16 = (
+        "this model requires an MLX checkpoint (affine 2, 3, 4, 5, 6 or 8 bits in groups of "
+        "32, 64 or 128, or mxfp4) or a supported GGUF"
+    )
+    assert explain_refusal(bf16) == (MLX_QUANTIZATION, bf16)
+    unquantized = (
+        "quantization lm_head is unquantized; Splash loads quantized MLX projections and "
+        "token tables"
+    )
+    assert explain_refusal(unquantized) == (MLX_UNQUANTIZED, unquantized)
+    assert explain_refusal("something else") == ("something else", None)
+    assert explain_refusal(None) == (None, None)

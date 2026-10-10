@@ -314,18 +314,14 @@ def test_alias_rules(alias: str) -> None:
     assert any("model alias must be" in m for _, m in errors(raw))
 
 
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [("revision", "main"), ("language_only", True), ("draft_model", "incoai/Qwen3.8-27B-DFlash2")],
-)
-def test_legacy_packages_refuse_source_options(field: str, value: Any) -> None:
-    raw = doc_with("serve", {field: value}, model=LEGACY)
-    assert errors(raw) == [(f"serve.{field}", "Not available for legacy Splash packages")]
-
-
-def test_legacy_variant_rejected() -> None:
-    raw = doc_with("serve", {}, model=LEGACY + ":Q4")
-    assert any("no variants" in m for _, m in errors(raw))
+def test_a_splash_package_entry_warns_but_saves() -> None:
+    """Splash 1.3.1 no longer loads Splash packages. An entry an earlier version saved
+    warns with the MLX model to serve instead, and never blocks saving the settings."""
+    raw = doc_with("serve", {"revision": "main"}, model=LEGACY)
+    result = validate_document(raw)
+    assert result.ok and errors(raw) == []
+    warning = next(w for w in result.warnings if w.code == "package")
+    assert "mlx-community/Qwen3.8-27B-4bit" in warning.message
 
 
 def test_invalid_model_key() -> None:

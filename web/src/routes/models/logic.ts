@@ -44,11 +44,6 @@ export function sha7(commit: string | null | undefined): string | null {
   return commit ? commit.slice(0, 7) : null;
 }
 
-/** Splash's legacy packages: `incoai/*-Splash`. */
-export function isLegacyId(id: string): boolean {
-  return /^incoai\/[^/:]+-Splash$/i.test(repoOf(id));
-}
-
 /** Clef fine-tunes load but are not Clef-accurate. */
 export function isClefId(id: string): boolean {
   return /clef/i.test(id);
@@ -62,18 +57,17 @@ export function formatKind(format: string | null | undefined, id = ''): FormatKi
   if (format === 'mlx' || format === 'gguf' || format === 'legacy') return format;
   if (!id) return 'unknown';
   // Not known yet (a download that is not installed): guess from the ID.
-  if (isLegacyId(id)) return 'legacy';
   if (/gguf/i.test(id)) return 'gguf';
   if (/mlx|4bit/i.test(id)) return 'mlx';
   return 'unknown';
 }
 
-/** `MLX 4-bit`, `GGUF`, `GGUF PQ2_0`, `Splash pkg` (uppercased by CSS). */
+/** `MLX`, `GGUF`, `GGUF PQ2_0`, `Splash package` (an installed one; uppercased by CSS). */
 export function formatLabel(format: string | null | undefined, id = ''): string {
   return t(`models.format.${formatKind(format, id)}`);
 }
 
-/** `01 — MLX 4-bit · 21 GB`. Disk sizes are base 1024. */
+/** `01 — MLX · 21 GB`. Disk sizes are base 1024. */
 export function rowLabel(index: number, format: string | null | undefined, id: string, bytes: number | null | undefined, base: 1024 | 1000 = 1024): string {
   const size = bytes === null || bytes === undefined ? DASH : formatBytes(bytes, { base });
   return `${formatIndex(index)} — ${formatLabel(format, id)} · ${size}`;
@@ -372,7 +366,6 @@ export function catalogSeed(memoryBytes = 0): Catalog {
           { format: 'mlx', label: t('models.format.mlx'), entries: [entry('mlx-community/Qwen3.8-27B-4bit', 'Qwen3.8-27B', 'mlx', t('models.seed.dense_mlx'))] },
           { format: 'gguf', label: t('models.format.gguf'), entries: [entry('unsloth/Qwen3.8-27B-GGUF', 'Qwen3.8-27B', 'gguf', t('models.seed.dense_gguf'))] },
           { format: 'pq2', label: t('models.format.pq2'), entries: [entry('prism-ml/Ternary-Bonsai-2-27B-gguf:PQ2_0', 'Qwen3.8-27B', 'gguf', t('models.seed.pq2'))] },
-          { format: 'legacy', label: t('models.format.legacy'), entries: [entry('incoai/Qwen3.8-27B-Splash', 'Qwen3.8-27B', 'legacy', t('models.seed.legacy'))] },
         ],
       },
       {
@@ -381,7 +374,6 @@ export function catalogSeed(memoryBytes = 0): Catalog {
         groups: [
           { format: 'mlx', label: t('models.format.mlx'), entries: [entry('mlx-community/Qwen3.6-35B-A3B-4bit', 'Qwen3.6-35B-A3B', 'mlx', t('models.seed.moe_mlx'))] },
           { format: 'gguf', label: t('models.format.gguf'), entries: [entry('unsloth/Qwen3.6-35B-A3B-GGUF', 'Qwen3.6-35B-A3B', 'gguf', t('models.seed.moe_gguf'))] },
-          { format: 'legacy', label: t('models.format.legacy'), entries: [entry('incoai/Qwen3.6-35B-A3B-Splash', 'Qwen3.6-35B-A3B', 'legacy', t('models.seed.legacy'))] },
         ],
       },
     ],

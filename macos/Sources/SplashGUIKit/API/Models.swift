@@ -226,10 +226,11 @@ public struct InstalledModel: Sendable, Equatable, Identifiable {
         progress = json["progress"]?.double
     }
 
-    /// Downloading / paused / verifying / broken rows are listed but not loadable.
+    /// Downloading / paused / verifying / broken rows, and Splash packages Splash no longer
+    /// loads (`unsupported`), are listed but not loadable.
     public var isLoadable: Bool {
         switch status {
-        case "downloading", "paused", "verifying", "broken": return false
+        case "downloading", "paused", "verifying", "broken", "unsupported": return false
         default: return true
         }
     }
@@ -238,7 +239,7 @@ public struct InstalledModel: Sendable, Equatable, Identifiable {
         switch format {
         case "mlx": return "MLX"
         case "gguf": return "GGUF"
-        case "legacy": return "Legacy"
+        case "legacy": return "Splash package"
         case let other?: return other.uppercased()
         case nil: return Format.unknown
         }
@@ -252,6 +253,7 @@ public struct InstalledModel: Sendable, Equatable, Identifiable {
         case "paused": return "Paused"
         case "verifying": return "Verifying"
         case "broken": return "Broken"
+        case "unsupported": return "No longer loads"
         default: return status?.capitalized ?? ""
         }
     }

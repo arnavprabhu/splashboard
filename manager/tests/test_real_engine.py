@@ -2,13 +2,13 @@
 
 These check the assumptions the rest of the suite takes on faith:
 
-  * the engine is 1.3.x, inside the range v1 supports;
+  * the engine is 1.3.1 or a later 1.3.x, inside the supported range;
   * `install/serve_options.py` still matches the settings' option map, including that no
     option has appeared that we do not map;
   * `helpers/inspect_model.py` really runs under Splash's own bundled Python and
-    its screening agrees with ours on live repositories — an MLX 4-bit group-64
-    checkpoint is compatible, an 8-bit one is not, and an unsupported
-    architecture is refused;
+    its screening agrees with ours on live repositories — MLX 4-bit and 8-bit
+    checkpoints are compatible, a Splash package is refused with its MLX model, and
+    an unsupported architecture is refused;
   * `install/models.py` still takes the command line we build.
 
 Screening a repository reads `config.json` and the shard index over HTTP; it
@@ -35,13 +35,12 @@ pytestmark = pytest.mark.real
 # One of each outcome, all in families Splash supports.
 MLX_4BIT = "mlx-community/Qwen3.6-35B-A3B-4bit"
 MLX_8BIT = "mlx-community/Qwen3.6-35B-A3B-8bit"
+PACKAGE = "incoai/Qwen3.8-27B-Splash"
 GGUF_REPO = "unsloth/Qwen3.6-35B-A3B-GGUF"
 # Open, so the check reaches the architecture screen rather than an auth wall.
 UNSUPPORTED = "mistralai/Mistral-7B-Instruct-v0.3"
 
-needs_engine = pytest.mark.skipif(
-    not HAVE_SPLASH, reason="Splash 1.3.0 is not installed via Homebrew"
-)
+needs_engine = pytest.mark.skipif(not HAVE_SPLASH, reason="Splash is not installed via Homebrew")
 needs_network = pytest.mark.usefixtures("allow_network")
 
 
@@ -175,13 +174,27 @@ def test_a_real_4bit_mlx_checkpoint_is_compatible(engine_python: Path) -> None:
 
 @needs_engine
 @needs_network
-def test_a_real_8bit_checkpoint_is_refused_with_the_engine_s_reason(engine_python: Path) -> None:
-    """MLX must be affine 4-bit group 64. This is the demo checklist item."""
+def test_a_real_8bit_checkpoint_is_compatible(engine_python: Path) -> None:
+    """Splash 1.3.1 loads affine MLX at 2, 3, 4, 5, 6 and 8 bits."""
     result = inspect(MLX_8BIT, engine_python)
+    compatible = [r for r in result["results"] if r["compatible"]]
+    assert compatible, [r.get("reason") for r in result["results"]]
+    assert compatible[0]["family"] == "Qwen3.6-35B-A3B" and compatible[0]["format"] == "mlx"
+
+
+@needs_engine
+@needs_network
+def test_a_real_splash_package_is_refused_with_its_mlx_model(engine_python: Path) -> None:
+    """Splash 1.3.1 no longer loads Splash packages; the helper refuses one as the
+    installer does, from its manifest.json."""
+    result = inspect(PACKAGE, engine_python)
     assert not any(r["compatible"] for r in result["results"]), result
     reasons = [r.get("reason") or "" for r in result["results"]]
-    # Splash 1.3.0's engine model-check names the first tensor whose bits differ.
-    assert any(reason.endswith("bits mismatch: MLX 8, runtime 4") for reason in reasons), reasons
+    assert any(
+        "is a Splash package, which Splash no longer loads" in reason
+        and reason.endswith("splash serve --model mlx-community/Qwen3.8-27B-4bit")
+        for reason in reasons
+    ), reasons
 
 
 @needs_engine
@@ -302,9 +315,9 @@ def test_the_managers_search_and_card_agree_with_the_hub(tmp_path: Path) -> None
 def test_acceptance_search_verdicts_on_the_live_hub(
     paths: Any, secrets: Any, web_dist: Path
 ) -> None:
-    """HF search marks `mlx-community/Qwen3.8-27B-8bit` incompatible with the reason
-    and `unsloth/Qwen3.8-27B-GGUF` compatible with a recommended variant, using the
-    installed Splash and the live Hub (64 GB, the user's Mac)."""
+    """HF search finds `mlx-community/Qwen3.8-27B-8bit` compatible (Splash 1.3.1 loads
+    8-bit MLX) and `unsloth/Qwen3.8-27B-GGUF` compatible with a recommended variant,
+    using the installed Splash and the live Hub (64 GB, the user's Mac)."""
     from fastapi.testclient import TestClient
 
     from splash_gui.app import AppConfig, create_app
@@ -324,9 +337,7 @@ def test_acceptance_search_verdicts_on_the_live_hub(
             pytest.skip("mlx-community/Qwen3.8-27B-8bit is not on the Hub")
         assert eight.status_code == 200, eight.text
         body = eight.json()
-        assert body["compatible"] is False and body["badge"] == "incompatible"
-        assert body["reason"] == "Splash runs MLX models only at 4-bit, group size 64.", body
-        assert body["reason_detail"].endswith("bits mismatch: MLX 8, runtime 4"), body
+        assert body["compatible"] is True and body["family"] == "Qwen3.8-27B", body
         response = client.post(
             "/api/admin/inspect", params={"id": "unsloth/Qwen3.8-27B-GGUF"}, headers=headers
         )

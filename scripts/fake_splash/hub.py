@@ -61,6 +61,9 @@ GGUF_27B = "prism-ml/Ternary-Bonsai-2-27B-gguf"
 # text only" path and the language-only guard can both be exercised.
 GGUF_NO_VISION = "unsloth/Qwen3.6-35B-A3B-GGUF-textonly"
 MLX_8BIT = "mlx-community/Qwen3.6-35B-A3B-8bit"
+# A quantization Splash has no kernels for (affine 7-bit), refused by its model-check.
+MLX_7BIT = "mlx-community/Qwen3.6-35B-A3B-7bit"
+# A Splash package, which Splash refuses with the MLX model to serve instead.
 LEGACY = "incoai/Qwen3.6-35B-A3B-Splash"
 # The two repositories the acceptance checklist searches for.
 ACCEPT_8BIT = "mlx-community/Qwen3.8-27B-8bit"
@@ -100,9 +103,9 @@ def repository(repo_id: str, revision: str | None = None) -> tuple[models.Remote
         "text_config": signatures.text_config(family),
         "quantization": {"bits": 4, "group_size": 64, "mode": "affine"},
     }
-    if "8bit" in repo_id:
-        # The rejection Splash reports for anything but affine 4-bit group 64.
-        config["quantization"]["bits"] = 8
+    if bits := re.search(r"(\d)bit", repo_id):
+        # 8-bit loads; 7-bit is one Splash's model-check refuses.
+        config["quantization"]["bits"] = int(bits.group(1))
     return repo, files, config
 
 
@@ -136,16 +139,6 @@ def more_variants(repo: models.RemoteRepo) -> list[models.RemoteFile]:
     ]
     files.append(models.RemoteFile("imatrix_unsloth.gguf", 4096, True, b"GGUF", b"imatrix"))
     return files
-
-
-def legacy_manifest() -> dict:
-    """A schema-3 `manifest.json`, the only thing the legacy branch reads."""
-    return {
-        "schema_version": 3,
-        "model": "Qwen3.6-35B-A3B",
-        "vision": True,
-        "targets": [],
-    }
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -294,7 +287,7 @@ class Handler(BaseHTTPRequestHandler):
                     "lfs": {"size": remote.size, "sha256": remote.blob} if remote.lfs else None,
                 }
             )
-        if repo_id == LEGACY:
+        if models.SPLASH_PACKAGE.fullmatch(repo_id):
             siblings.append({"rfilename": "manifest.json", "size": 64, "lfs": None})
         self._json(
             {
@@ -321,10 +314,10 @@ class Handler(BaseHTTPRequestHandler):
 
     @staticmethod
     def _body(name: str, revision: str, filename: str) -> tuple[bytes, str]:
-        if name == LEGACY:
+        if models.SPLASH_PACKAGE.fullmatch(name):
             if filename != "manifest.json":
                 raise KeyError(filename)
-            return json.dumps(legacy_manifest()).encode(), "application/json"
+            return json.dumps(models.package_manifest(name)).encode(), "application/json"
         _, files, config = repository(name, revision)
         if filename == "config.json":
             return json.dumps(config).encode(), "application/json"
@@ -436,6 +429,7 @@ def _catalog() -> list[str]:
         GGUF_27B,
         GGUF_NO_VISION,
         MLX_8BIT,
+        MLX_7BIT,
         LEGACY,
         ACCEPT_8BIT,
         ACCEPT_GGUF,

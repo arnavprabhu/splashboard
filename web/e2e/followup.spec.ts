@@ -183,7 +183,7 @@ test.describe('models follow-up', () => {
     await mockManager(page, {
       extra: (_m, path) => {
         if (path.startsWith('/models/mlx-community/') && !path.endsWith('/profiles'))
-          return { json: { id: MODEL, repo_id: MODEL, format: 'mlx', language_only: false, size_bytes: 1, unique_bytes: 1, pinned: false, legacy: false, status: 'ready', update_available: false, fingerprints: { build_id: 'b-42', loaded_model_layout_sha256: 'abc123', target_model_sha256: 'def456', kv_format: 'int8', kv_quantization: 'symmetric_int8', max_context: 131072, recorded_at: '2026-10-04T09:00:00Z' } } };
+          return { json: { id: MODEL, repo_id: MODEL, format: 'mlx', language_only: false, size_bytes: 1, unique_bytes: 1, pinned: false, status: 'ready', update_available: false, fingerprints: { build_id: 'b-42', loaded_model_layout_sha256: 'abc123', target_model_sha256: 'def456', kv_format: 'int8', kv_quantization: 'symmetric_int8', max_context: 131072, recorded_at: '2026-10-04T09:00:00Z' } } };
         return undefined;
       },
     });

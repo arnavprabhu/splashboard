@@ -16,7 +16,7 @@ const READY = { state: 'ready', model: Q2, since: '2026-10-04T09:00:00Z', engine
 const VOL = { path: '/Users/arnav/.splash/models', total_bytes: 1000 * GB, free_bytes: 300 * GB };
 const SYSTEM = { chip: 'Apple M5 Pro', memory_bytes: 68_719_476_736, macos_version: '27.0', arch: 'arm64', hostname: 'mac', supported: true, unsupported_reasons: [], disk: { models: VOL, cache: VOL }, power: { source: 'ac' } };
 const DISK = { models_dir: VOL.path, cache_dir: '/Users/arnav/.splash/cache', models_bytes: 13.3 * GB, cache_bytes: 2.1 * GB, free_bytes: 300 * GB, total_bytes: 1000 * GB };
-const INSTALLED_Q2 = { id: Q2, repo_id: GGUF, variant: 'UD-Q2_K_XL', family: 'Qwen3.6-35B-A3B', format: 'gguf', language_only: false, size_bytes: 13.3 * GB, unique_bytes: 13.3 * GB, pinned: false, legacy: false, status: 'ready', last_used_at: '2026-10-04T08:00:00Z' };
+const INSTALLED_Q2 = { id: Q2, repo_id: GGUF, variant: 'UD-Q2_K_XL', family: 'Qwen3.6-35B-A3B', format: 'gguf', language_only: false, size_bytes: 13.3 * GB, unique_bytes: 13.3 * GB, pinned: false, status: 'ready', last_used_at: '2026-10-04T08:00:00Z' };
 const settingsWith = (wizard: Record<string, unknown>) => ({ ...SETTINGS, settings: { ...SETTINGS.settings, global: { ...SETTINGS.settings.global, wizard } } });
 
 // ---------- wizard (rows 1, 5, 6) ----------
