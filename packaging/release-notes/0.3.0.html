@@ -1,0 +1,13 @@
+<!--
+  Release notes for 0.3.0 (TEMPLATE.html says how these are used).
+-->
+<h2>Splashboard 0.3.0</h2>
+<p>Splashboard now requires Splash 1.3.1. Update the engine with <code>brew upgrade incoai/tap/splash</code>, or from Settings → About.</p>
+<ul>
+  <li>MLX models in more formats now show as compatible and download: affine 2, 3, 4, 5, 6 and 8 bits in groups of 32, 64 or 128, mixed precision, and mxfp4. A format Splash can't load still says why in plain words.</li>
+  <li>Splash packages (<code>incoai/*-Splash</code>) no longer load in Splash 1.3.1, so the catalog no longer lists them. An installed package shows "No longer loads" with the MLX model to download instead, and you can delete it.</li>
+  <li>GGUF repositories with an F16 vision projector, and MLX repositories that keep their image processor in <code>processor_config.json</code>, now count as vision capable.</li>
+  <li>Status shows your Mac's thermal state when it runs hot, since Splash slows down while the Mac cools.</li>
+</ul>
+<p>Engine: <a href="https://github.com/incoai/splash">Splash</a> by inco.ai, 1.3.1 or newer (Homebrew <code>incoai/tap/splash</code>). Splash 1.3.1 doesn't reuse the conversation cache saved by 1.3.0; it fills again as you chat. Splashboard is not an inco.ai product.</p>
+<p>Splashboard is not notarized. On a first install, open it once from System Settings → Privacy &amp; Security → Open Anyway.</p>

@@ -1,6 +1,6 @@
 [project]
 name = "splash-gui"
-version = "0.2.3"
+version = "0.3.0"
 description = "Splashboard manager: supervises the Splash engine, proxies its API and serves the web admin."
 readme = "README.md"
 license = "Apache-2.0"
