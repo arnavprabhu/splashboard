@@ -114,5 +114,6 @@ test-real: manager-deps
 
 lint: manager-deps web-deps
 	cd manager && uv run ruff check . && uv run ruff format --check . && uv run mypy
-	uvx ruff check scripts/fake_splash
+	uv run --project manager ruff check scripts/fake_splash && uv run --project manager ruff format --check scripts/fake_splash
+	uv run --project manager mypy --config-file scripts/fake_splash/mypy.ini
 	cd web && pnpm typecheck

@@ -51,7 +51,9 @@ def delete_all_chats(state: State) -> DeleteCount:
     return DeleteCount(deleted=store(state).delete_all())
 
 
-async def _upload(state: ManagerState, request: Request) -> AttachmentUpload:
+async def _upload(
+    state: ManagerState, request: Request, chat_id: str | None = None
+) -> AttachmentUpload:
     from ..errors import ApiError
 
     length = request.headers.get("content-length")
@@ -62,7 +64,9 @@ async def _upload(state: ManagerState, request: Request) -> AttachmentUpload:
         data.extend(chunk)
         if len(data) > 64 * 1024 * 1024:
             raise ApiError(413, "attachments are limited to 64 MiB", "attachment_too_large")
-    return store(state).add_attachment(bytes(data), request.headers.get("content-type", ""))
+    return store(state).add_attachment(
+        bytes(data), request.headers.get("content-type", ""), chat_id
+    )
 
 
 @router.post(
@@ -100,7 +104,7 @@ def get_attachment(state: State, name: str) -> FileResponse:
 async def upload_chat_attachment(state: State, cid: str, request: Request) -> AttachmentUpload:
     """Same as `POST /chats/attachments` (the per-chat path); the chat must exist."""
     store(state).get(cid)
-    return await _upload(state, request)
+    return await _upload(state, request, cid)
 
 
 @router.get("/chats/{cid}/attachments/{name}", response_class=Response, responses=_ERR)

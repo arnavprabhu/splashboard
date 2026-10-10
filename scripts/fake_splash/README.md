@@ -57,8 +57,8 @@ Checks, from the repository root:
 
 ```sh
 uv run --no-project --with pytest pytest scripts/fake_splash/tests
-uvx ruff check scripts/fake_splash && uvx ruff format --check scripts/fake_splash
-uvx --with pytest mypy --config-file scripts/fake_splash/mypy.ini
+uv run --project manager ruff check scripts/fake_splash && uv run --project manager ruff format --check scripts/fake_splash
+uv run --project manager mypy --config-file scripts/fake_splash/mypy.ini
 ```
 
 `tests/test_status_contract.py` reads Status.cpp, MemoryPlan.cpp and

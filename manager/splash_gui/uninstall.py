@@ -7,7 +7,9 @@ the models and the cache, and stop the manager last. The menu bar app's About wi
 `splash doctor --uninstall` call these; the app unregisters its login item and LaunchAgent
 itself (SMAppService), which the manager cannot do.
 
-Only entries inside the data folder (`SPLASH_GUI_HOME`, `~/.splash`) are ever deleted. A models
+Only entries inside the data folder (`SPLASH_GUI_HOME`, `~/.splash`) are ever deleted. A folder
+there that holds the models or the cache further down is never deleted whole: its other entries
+are listed and deleted one by one, so models and a cache that are kept stay. A models
 or cache folder moved elsewhere (`storage.models_dir`, `storage.cache_dir`) is listed but never
 deleted: it may be the user's own Hugging Face cache. Symlinks are unlinked, never
 followed. The Splash engine and its Homebrew formula are never touched.
@@ -58,10 +60,32 @@ def _size(path: Path) -> int:
     return 0
 
 
+def _identity(path: Path) -> tuple[int, int] | None:
+    with contextlib.suppress(OSError):
+        stat = path.stat()
+        return stat.st_dev, stat.st_ino
+    return None
+
+
 def _same(a: Path, b: Path) -> bool:
+    """Whether two paths name the same file. Existing paths compare by file identity, because
+    macOS folders are case-insensitive and `resolve()` keeps the case the path was typed in."""
+    first, second = _identity(a), _identity(b)
+    if first is not None and second is not None:
+        return first == second
     with contextlib.suppress(OSError):
         return a.resolve() == b.resolve()
     return False
+
+
+def _below(target: Path, folder: Path) -> bool:
+    """Whether `target` sits somewhere inside `folder` (not `folder` itself), however either
+    path is spelled."""
+    resolved, here = _resolved(target), _resolved(folder)
+    own = _identity(folder)
+    if own is not None and any(_identity(parent) == own for parent in resolved.parents):
+        return True
+    return resolved != here and resolved.is_relative_to(here)
 
 
 def _guard_base(base: Path, home: Path) -> Path:
@@ -81,23 +105,53 @@ def _guard_base(base: Path, home: Path) -> Path:
     return resolved
 
 
+def _resolved(path: Path) -> Path:
+    with contextlib.suppress(OSError):
+        return path.resolve()
+    return path
+
+
+def _list(
+    folder: Path,
+    default: Literal["data", "models", "cache"],
+    targets: tuple[tuple[Literal["models", "cache"], Path], ...],
+    items: list[UninstallItem],
+) -> None:
+    """List `folder`'s entries. A real folder that holds the models or the cache further down
+    is not listed itself: its entries are, so deleting the rest never takes those with it."""
+    for entry in sorted(folder.iterdir()):
+        kind = next((k for k, target in targets if _same(entry, target)), default)
+        if (
+            not entry.is_symlink()
+            and entry.is_dir()
+            and any(_below(target, entry) for _, target in targets)
+        ):
+            _list(entry, kind, targets, items)
+            continue
+        items.append(UninstallItem(path=str(entry), kind=kind, bytes=_size(entry)))
+
+
 def _items(state: ManagerState) -> list[UninstallItem]:
     base = state.paths.base
     models = state.settings.models_dir()
     cache = state.settings.cache_dir()
-    items: list[UninstallItem] = []
-    if base.is_dir():
-        for entry in sorted(base.iterdir()):
-            kind: Literal["data", "models", "cache"] = (
-                "models" if _same(entry, models) else "cache" if _same(entry, cache) else "data"
-            )
-            items.append(UninstallItem(path=str(entry), kind=kind, bytes=_size(entry)))
     moved: tuple[tuple[Literal["models", "cache"], Path], ...] = (
         ("models", models),
         ("cache", cache),
     )
+    items: list[UninstallItem] = []
+    if base.is_dir():
+        targets = tuple((kind, _resolved(folder)) for kind, folder in moved)
+        own: Literal["data", "models", "cache"] = next(
+            (kind for kind, target in targets if _same(target, base)), "data"
+        )
+        _list(base, own, targets, items)
     for other, folder in moved:
-        inside = any(_same(Path(item.path), folder) for item in items)
+        inside = (
+            _same(folder, base)
+            or _below(folder, base)
+            or any(_same(Path(item.path), folder) for item in items)
+        )
         if not inside and folder.exists():
             items.append(
                 UninstallItem(path=str(folder), kind=other, bytes=_size(folder), deletable=False)
@@ -197,7 +251,7 @@ async def uninstall(state: State, body: UninstallRequest | None = None) -> Unins
             "models": request.delete_models,
             "cache": request.delete_cache,
         }[item.kind]
-        inside = path.parent.resolve() == base.resolve()
+        inside = _resolved(path.parent).is_relative_to(base.resolve())
         if not (wanted and item.deletable and inside):
             kept.append(item.path)
             continue

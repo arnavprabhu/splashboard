@@ -10,8 +10,10 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import math
 import re
 import threading
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +27,9 @@ from ..schemas import AttachmentUpload, Chat, ChatCreate, ChatMessage, ChatSumma
 from ..usage.db import UsageDB
 
 MAX_ATTACHMENT_BYTES = 64 * 1024 * 1024
+# An upload no saved message references yet is left alone this long when another
+# chat is deleted: the browser uploads first and saves the message a moment later.
+ORPHAN_GRACE_SECONDS = 24 * 60 * 60
 _ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _ATTACHMENT = re.compile(r"[0-9a-f]{64}\.[a-z0-9]{1,8}")
 IMAGE_TYPES = {
@@ -120,8 +125,15 @@ class ChatStore:
         self.attachments = directory / "attachments"
         self.usage = usage
         self._lock = threading.RLock()
+        # Pending uploads, kept in `.pending-uploads` so they outlive a
+        # restart. Attachment name -> chat it was uploaded for -> upload time.
+        self._uploads: dict[str, dict[str, float]] = {}
+        # Attachment name -> time of an upload made without a chat that no saved
+        # message has picked up yet.
+        self._loose: dict[str, float] = {}
         ensure_private_dir(directory)
         ensure_private_dir(self.attachments)
+        self._load_pending()
 
     async def start(self) -> None:
         self.reindex()
@@ -146,6 +158,13 @@ class ChatStore:
         data = json.dumps(chat.model_dump(mode="json"), ensure_ascii=False, indent=1).encode()
         write_atomic(self._path(chat.id), data, FILE_MODE)
         self.usage.index_chat(chat.id, chat.title, self._body(chat))
+
+    @staticmethod
+    def _files(chat: Chat | None) -> set[str]:
+        """Attachment names the chat's messages use."""
+        if chat is None:
+            return set()
+        return {a.file.removeprefix("attachments/") for m in chat.messages for a in m.attachments}
 
     @staticmethod
     def _body(chat: Chat) -> str:
@@ -197,11 +216,25 @@ class ChatStore:
         if chat.id != chat_id:
             raise ApiError(422, "the chat id in the body must match the path", "invalid_chat")
         validate_tree(chat)
+        path = self._path(chat_id)
         with self._lock:
-            existing = self._read(self._path(chat_id))
+            # Conversations are created with POST; a late save must not bring a deleted one back.
+            if not path.exists():
+                raise ApiError(404, f"no chat {chat_id}", "chat_not_found")
+            existing = self._read(path)
             created = existing.created_at if existing else chat.created_at
             saved = chat.model_copy(update={"created_at": created, "updated_at": now_iso()})
             self._write(saved)
+            # Uploads this save starts using are no longer pending.
+            changed = False
+            for name in self._files(saved) - self._files(existing):
+                changed |= self._loose.pop(name, None) is not None
+                chats = self._uploads.get(name, {})
+                changed |= chats.pop(chat_id, None) is not None
+                if not chats:
+                    self._uploads.pop(name, None)
+            if changed:
+                self._save_pending()
         return saved
 
     def delete(self, chat_id: str) -> None:
@@ -209,9 +242,11 @@ class ChatStore:
         with self._lock:
             if not path.exists():
                 raise ApiError(404, f"no chat {chat_id}", "chat_not_found")
+            own = self._files(self._read(path))
+            own |= {name for name, chats in self._uploads.items() if chat_id in chats}
             path.unlink()
             self.usage.unindex_chat(chat_id)
-            self._collect_attachments()
+            self._collect_attachments(chat_id, own)
 
     def delete_all(self) -> int:
         with self._lock:
@@ -222,6 +257,9 @@ class ChatStore:
             for path in self.attachments.iterdir():
                 with contextlib.suppress(OSError):
                     path.unlink()
+            self._uploads.clear()
+            self._loose.clear()
+            self._save_pending()
             self.usage.unindex_chat()
         return count
 
@@ -255,7 +293,9 @@ class ChatStore:
 
     # Attachments -----------------------------------------------------------------------
 
-    def add_attachment(self, data: bytes, content_type: str) -> AttachmentUpload:
+    def add_attachment(
+        self, data: bytes, content_type: str, chat_id: str | None = None
+    ) -> AttachmentUpload:
         media = content_type.split(";", 1)[0].strip().lower()
         if media == "application/pdf":
             ext, kind = "pdf", "pdf"
@@ -272,8 +312,18 @@ class ChatStore:
         digest = hashlib.sha256(data).hexdigest()
         name = f"{digest}.{ext}"
         path = self.attachments / name
-        if not path.exists():
-            write_atomic(path, data, FILE_MODE)
+        with self._lock:
+            if path.exists():
+                # A fresh upload of known bytes restarts the grace period.
+                with contextlib.suppress(OSError):
+                    path.touch()
+            else:
+                write_atomic(path, data, FILE_MODE)
+            if chat_id is not None:
+                self._uploads.setdefault(name, {})[chat_id] = time.time()
+            else:
+                self._loose[name] = time.time()
+            self._save_pending()
         return AttachmentUpload(
             file=f"attachments/{name}",
             sha256=digest,
@@ -290,18 +340,102 @@ class ChatStore:
             raise ApiError(404, f"no attachment {name}", "attachment_not_found")
         return path
 
-    def _collect_attachments(self) -> None:
-        """Delete attachments no chat references any more."""
-        used = {
-            a.file.removeprefix("attachments/")
-            for chat in self.all()
-            for message in chat.messages
-            for a in message.attachments
-        }
+    def _collect_attachments(self, deleted: str, own: set[str]) -> None:
+        """Delete attachments no chat references any more, after chat `deleted` went.
+
+        Files are shared by content, so an unreferenced file stays while another
+        chat's upload of it is pending (uploaded for that chat, or uploaded without
+        a chat within the grace period, and not saved yet). Otherwise it goes when
+        the deleted chat used or uploaded it, or when it is older than the grace
+        period.
+        """
+        files = {chat.id: self._files(chat) for chat in self.all()}
+        used = {name for names in files.values() for name in names}
+        cutoff = time.time() - ORPHAN_GRACE_SECONDS
+        self._prune_pending(files, cutoff)
+        self._save_pending()
         for path in self.attachments.iterdir():
-            if path.name not in used and _ATTACHMENT.fullmatch(path.name):
-                with contextlib.suppress(OSError):
-                    path.unlink()
+            name = path.name
+            if name in used or not _ATTACHMENT.fullmatch(name):
+                continue
+            if name in self._uploads or name in self._loose:
+                continue
+            if name not in own:
+                try:
+                    if path.stat().st_mtime > cutoff:
+                        continue
+                except OSError:
+                    continue
+            with contextlib.suppress(OSError):
+                path.unlink()
+
+    def _prune_pending(self, files: dict[str, set[str]], cutoff: float) -> None:
+        """Drop pending uploads past the grace, whose file is gone, or whose chat is
+        gone or already references them. `files` maps each chat to the files it uses.
+        A chatless upload stays until a save picks it up or the grace ends, since it
+        can't tell which chat it is meant for."""
+
+        def stale(name: str, at: float) -> bool:
+            return at <= cutoff or not (self.attachments / name).exists()
+
+        for name in list(self._uploads):
+            chats = {
+                c: at
+                for c, at in self._uploads[name].items()
+                if not stale(name, at) and c in files and name not in files[c]
+            }
+            if chats:
+                self._uploads[name] = chats
+            else:
+                del self._uploads[name]
+        for name, at in list(self._loose.items()):
+            if stale(name, at):
+                del self._loose[name]
+
+    def _load_pending(self) -> None:
+        """Read the pending uploads saved before a restart; a missing or damaged
+        file leaves only the file-age grace to protect them."""
+        try:
+            raw = json.loads(self._pending_path.read_bytes())
+            uploads = raw.get("uploads", {})
+            loose = raw.get("loose", {})
+            for name, chats in uploads.items():
+                if not _ATTACHMENT.fullmatch(name):
+                    continue
+                kept = {
+                    c: float(at)
+                    for c, at in chats.items()
+                    if _ID.fullmatch(c) and isinstance(at, int | float) and math.isfinite(at)
+                }
+                if kept:
+                    self._uploads[name] = kept
+            for name, at in loose.items():
+                if not (_ATTACHMENT.fullmatch(name) and isinstance(at, int | float)):
+                    continue
+                if math.isfinite(at):
+                    self._loose[name] = float(at)
+        except (OSError, ValueError, AttributeError, TypeError, OverflowError):
+            self._uploads.clear()
+            self._loose.clear()
+            return
+        files = {chat.id: self._files(chat) for chat in self.all()}
+        self._prune_pending(files, time.time() - ORPHAN_GRACE_SECONDS)
+        self._save_pending()
+
+    @property
+    def _pending_path(self) -> Path:
+        # Beside the chat files, not named *.json so it is never read as a chat.
+        return self.directory / ".pending-uploads"
+
+    def _save_pending(self) -> None:
+        """Write the pending uploads (or remove the file when there are none). Best
+        effort: without the file, the file-age grace still protects recent uploads."""
+        with contextlib.suppress(OSError):
+            if not self._uploads and not self._loose:
+                self._pending_path.unlink(missing_ok=True)
+                return
+            data = {"uploads": self._uploads, "loose": self._loose}
+            write_atomic(self._pending_path, json.dumps(data).encode(), FILE_MODE)
 
     def size(self) -> tuple[int, int]:
         """(bytes, chat count) of the chat store, attachments included."""

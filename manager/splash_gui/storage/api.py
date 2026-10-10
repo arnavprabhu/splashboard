@@ -28,6 +28,9 @@ from ..schemas import (
 )
 from ..settings.api import settings_changed
 from ..state import ManagerState, get_state
+from .recovery import STAGING_SUFFIX as STAGING_SUFFIX  # re-exported
+from .recovery import MoveRecord, staging_for
+from .recovery import clear as clear_move_record
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -64,9 +67,6 @@ def ensure_idle(state: ManagerState) -> None:
         raise ApiError(409, "Another storage operation is running", "storage_busy")
 
 
-STAGING_SUFFIX = ".splash-moving"
-
-
 def move_tree(source: Path, destination: Path) -> None:
     """Move a directory tree: an atomic rename on the same volume, otherwise copy
     to a staging directory beside the destination, rename it into place, then
@@ -82,7 +82,7 @@ def move_tree(source: Path, destination: Path) -> None:
     except OSError as error:
         if error.errno != errno.EXDEV:
             raise
-    staging = destination.with_name(destination.name + STAGING_SUFFIX)
+    staging = staging_for(destination)
     if staging.exists():
         raise OSError(f"An interrupted move exists at {staging}; remove it and retry")
     try:
@@ -152,19 +152,31 @@ async def move(state: State, body: StorageMoveRequest) -> JobAccepted:
 
     async def run(job: Job) -> None:
         job.update(message="Moving files…")
+        # Moving and saving the setting is one unit: cancelling the job (as
+        # quitting does) waits for it, so the setting always names the folder
+        # the files are actually in.
+        await job.protect(move_and_commit(job))
+
+    async def move_and_commit(job: Job) -> None:
         created = not destination.exists()
         moved = False
+        record: MoveRecord | None = None
         try:
             if body.move_files and source.exists():
+                # Recorded before any file changes, so a manager killed midway can
+                # tell at its next start where the files are.
+                record = MoveRecord.begin(state.paths, body.target, source, destination)
                 if destination.exists():
                     destination.rmdir()  # checked empty above
                 await asyncio.to_thread(move_tree, source, destination)
                 moved = True
+                record.set_phase(state.paths, "moved")
             else:
                 destination.mkdir(parents=True, mode=0o700, exist_ok=True)
         except OSError as error:
             if not destination.exists() and not created:
                 destination.mkdir(parents=True, exist_ok=True)  # put the empty folder back
+            clear_move_record(state.paths)  # move_tree left the source as it was
             raise JobFailed(f"The move failed and nothing was changed: {error}") from None
         job.update(progress=0.9, message="Saving settings…")
         old = state.settings.current
@@ -177,11 +189,15 @@ async def move(state: State, body: StorageMoveRequest) -> JobAccepted:
             log.exception("saving the storage setting failed")
             ok, changes = False, []
         if not ok:
-            if moved:
+            if moved and record is not None:
+                record.set_phase(state.paths, "restoring")
+                # If moving back fails, the record stays for the next start to settle.
                 await asyncio.to_thread(move_tree, destination, source)
+                clear_move_record(state.paths)
             elif created:
                 shutil.rmtree(destination, ignore_errors=True)
             raise JobFailed("Settings could not be saved; storage was restored")
+        clear_move_record(state.paths)
         for listener in state.settings_listeners:
             listener(changes, False)
         if result.document is not None:
@@ -190,6 +206,7 @@ async def move(state: State, body: StorageMoveRequest) -> JobAccepted:
             )
         job.line(f"{body.target} directory is now {destination}")
         state.events.publish("models.changed", ModelsChangedEvent(reason="moved"))
+        job.finish(True)
 
     return state.jobs.start("storage_move", run)
 
@@ -253,20 +270,28 @@ async def import_models(state: State, body: ImportRequest) -> JobAccepted:
             origin = Path(candidate.path)
             moved_to = target / origin.name
             try:
-                await asyncio.to_thread(move_tree, origin, moved_to)
+                # A cancelled job still finishes the repository in flight, so
+                # it is never left half copied, and stops before the next one.
+                await job.protect(import_one(job, candidate.repo_id, origin, moved_to))
             except OSError as error:
                 # All or nothing: put back what this import already moved.
-                for back_from, back_to in reversed(done):
-                    try:
-                        await asyncio.to_thread(move_tree, back_from, back_to)
-                    except OSError:
-                        log.exception("could not move %s back to %s", back_from, back_to)
+                await job.protect(put_back(done))
                 raise JobFailed(
                     f"Importing {candidate.repo_id} failed ({error}); nothing was imported"
                 ) from None
             done.append((moved_to, origin))
-            job.line(f"imported {candidate.repo_id}")
             job.update(progress=(index + 1) / len(selected), message=candidate.repo_id)
         state.events.publish("models.changed", ModelsChangedEvent(reason="imported"))
+
+    async def import_one(job: Job, repo_id: str, origin: Path, moved_to: Path) -> None:
+        await asyncio.to_thread(move_tree, origin, moved_to)
+        job.line(f"imported {repo_id}")
+
+    async def put_back(done: list[tuple[Path, Path]]) -> None:
+        for back_from, back_to in reversed(done):
+            try:
+                await asyncio.to_thread(move_tree, back_from, back_to)
+            except OSError:
+                log.exception("could not move %s back to %s", back_from, back_to)
 
     return state.jobs.start("import", run)

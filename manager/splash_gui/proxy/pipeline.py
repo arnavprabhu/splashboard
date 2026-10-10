@@ -22,7 +22,7 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -30,6 +30,7 @@ import httpx
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.requests import cookie_parser
+from starlette.types import Receive, Scope, Send
 
 from ..auth.core import SESSION_COOKIE
 from ..auth.guard import allowed_hosts, bearer, is_local_client, is_same_origin
@@ -169,6 +170,31 @@ class ProxyError(Exception):
                 error["details"] = self.details
             body = {"error": error}
         return JSONResponse(body, status_code=self.status, headers=headers)
+
+
+class _RelayResponse(StreamingResponse):
+    """A streamed engine answer that releases the engine even when its body is never read.
+
+    Starlette neither closes the body generator when sending fails nor starts it when the
+    client leaves before the first byte, so the generator's own cleanup can't be relied on.
+    """
+
+    def __init__(
+        self,
+        content: AsyncIterator[bytes],
+        *,
+        on_close: Callable[[], Awaitable[None]],
+        status_code: int,
+        headers: dict[str, str],
+    ) -> None:
+        super().__init__(content, status_code=status_code, headers=headers)
+        self._on_close = on_close
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            await self._on_close()
 
 
 def unavailable(message: str = "The engine is not ready", retry: int = 5) -> ProxyError:
@@ -668,6 +694,11 @@ class ProxyPipeline:
                     client_label,
                 )
             return failure.response(anthropic, cors, systemone=systemone)
+        except BaseException:
+            # Cancelled (a drain timeout, a rebind) before the engine answered: no relay
+            # exists yet to count this request out, so the engine would look busy forever.
+            done()
+            raise
         out_headers = {
             k: v for k, v in upstream.headers.items() if k.lower() in FORWARD_RESPONSE_HEADERS
         }
@@ -676,20 +707,18 @@ class ProxyPipeline:
         content_type = upstream.headers.get("content-type", "")
         capture.stream = "text/event-stream" in content_type
 
-        async def relay() -> AsyncIterator[bytes]:
-            outcome = "cancelled"  # until the upstream body has been read to its end
+        closed = False
+
+        async def finish(outcome: str) -> None:
+            # Once only: from the relay's end, or from the response when the client left
+            # (or the task was cancelled) before the body was read to its end.
+            nonlocal closed
+            if closed:
+                return
+            closed = True
             try:
-                async for chunk in upstream.aiter_raw():
-                    capture.feed(chunk)
-                    yield chunk
-                outcome = "complete"
-            except httpx.HTTPError as error:
-                # The engine dropped the connection mid-response (a crash or a kill).
-                outcome = "engine_disconnected"
-                log.warning("engine connection lost mid-response: %s", error)
-                raise  # passed through as a disconnect, as Splash produced it
-            finally:
                 await upstream.aclose()
+            finally:
                 done()
                 capture.finish()
                 if record:
@@ -716,10 +745,30 @@ class ProxyPipeline:
                     )
                     self._alerts(status, code, capture.error_message)
 
+        async def relay() -> AsyncIterator[bytes]:
+            outcome = "cancelled"  # until the upstream body has been read to its end
+            try:
+                async for chunk in upstream.aiter_raw():
+                    capture.feed(chunk)
+                    yield chunk
+                outcome = "complete"
+            except httpx.HTTPError as error:
+                # The engine dropped the connection mid-response (a crash or a kill).
+                outcome = "engine_disconnected"
+                log.warning("engine connection lost mid-response: %s", error)
+                raise  # passed through as a disconnect, as Splash produced it
+            finally:
+                await finish(outcome)
+
         if capture.stream:
             out_headers.setdefault("cache-control", "no-cache")
             out_headers["x-accel-buffering"] = "no"
-        return StreamingResponse(relay(), status_code=upstream.status_code, headers=out_headers)
+        return _RelayResponse(
+            relay(),
+            on_close=lambda: finish("cancelled"),
+            status_code=upstream.status_code,
+            headers=out_headers,
+        )
 
     async def passthrough(
         self, request: Request, method: str, path: str, *, public: bool = False

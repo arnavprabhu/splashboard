@@ -203,6 +203,8 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
   chatRef.current = chat;
   /** A conversation this page just created: its URL changes, but it must not be re-fetched. */
   const createdId = useRef<string | null>(null);
+  /** Counts the user's moves to another conversation, so work that awaited can tell it was left behind. */
+  const opened = useRef(0);
   const memory = useRef<LeafMemory>(new Map());
   const dataUrls = useRef(new Map<string, string>());
 
@@ -247,6 +249,14 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
     setLoadError(null);
     setDrafts({});
     setError(null);
+    // The URL change after creating a conversation here is not a move to another one.
+    const own = !!cid && cid === createdId.current;
+    if (own) createdId.current = null;
+    else opened.current++;
+    flushOthers(cid);
+    // Opening another conversation stops a reply still streaming into the previous one; the
+    // partial reply is kept and saved to its own conversation.
+    if (streamingRef.current && streamingRef.current !== cid) abort.current?.abort();
     if (!cid) {
       if (!chatRef.current || chatRef.current.id) {
         const fresh = blankChat(active ?? rows[0]?.id ?? null);
@@ -258,7 +268,7 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
       }
       return;
     }
-    if (chatRef.current?.id === cid || createdId.current === cid) return;
+    if (chatRef.current?.id === cid || own) return;
     const ctrl = new AbortController();
     api
       .get<Chat>(`/chats/${encodeURIComponent(cid)}`, undefined, ctrl.signal)
@@ -290,26 +300,12 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
 
   // later system messages from the raw /status of the active model
   const raw = useApi((s) => api.get<Record<string, unknown>>("/engine/status", undefined, s), [active, model], !!active && model === active);
-  const laterSystem = useMemo(() => {
-    const ct = (raw.data?.chat_template ?? null) as { later_system?: unknown } | null;
-    const v = ct?.later_system;
-    if (typeof v === "string") return v as "native" | "patched" | "unsupported";
-    if (v && typeof v === "object") {
-      const map = v as Record<string, string>;
-      return (map[toolsCount() > 0 ? "tool_use" : "default"] ?? map.default ?? null) as "native" | "patched" | "unsupported" | null;
-    }
-    return null;
-  }, [raw.data]);
-
   // MCP
   const mcpServers = useApi((s) => api.get<McpServers>("/mcp/servers", undefined, s), [], mode === "mcp");
   const mcpTools = useApi((s) => api.post<McpToolList>("/mcp/tools", undefined, s), [], mode === "mcp");
 
   // ---------- derived validation ----------
   const toolCheck = useMemo(() => checkTools(toolsText), [toolsText]);
-  function toolsCount() {
-    return toolCheck.tools.length;
-  }
   const enabledMcp = useMemo(() => {
     if (mode !== "mcp") return [];
     const servers = mcpServers.data?.servers ?? {};
@@ -324,6 +320,19 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
       ...enabledMcp.map((x) => ({ type: "function", function: { name: x.name, description: x.description ?? "", parameters: x.input_schema ?? { type: "object", properties: {} } } })),
     ];
   }, [toolCheck, enabledMcp]);
+  // A multi-template model reports one value per template; the tool template applies once any
+  // tool (typed or from an enabled MCP server) goes with the request.
+  const withTools = allTools.length > 0;
+  const laterSystem = useMemo(() => {
+    const ct = (raw.data?.chat_template ?? null) as { later_system?: unknown } | null;
+    const v = ct?.later_system;
+    if (typeof v === "string") return v as "native" | "patched" | "unsupported";
+    if (v && typeof v === "object") {
+      const map = v as Record<string, string>;
+      return (map[withTools ? "tool_use" : "default"] ?? map.default ?? null) as "native" | "patched" | "unsupported" | null;
+    }
+    return null;
+  }, [raw.data, withTools]);
   const constrained = allTools.length > 0 || output.kind !== "text";
   const sErrors = samplingErrors(sampling, context);
   const cErr = toolChoiceError(choice, allTools.length);
@@ -350,34 +359,56 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
     }
   }, [panelDoc, mode, serverOn]);
 
-  // ---------- persistence: coalesced PUTs, latest wins ----------
-  const saving = useRef<{ inFlight: boolean; next: Chat | null; timer: ReturnType<typeof setTimeout> | undefined }>({ inFlight: false, next: null, timer: undefined });
-  const flush = useCallback(async () => {
+  // ---------- persistence: coalesced PUTs per conversation, latest wins ----------
+  // A conversation being deleted keeps its saves parked (they go out again if the delete fails);
+  // once it is gone, its saves are dropped, so no PUT brings it back.
+  const saving = useRef<{ inFlight: Map<string, Promise<void>>; next: Map<string, Chat>; timers: Map<string, ReturnType<typeof setTimeout>>; deleting: Set<string>; deleted: Set<string> }>({
+    inFlight: new Map(),
+    next: new Map(),
+    timers: new Map(),
+    deleting: new Set(),
+    deleted: new Set(),
+  });
+  const flush = useCallback(async (id: string) => {
     const s = saving.current;
-    if (s.inFlight || !s.next) return;
-    const doc = s.next;
-    s.next = null;
-    s.inFlight = true;
-    try {
-      await api.put<Chat>(`/chats/${encodeURIComponent(doc.id)}`, { ...doc, updated_at: now() });
-      void list.reload();
-    } catch (err) {
-      toastError(t("chat.list.couldnt_save"), err);
-    } finally {
-      s.inFlight = false;
-      if (s.next) void flush();
-    }
+    clearTimeout(s.timers.get(id));
+    s.timers.delete(id);
+    const doc = s.next.get(id);
+    if (s.inFlight.has(id) || !doc || s.deleting.has(id)) return;
+    s.next.delete(id);
+    const run = (async () => {
+      try {
+        await api.put<Chat>(`/chats/${encodeURIComponent(id)}`, { ...doc, updated_at: now() });
+        void list.reload();
+      } catch (err) {
+        toastError(t("chat.list.couldnt_save"), err);
+      }
+    })();
+    s.inFlight.set(id, run);
+    await run;
+    s.inFlight.delete(id);
+    if (s.next.has(id)) void flush(id);
   }, []);
   const saveSoon = useCallback(
     (doc: Chat, delay = 0) => {
       if (!doc.id) return;
       const s = saving.current;
-      s.next = doc;
-      clearTimeout(s.timer);
-      s.timer = setTimeout(() => void flush(), delay);
+      if (s.deleted.has(doc.id)) return;
+      s.next.set(doc.id, doc);
+      clearTimeout(s.timers.get(doc.id));
+      s.timers.delete(doc.id);
+      if (!s.deleting.has(doc.id)) s.timers.set(doc.id, setTimeout(() => void flush(doc.id), delay));
     },
     [flush],
   );
+  /** Leaving a conversation (or the page) sends its waiting edits now rather than after the debounce. */
+  const flushOthers = useCallback(
+    (keep: string | null) => {
+      for (const id of [...saving.current.next.keys()]) if (id !== keep) void flush(id);
+    },
+    [flush],
+  );
+  useEffect(() => () => flushOthers(null), []);
 
   // ---------- streaming ----------
   const [busy, setBusy] = useState(false);
@@ -391,7 +422,11 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
   const [error, setError] = useState<ChatErrorState | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const abort = useRef<AbortController | null>(null);
+  /** The conversation the running reply belongs to. */
+  const streamingRef = useRef<string | null>(null);
   useEffect(() => () => abort.current?.abort(), []);
+  /** Shows a conversation's new state only while that conversation is the one on screen. */
+  const show = (doc: Chat) => setChat((cur) => (cur && cur.id === doc.id ? doc : cur));
 
   // composer
   const [draft, setDraft] = useState("");
@@ -484,8 +519,9 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
     const id = newId();
     const reply: ChatMessage = { id, parent: doc.active_leaf ?? null, role: "assistant", content: "", created_at: now(), meta: { model: doc.model, profile: doc.profile, response_format: outputBody(output) } };
     let next: Chat = { ...doc, messages: [...(doc.messages ?? []), reply], active_leaf: id };
-    setChat(next);
+    show(next);
     setStreamingId(doc.id || null);
+    streamingRef.current = doc.id || null;
     rememberLeaf(memory.current, next.messages ?? [], id);
     let body: Record<string, unknown> | null = null;
     let lastSave = Date.now();
@@ -514,7 +550,7 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
         },
       };
       next = { ...next, messages: (next.messages ?? []).map((m) => (m.id === id ? updated : m)) };
-      setChat(next);
+      show(next);
       return updated;
     };
     try {
@@ -542,7 +578,7 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
         const stopped = ctrl.signal.aborted;
         done.meta = { ...done.meta, finish_reason: stopped ? "stopped" : "disconnected", est_out: estimateTokens(acc.content) };
         next = { ...next, messages: (next.messages ?? []).map((m) => (m.id === id ? done : m)) };
-        setChat(next);
+        show(next);
         if (!stopped) setError({ ...classifyError(new Error("disconnected")), kind: "generic", title: t("chat.error.disconnected"), body: null, retries: 0, retryIn: null });
       }
       saveSoon(next);
@@ -554,14 +590,14 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
         const done = apply();
         done.meta = { ...done.meta, finish_reason: aborted ? "stopped" : "disconnected", est_out: estimateTokens(acc.content) };
         next = { ...next, messages: (next.messages ?? []).map((m) => (m.id === id ? done : m)) };
-        setChat(next);
+        show(next);
         saveSoon(next);
         if (!aborted) setError({ ...classifyError(err, { model: doc.model, active }), title: t("chat.error.disconnected"), retries: 0, retryIn: null, request: body });
         return true;
       }
       // Nothing streamed: drop the placeholder and report.
       next = { ...doc };
-      setChat(next);
+      show(next);
       const ce = classifyError(err, { model: doc.model, active });
       const auto = autoRetry(ce.kind) && retries < MAX_AUTO_RETRIES;
       setError({ ...ce, request: body, retries, retryIn: auto ? (ce.retryAfter ?? (ce.kind === "queue_full" ? 1 : ce.kind === "busy" ? 10 : 5)) : null });
@@ -575,7 +611,10 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
       setPromptTotal(null);
       setStartedAt(null);
       setStreamingId(null);
-      if (abort.current === ctrl) abort.current = null;
+      if (abort.current === ctrl) {
+        abort.current = null;
+        streamingRef.current = null;
+      }
     }
   }
 
@@ -586,7 +625,7 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
       const injected = rows.rows[0]?.injected;
       if (!injected || !Object.keys(injected).length) return;
       setChat((cur) => {
-        if (!cur) return cur;
+        if (!cur || !cur.messages?.some((m) => m.id === messageId)) return cur;
         const next = { ...cur, messages: (cur.messages ?? []).map((m) => (m.id === messageId ? { ...m, meta: { ...m.meta, injected } } : m)) };
         saveSoon(next);
         return next;
@@ -612,8 +651,14 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
 
   async function ensureSaved(doc: Chat): Promise<Chat> {
     if (doc.id) return doc;
+    const seq = opened.current;
     const created = await api.post<Chat>("/chats", { model: doc.model, profile: doc.profile, title: doc.title });
     const merged: Chat = { ...doc, id: created.id, created_at: created.created_at, updated_at: created.updated_at };
+    if (opened.current !== seq) {
+      // The user opened another conversation meanwhile: keep it on screen.
+      void list.reload();
+      return merged;
+    }
     chatRef.current = merged;
     createdId.current = created.id;
     setChat(merged);
@@ -633,6 +678,7 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
     setDraft("");
     setAttachments([]);
     setEditing(null);
+    const seq = opened.current;
     try {
       let saved = await ensureSaved(doc);
       const stored = [];
@@ -658,14 +704,20 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
       };
       const title = saved.title === t("chat.default_title") && !(saved.messages ?? []).some((m) => m.role === "user") ? autoTitle(text) || saved.title : saved.title;
       saved = { ...saved, title, messages: [...(saved.messages ?? []), message], active_leaf: message.id };
-      setChat(saved);
       saveSoon(saved);
+      if (opened.current !== seq) {
+        // Another conversation was opened while this one saved or uploaded: the message is kept in
+        // its own conversation, and no reply starts behind the one now on screen.
+        pendingSend.current = null;
+        return;
+      }
+      setChat(saved);
       const ok = await generate(saved, retries, waitForIdle);
       if (ok) pendingSend.current = null;
       else {
         // Keep the text in the composer; the message never reached the model.
         const reverted = { ...saved, messages: (saved.messages ?? []).filter((m) => m.id !== message.id), active_leaf: message.parent ?? null, title: doc.title };
-        setChat(reverted);
+        show(reverted);
         saveSoon(reverted);
         setDraft(text);
         setAttachments(atts);
@@ -829,9 +881,21 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
   async function confirmDelete() {
     if (!deleting) return;
     setDeleteBusy(true);
+    const s = saving.current;
+    const id = deleting.id;
+    // Park its saves first: the reply stopped here still saves once more, and that save must not
+    // reach the server after the delete.
+    s.deleting.add(id);
+    clearTimeout(s.timers.get(id));
+    s.timers.delete(id);
+    if (streamingRef.current === id || id === chatRef.current?.id) abort.current?.abort();
+    let gone = false;
     try {
-      if (deleting.id === chatRef.current?.id) abort.current?.abort();
-      await api.del(`/chats/${encodeURIComponent(deleting.id)}`);
+      await s.inFlight.get(id);
+      await api.del(`/chats/${encodeURIComponent(id)}`);
+      gone = true;
+      s.deleted.add(id);
+      s.next.delete(id);
       toast(t("chat.delete.done", { title: deleting.title }));
       const wasOpen = deleting.id === chatRef.current?.id;
       setDeleting(null);
@@ -844,6 +908,8 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
     } catch (err) {
       toastError(t("chat.delete.failed"), err);
     } finally {
+      s.deleting.delete(id);
+      if (!gone && s.next.has(id)) void flush(id);
       setDeleteBusy(false);
     }
   }

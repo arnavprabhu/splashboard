@@ -1,7 +1,9 @@
 """Background jobs with progress on `/events` (`job` events).
 
 A job is an asyncio task; it reports output lines and progress through the
-`Job` handle it receives, and ends as `done` or `failed`.
+`Job` handle it receives, and ends as `done` or `failed`. Work that must not be
+abandoned halfway (moving files and recording where they went) runs through
+`Job.protect`, so cancelling the job, as shutdown does, waits for it to finish.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ import uuid
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal, TypeVar
 
 from .events.bus import EventBus
 from .schemas import JobAccepted, JobEvent, JobView
@@ -22,6 +24,7 @@ log = logging.getLogger(__name__)
 
 JobKind = Literal["verify", "storage_move", "import", "engine_install", "engine_upgrade"]
 JobState = Literal["running", "done", "failed"]
+T = TypeVar("T")
 
 
 @dataclass
@@ -35,6 +38,7 @@ class Job:
     message: str | None = None
     lines: deque[str] = field(default_factory=lambda: deque(maxlen=500))
     task: asyncio.Task[None] | None = None
+    protected: set[asyncio.Future[Any]] = field(default_factory=set)
 
     def _emit(self, line: str | None = None) -> None:
         self.bus.publish(
@@ -72,6 +76,30 @@ class Job:
             self.message = message
         self._emit()
 
+    async def protect(self, work: Awaitable[T]) -> T:
+        """Run `work` to the end even if the job is cancelled meanwhile.
+
+        A worker thread can't be interrupted, so cancelling the code that awaits
+        it would leave the thread changing files while nothing records the
+        outcome. Here a cancellation waits for `work` to finish (or fail), and
+        takes effect afterwards; an error from `work` wins over it.
+        """
+        future: asyncio.Future[T] = asyncio.ensure_future(work)
+        self.protected.add(future)
+        future.add_done_callback(self.protected.discard)
+        cancelled = False
+        while True:
+            try:
+                result = await asyncio.shield(future)
+            except asyncio.CancelledError:
+                if future.done():
+                    raise
+                cancelled = True
+                continue
+            if cancelled:
+                raise asyncio.CancelledError
+            return result
+
     def finish(self, ok: bool, message: str | None = None) -> None:
         self.state = "done" if ok else "failed"
         if ok:
@@ -107,7 +135,9 @@ class Jobs:
             except JobFailed as error:
                 job.finish(False, str(error))
             except asyncio.CancelledError:
-                job.finish(False, "cancelled")
+                # A protected step may already have finished the job for real.
+                if job.state == "running":
+                    job.finish(False, "cancelled")
                 raise
             except Exception as error:
                 log.exception("job %s (%s) failed", job.id, kind)
@@ -136,6 +166,12 @@ class Jobs:
         return None
 
     async def shutdown(self) -> None:
+        """Cancel running jobs and wait for them. A job inside a protected step
+        (a storage move, say) finishes that step first, however long it takes:
+        stopping halfway would leave files and settings disagreeing."""
+        busy = [j for j in self._jobs.values() if j.protected]
+        for job in busy:
+            log.info("waiting for the %s job %s to finish before stopping", job.kind, job.id)
         tasks = [j.task for j in self._jobs.values() if j.task and not j.task.done()]
         for task in tasks:
             task.cancel()

@@ -50,10 +50,12 @@ jobs:
       - name: manager mypy (as on macOS)
         working-directory: manager
         run: uv run mypy --platform darwin
+      # The fake engine is linted with the manager's locked ruff and mypy, run from the
+      # repository root so its own ruff.toml and mypy.ini apply.
       - name: fake engine ruff
-        run: uvx ruff check scripts/fake_splash && uvx ruff format --check scripts/fake_splash
+        run: uv run --project manager ruff check scripts/fake_splash && uv run --project manager ruff format --check scripts/fake_splash
       - name: fake engine mypy (as on macOS)
-        run: uvx --with pytest mypy --config-file scripts/fake_splash/mypy.ini --platform darwin
+        run: uv run --project manager mypy --config-file scripts/fake_splash/mypy.ini --platform darwin
       - name: web install, typecheck, vitest, build, size
         working-directory: web
         run: pnpm install --frozen-lockfile && pnpm typecheck && pnpm test && pnpm build && pnpm size

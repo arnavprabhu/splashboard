@@ -107,6 +107,51 @@ def test_shutdown_cancels_running_jobs() -> None:
     assert [j.id for j in jobs.all()] == [job.id]
 
 
+def test_shutdown_lets_a_protected_step_finish_first() -> None:
+    jobs = Jobs(EventBus())
+    steps: list[str] = []
+
+    async def step() -> str:
+        await asyncio.sleep(0.05)
+        steps.append("protected")
+        return "result"
+
+    async def body(job: Any) -> None:
+        steps.append(await job.protect(step()))
+        steps.append("after")  # never reached: the cancellation applies here
+
+    async def main() -> Any:
+        accepted = jobs.start("storage_move", body)
+        await asyncio.sleep(0)
+        await jobs.shutdown()
+        return jobs.get(accepted.job_id)
+
+    job = asyncio.run(main())
+    assert steps == ["protected"]
+    assert job.state == "failed" and job.message == "cancelled"
+    assert not job.protected
+
+
+def test_a_protected_step_can_finish_the_job_before_a_cancellation() -> None:
+    jobs = Jobs(EventBus())
+
+    async def step(job: Any) -> None:
+        await asyncio.sleep(0.05)
+        job.finish(True, "moved")
+
+    async def body(job: Any) -> None:
+        await job.protect(step(job))
+
+    async def main() -> Any:
+        accepted = jobs.start("storage_move", body)
+        await asyncio.sleep(0)
+        await jobs.shutdown()
+        return jobs.get(accepted.job_id)
+
+    job = asyncio.run(main())
+    assert job.state == "done" and job.message == "moved"
+
+
 # --- updates.py ----------------------------------------------------------------------------
 
 

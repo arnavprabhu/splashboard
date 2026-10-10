@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import stat
-from typing import Any
+import time
+from typing import Any, cast
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from splash_gui.chats.store import ChatStore
 from splash_gui.paths import Paths
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"x" * 64
@@ -50,6 +55,17 @@ def test_create_get_put_delete(client: TestClient, paths: Paths) -> None:
     assert listed[0]["id"] == chat["id"] and listed[0]["message_count"] == 3
     assert client.delete(f"/api/admin/chats/{chat['id']}").status_code == 204
     assert client.get(f"/api/admin/chats/{chat['id']}").json()["error"]["code"] == "chat_not_found"
+
+
+def test_put_does_not_recreate_a_deleted_chat(client: TestClient, paths: Paths) -> None:
+    chat = _chat(client)
+    url = f"/api/admin/chats/{chat['id']}"
+    assert client.delete(url).status_code == 204
+    response = client.put(url, json=chat)
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "chat_not_found"
+    assert not (paths.chats_dir / f"{chat['id']}.json").exists()
+    assert client.get("/api/admin/chats").json()["chats"] == []
 
 
 def test_branch_validation(client: TestClient) -> None:
@@ -135,6 +151,141 @@ def test_unreferenced_attachments_are_collected_on_delete(client: TestClient, pa
     assert client.put(f"/api/admin/chats/{chat['id']}", json=chat).status_code == 200
     client.delete(f"/api/admin/chats/{chat['id']}")
     assert list(paths.attachments_dir.iterdir()) == []
+
+
+def test_deleting_a_chat_keeps_another_chats_unsaved_upload(
+    client: TestClient, paths: Paths
+) -> None:
+    a, b = _chat(client, title="A"), _chat(client, title="B")
+    up = client.post(
+        f"/api/admin/chats/{b['id']}/attachments",
+        content=PNG,
+        headers={"Content-Type": "image/png"},
+    ).json()
+    url = "/api/admin/chats/" + up["file"]
+    assert client.delete(f"/api/admin/chats/{a['id']}").status_code == 204
+    assert client.get(url).status_code == 200
+    # Uploaded without a chat and not yet saved anywhere: also kept.
+    loose = client.post(
+        "/api/admin/chats/attachments",
+        content=b"loose" + PNG,
+        headers={"Content-Type": "image/png"},
+    ).json()
+    c = _chat(client, title="C")
+    assert client.delete(f"/api/admin/chats/{c['id']}").status_code == 204
+    assert client.get("/api/admin/chats/" + loose["file"]).status_code == 200
+
+
+def test_deleting_a_chat_keeps_its_files_while_another_chat_uploads_the_same_bytes(
+    client: TestClient,
+) -> None:
+    def upload(path: str, data: bytes) -> dict[str, Any]:
+        response = client.post(path, content=data, headers={"Content-Type": "image/png"})
+        return cast(dict[str, Any], response.json())
+
+    for loose in (False, True):
+        data = (b"loose" if loose else b"chat") + PNG
+        a, b = _chat(client, title="A"), _chat(client, title="B")
+        up = upload(f"/api/admin/chats/{a['id']}/attachments", data)
+        a["messages"] = [
+            _msg("u", None, "user", "look", attachments=[{"kind": "image", "file": up["file"]}])
+        ]
+        assert client.put(f"/api/admin/chats/{a['id']}", json=a).status_code == 200
+        # The same bytes, uploaded for B (or without a chat) and not saved yet.
+        target = (
+            "/api/admin/chats/attachments" if loose else f"/api/admin/chats/{b['id']}/attachments"
+        )
+        assert upload(target, data)["file"] == up["file"]
+        assert client.delete(f"/api/admin/chats/{a['id']}").status_code == 204
+        assert client.get("/api/admin/chats/" + up["file"]).status_code == 200
+
+
+def test_deleting_a_chat_removes_its_unsaved_uploads_and_old_orphans(
+    client: TestClient, paths: Paths
+) -> None:
+    a = _chat(client, title="A")
+    mine = client.post(
+        f"/api/admin/chats/{a['id']}/attachments",
+        content=PNG,
+        headers={"Content-Type": "image/png"},
+    ).json()
+    old = paths.attachments_dir / ("b" * 64 + ".png")
+    old.write_bytes(b"left over")
+    os.utime(old, (time.time() - 2 * 24 * 3600,) * 2)
+    assert client.delete(f"/api/admin/chats/{a['id']}").status_code == 204
+    assert client.get("/api/admin/chats/" + mine["file"]).status_code == 404
+    assert list(paths.attachments_dir.iterdir()) == []
+
+
+def _restart_chat_store(app: FastAPI) -> None:
+    state = app.state.manager
+    state.chats = ChatStore(state.paths.chats_dir, state.usage)
+
+
+def test_pending_uploads_survive_a_restart(app: FastAPI, client: TestClient) -> None:
+    def upload(path: str, data: bytes) -> dict[str, Any]:
+        response = client.post(path, content=data, headers={"Content-Type": "image/png"})
+        return cast(dict[str, Any], response.json())
+
+    for loose in (False, True):
+        data = (b"loose" if loose else b"chat") + PNG
+        a, b = _chat(client, title="A"), _chat(client, title="B")
+        up = upload(f"/api/admin/chats/{a['id']}/attachments", data)
+        a["messages"] = [
+            _msg("u", None, "user", "look", attachments=[{"kind": "image", "file": up["file"]}])
+        ]
+        assert client.put(f"/api/admin/chats/{a['id']}", json=a).status_code == 200
+        # The same bytes, uploaded for B (or without a chat) and not saved before a restart.
+        target = (
+            "/api/admin/chats/attachments" if loose else f"/api/admin/chats/{b['id']}/attachments"
+        )
+        assert upload(target, data)["file"] == up["file"]
+        _restart_chat_store(app)
+        assert client.delete(f"/api/admin/chats/{a['id']}").status_code == 204
+        assert client.get("/api/admin/chats/" + up["file"]).status_code == 200
+
+
+def test_pending_uploads_file_is_pruned_and_tolerates_damage(
+    app: FastAPI, client: TestClient, paths: Paths
+) -> None:
+    pending = paths.chats_dir / ".pending-uploads"
+    a = _chat(client, title="A")
+    up = client.post(
+        f"/api/admin/chats/{a['id']}/attachments",
+        content=PNG,
+        headers={"Content-Type": "image/png"},
+    ).json()
+    name = up["file"].removeprefix("attachments/")
+    assert name in json.loads(pending.read_bytes())["uploads"]
+    # Saving the message that uses it ends the pending record.
+    a["messages"] = [
+        _msg("u", None, "user", "look", attachments=[{"kind": "image", "file": up["file"]}])
+    ]
+    assert client.put(f"/api/admin/chats/{a['id']}", json=a).status_code == 200
+    assert not pending.exists()
+    # Expired records, unknown chats and missing files are dropped on load.
+    old = time.time() - 2 * 24 * 3600
+    pending.write_text(
+        json.dumps(
+            {
+                "uploads": {name: {"gone": time.time()}, "c" * 64 + ".png": {a["id"]: time.time()}},
+                "loose": {name: old},
+            }
+        )
+    )
+    _restart_chat_store(app)
+    assert not pending.exists()
+    # A damaged file falls back to the age grace: a recent upload of A's bytes stays.
+    b = _chat(client, title="B")
+    name = up["file"].removeprefix("attachments/")
+    huge = json.dumps({"loose": {name: 10**400}})
+    endless = '{"loose": {"' + name + '": 1e999}}'
+    for damage in (b"{not json", b"[]", b'{"uploads": {"x": 1}}', huge.encode(), endless.encode()):
+        pending.write_bytes(damage)
+        _restart_chat_store(app)
+        assert client.delete(f"/api/admin/chats/{b['id']}").status_code == 204
+        assert client.get("/api/admin/chats/" + up["file"]).status_code == 200
+        b = _chat(client, title="B")
 
 
 def test_search_titles_and_content(client: TestClient) -> None:

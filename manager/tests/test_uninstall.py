@@ -142,6 +142,108 @@ def test_a_models_folder_outside_the_data_folder_is_listed_but_never_deleted(
     assert (outside / "models--x--y" / "w").exists()
 
 
+def _nest(app: FastAPI, key: str, folder: Path) -> None:
+    state = app.state.manager
+    raw = state.settings.current.to_json_dict()
+    raw["global"]["storage"][key] = str(folder)
+    result, _ = state.settings.save(raw)
+    assert result.ok
+
+
+def test_kept_models_and_cache_nested_in_the_data_folder_survive(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _restore(app, monkeypatch)
+    base: Path = app.state.manager.paths.base
+    models = base / "custom" / "models"
+    cache = base / "deep" / "er" / "cache"
+    (models / "w.gguf").parent.mkdir(parents=True)
+    (models / "w.gguf").write_bytes(b"w" * 100)
+    cache.mkdir(parents=True)
+    (cache / "kv").write_bytes(b"c" * 50)
+    (base / "custom" / "notes.txt").write_text("data")
+    (base / "deep" / "other.txt").write_text("data")
+    _nest(app, "models_dir", models)
+    _nest(app, "cache_dir", cache)
+
+    plan = client.post("/api/admin/uninstall/plan").json()
+    by_path = {item["path"]: item for item in plan["items"]}
+    assert by_path[str(models)]["kind"] == "models" and by_path[str(models)]["deletable"]
+    assert by_path[str(cache)]["kind"] == "cache" and by_path[str(cache)]["deletable"]
+    assert str(base / "custom") not in by_path and str(base / "deep") not in by_path
+    assert by_path[str(base / "custom" / "notes.txt")]["kind"] == "data"
+
+    reply = client.post(
+        "/api/admin/uninstall",
+        json={"delete_models": False, "delete_cache": False, "stop": False},
+    )
+
+    assert reply.status_code == 200, reply.text
+    assert (models / "w.gguf").exists() and (cache / "kv").exists()
+    assert not (base / "custom" / "notes.txt").exists()
+    assert not (base / "deep" / "other.txt").exists()
+
+
+def test_nested_models_and_cache_go_when_ticked(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _restore(app, monkeypatch)
+    base: Path = app.state.manager.paths.base
+    models = base / "custom" / "models"
+    cache = models / "cache"
+    cache.mkdir(parents=True)
+    (models / "w.gguf").write_bytes(b"w" * 100)
+    (cache / "kv").write_bytes(b"c" * 50)
+    _nest(app, "models_dir", models)
+    _nest(app, "cache_dir", cache)
+
+    client.post("/api/admin/uninstall", json={"delete_models": True, "stop": False})
+    assert not (models / "w.gguf").exists() and (cache / "kv").exists()
+
+    client.post("/api/admin/uninstall", json={"delete_cache": True, "stop": False})
+    assert not cache.exists()
+
+
+def test_models_named_through_a_symlink_are_found_inside_the_data_folder(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _restore(app, monkeypatch)
+    base: Path = app.state.manager.paths.base
+    models = base / "custom" / "models"
+    models.mkdir(parents=True)
+    (models / "w.gguf").write_bytes(b"w" * 100)
+    alias = tmp_path / "alias"
+    alias.symlink_to(base / "custom")
+    _nest(app, "models_dir", alias / "models")
+
+    client.post("/api/admin/uninstall", json={"stop": False})
+    assert (models / "w.gguf").exists()
+
+
+@pytest.mark.parametrize(
+    ("on_disk", "typed"), [("custom/models", "Custom/Models"), ("models", "MODELS")]
+)
+def test_models_named_in_a_different_case_are_kept(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch, on_disk: str, typed: str
+) -> None:
+    _restore(app, monkeypatch)
+    base: Path = app.state.manager.paths.base
+    models = base / on_disk
+    models.mkdir(parents=True, exist_ok=True)
+    (models / "w.gguf").write_bytes(b"w" * 100)
+    if not (base / typed).exists():
+        pytest.skip("the filesystem is case-sensitive")
+    _nest(app, "models_dir", base / typed)
+
+    plan = client.post("/api/admin/uninstall/plan").json()
+    kinds = {item["path"]: item["kind"] for item in plan["items"]}
+    assert kinds.get(str(models)) == "models"
+    assert all(kind != "data" or not models.is_relative_to(path) for path, kind in kinds.items())
+
+    client.post("/api/admin/uninstall", json={"stop": False})
+    assert (models / "w.gguf").exists()
+
+
 def test_a_data_folder_that_is_the_home_folder_is_refused(
     app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import errno
 import json
 import shutil
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -14,6 +16,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from splash_gui.schemas import ImportRequest, StorageMoveRequest
 from splash_gui.storage import api as storage_api
 from splash_gui.storage.api import default_hf_hub, move_tree
 
@@ -296,6 +299,67 @@ def test_a_settings_failure_moves_the_files_back(
     assert job["state"] == "failed" and "restored" in job["message"]
     assert (models / "models--org--repo" / "blobs" / "abc").exists()
     assert not destination.exists()
+
+
+def held_move_tree(monkeypatch: pytest.MonkeyPatch) -> tuple[threading.Event, threading.Event]:
+    """Replace move_tree with one that waits for `release` before moving;
+    `started` is set once the worker thread is inside it."""
+    started, release = threading.Event(), threading.Event()
+    real = storage_api.move_tree
+
+    def held(source: Path, destination: Path) -> None:
+        started.set()
+        assert release.wait(10)
+        real(source, destination)
+
+    monkeypatch.setattr(storage_api, "move_tree", held)
+    return started, release
+
+
+async def test_quitting_during_a_move_finishes_it_and_saves_the_setting(
+    app: FastAPI, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = app.state.manager
+    models = state.settings.models_dir()
+    seed_models(models)
+    destination = tmp_path / "moved-models"
+    started, release = held_move_tree(monkeypatch)
+    accepted = await storage_api.move(
+        state, StorageMoveRequest(target="models", path=str(destination), move_files=True)
+    )
+    assert await asyncio.to_thread(started.wait, 5)
+    shutdown = asyncio.create_task(state.jobs.shutdown())
+    await asyncio.sleep(0.1)
+    assert not shutdown.done(), "shutdown waits for the move in flight"
+    release.set()
+    await asyncio.wait_for(shutdown, 10)
+    assert not models.exists()
+    assert (destination / "models--org--repo" / "blobs" / "abc").exists()
+    assert state.settings.models_dir() == destination, "the setting follows the files"
+    job = state.jobs.get(accepted.job_id)
+    assert job is not None and job.state == "done"
+
+
+async def test_quitting_during_an_import_finishes_the_repository_in_flight(
+    app: FastAPI, hub: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = app.state.manager
+    models = state.settings.models_dir()
+    started, release = held_move_tree(monkeypatch)
+    first, second = "incoai/Qwen3.8-27B-DFlash2", "mlx-community/Qwen3.8-27B-4bit"
+    accepted = await storage_api.import_models(state, ImportRequest(repo_ids=[first, second]))
+    assert await asyncio.to_thread(started.wait, 5)
+    shutdown = asyncio.create_task(state.jobs.shutdown())
+    await asyncio.sleep(0.1)
+    assert not shutdown.done()
+    release.set()
+    await asyncio.wait_for(shutdown, 10)
+    job = state.jobs.get(accepted.job_id)
+    assert job is not None and job.state == "failed" and job.message == "cancelled"
+    assert list(job.lines) == [f"imported {first}"]
+    assert (models / "models--incoai--Qwen3.8-27B-DFlash2" / "blobs" / "w").exists()
+    assert not (hub / "models--incoai--Qwen3.8-27B-DFlash2").exists()
+    assert (hub / "models--mlx-community--Qwen3.8-27B-4bit").exists(), "the next one is not started"
 
 
 def test_engine_load_waits_for_a_storage_job(app: FastAPI, client: TestClient) -> None:

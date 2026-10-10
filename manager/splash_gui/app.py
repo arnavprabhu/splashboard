@@ -111,6 +111,7 @@ def build_state(config: AppConfig) -> ManagerState:
     paths.ensure()
     settings = config.settings or SettingsStore(paths)
     settings.load()
+    _recover_storage_move(paths, settings)
     secrets = config.secrets or SecretStore(backend_from_env(paths))
     state = ManagerState(
         paths=paths,
@@ -125,6 +126,17 @@ def build_state(config: AppConfig) -> ManagerState:
     state.auth.ensure_api_key()  # sign-in needs a key from the first start
     attach_core(state)
     return state
+
+
+def _recover_storage_move(paths: Paths, settings: SettingsStore) -> None:
+    """Settle a storage move a killed manager left halfway, before anything reads
+    the models or cache folder. Its warnings show with the settings' load warnings."""
+    from .storage.recovery import recover
+
+    try:
+        settings.load_warnings.extend(recover(paths, settings))
+    except Exception:
+        log.exception("could not settle an interrupted storage move")
 
 
 def attach_core(state: ManagerState) -> None:
