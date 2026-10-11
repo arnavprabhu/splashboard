@@ -1,7 +1,6 @@
 # Splashboard
 
-[![Latest release](https://img.shields.io/github/v/release/arnavprabhu/splashboard?label=download&color=E8432E)](https://github.com/arnavprabhu/splashboard/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/arnavprabhu/splashboard/total?color=111111)](https://github.com/arnavprabhu/splashboard/releases)
+[![Download](https://img.shields.io/badge/download-latest%20release-E8432E.svg)](https://github.com/arnavprabhu/splashboard/releases/latest)
 [![CI](https://github.com/arnavprabhu/splashboard/actions/workflows/ci.yml/badge.svg)](https://github.com/arnavprabhu/splashboard/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2026.4%2B%20·%20Apple%20silicon-black.svg)](#requirements)
