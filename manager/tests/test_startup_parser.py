@@ -66,6 +66,8 @@ def test_startup_sequence() -> None:
     phases = [e.phase for e in events if isinstance(e, PhaseEvent)]
     assert phases[:2] == ["installing", "installing"]
     assert "loading" in phases and phases[-1] == "warming"
+    # Warming starts when the weights are in, not when the engine is ready.
+    assert parser.feed("22:52:58 Weights loaded in 0.05 s.") == [PhaseEvent("warming")]
     assert TemplateEvent("patched") in events
     ready = next(e for e in events if isinstance(e, ReadyEvent))
     assert ready.context_tokens == 131072 and ready.language_only

@@ -370,8 +370,10 @@ class StartupParser:
         if line.startswith("Chat template · "):  # server.py:1968
             mode = template_mode(line)
             return [TemplateEvent(mode)] if mode else []
-        if _WEIGHTS_LOADED.search(line):  # RuntimeResources.mm:385
-            return [PhaseEvent("loading")]
+        # The weights are in; startup warmup follows, silent until "Ready" (a large
+        # MoE model at a long context can take a minute or more).
+        if _WEIGHTS_LOADED.search(line):  # RuntimeResources.mm:394
+            return [PhaseEvent("warming")]
         if line.startswith("Weights released after"):  # NativeRuntime.cpp:133
             return [WeightsEvent("released")]
         restored = _WEIGHTS_RESTORED.search(line)
