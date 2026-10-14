@@ -524,6 +524,7 @@ class IntegrationsService:
             plans.append((path, encode_document(path, data), list(values) + list(remove)))
 
         if name == "claude-desktop":
+            label = self.claude_deployment_name()
             support = self.home / "Library" / "Application Support"
             config = support / "Claude-3p" / "configLibrary"
             patch(
@@ -533,7 +534,7 @@ class IntegrationsService:
                     "inferenceGatewayBaseUrl": f"http://127.0.0.1:{self.state.settings.current.global_.integrations.claude_desktop.port}",
                     "inferenceGatewayApiKey": "splash",
                     "inferenceGatewayAuthScheme": "bearer",
-                    "deploymentDisplayName": "Splash",
+                    "deploymentDisplayName": label,
                     "chatTabEnabled": True,
                     "disableDeploymentModeChooser": True,
                     "disableTelemetry": True,
@@ -546,7 +547,7 @@ class IntegrationsService:
                 config / "_meta.json",
                 {
                     "appliedId": DEPLOYMENT,
-                    "entries": [*entries, {"id": DEPLOYMENT, "name": "Splash"}],
+                    "entries": [*entries, {"id": DEPLOYMENT, "name": label}],
                 },
             )
             for dirname in ("Claude", "Claude-3p"):
@@ -699,6 +700,20 @@ class IntegrationsService:
             # Restart: open straight into a new Codex thread.
             return self.state.macos.open("-a", str(app), "codex://threads/new?mode=codex")
         return self.state.macos.open("-a", str(app))
+
+    def claude_deployment_name(self) -> str:
+        """Claude Desktop names its models from its own catalog by their Claude
+        IDs, so the gateway's display names never show. The deployment's name,
+        shown beside the account, carries the Splash model instead: the one the
+        first slot routes to, else the active or default model. Claude reads it
+        when it starts, so it is the model at the time of connecting."""
+        g = self.state.settings.current.global_
+        slots = g.integrations.claude_desktop.slots
+        model = next(iter(slots.values()), None) or self.state.active_model()
+        model = model or g.routing.default_model
+        if not model:
+            return "Splash"
+        return f"Splash · {model.split('/', 1)[-1]}"
 
     async def connect(self, name: str, confirm: bool) -> DesktopIntegration:
         async with self.lock:

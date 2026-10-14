@@ -901,9 +901,31 @@ async def test_claude_desktop_writes_the_gateway_config(service, monkeypatch):
         meta["appliedId"] == deployment_id()
         and {"id": deployment_id(), "name": "Splash"} in meta["entries"]
     )
+    assert deployment["deploymentDisplayName"] == "Splash", "no model loaded or chosen"
     for key in ("config_1p", "config_3p"):
         assert json.loads(files[key].read_text())["deploymentMode"] == "3p"
     assert json.loads(files["config_1p"].read_text())["mcpServers"] == {"x": {"command": "y"}}
+
+
+async def test_claude_desktop_deployment_is_named_after_the_model(service, monkeypatch):
+    """Claude names gateway models from its own catalog, so the deployment's
+    name is where the Splash model shows: the first slot's target, else the
+    active model."""
+    monkeypatch.setattr(service, "start_gateway", _noop_gateway())
+    monkeypatch.setattr(service.state, "active_model", lambda: "Hcompany/Holo4-27B-GGUF")
+    files = _claude_paths(service.home)
+    await service.connect("claude-desktop", confirm=False)
+    deployment = json.loads(files["deployment"].read_text())
+    assert deployment["deploymentDisplayName"] == "Splash · Holo4-27B-GGUF"
+    meta = json.loads(files["meta"].read_text())
+    assert {"id": deployment_id(), "name": "Splash · Holo4-27B-GGUF"} in meta["entries"]
+
+    await service.disconnect("claude-desktop")
+    slots = service.state.settings.current.global_.integrations.claude_desktop.slots
+    monkeypatch.setitem(slots, "claude-fable-5", "unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M")
+    await service.connect("claude-desktop", confirm=False)
+    deployment = json.loads(files["deployment"].read_text())
+    assert deployment["deploymentDisplayName"] == "Splash · Qwen3.8-27B-GGUF:UD-Q4_K_M"
 
 
 def deployment_id() -> str:
