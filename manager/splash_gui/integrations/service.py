@@ -70,6 +70,9 @@ CODEX_BUNDLE_ID = "com.openai.codex"
 TESTED_VERSIONS: dict[str, str | None] = {"claude-desktop": None, "codex-app": None}
 # Splash's reasoning efforts (server/serve_options.py REASONING_EFFORTS).
 SPLASH_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+# The input modalities Codex's model catalog accepts. It refuses the whole
+# catalog over any other, and Splash lists "pdf" for a vision model.
+CODEX_MODALITIES = ("text", "image", "audio")
 
 
 def _version_key(text: str | None) -> tuple[int, ...]:
@@ -562,7 +565,11 @@ class IntegrationsService:
                         "description": "Splash local model",
                         "context_window": model.get("context_length", 262144),
                         "max_context_window": model.get("context_length", 262144),
-                        "input_modalities": model.get("input_modalities", ["text"]),
+                        "input_modalities": [
+                            m
+                            for m in model.get("input_modalities", ["text"])
+                            if m in CODEX_MODALITIES
+                        ],
                         "supported_reasoning_levels": [
                             {"effort": e, "description": e} for e in SPLASH_EFFORTS
                         ],

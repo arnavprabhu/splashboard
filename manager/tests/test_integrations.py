@@ -1018,6 +1018,27 @@ async def test_codex_catalog_lists_splash_first_then_native(service, monkeypatch
     assert {"none", "max"} <= set(config["desktop"]["enabled-reasoning-efforts"])
 
 
+async def test_codex_catalog_lists_only_modalities_codex_accepts(service, monkeypatch):
+    """Splash lists "pdf" for a vision model; Codex refuses the whole catalog over
+    any modality but text, image and audio."""
+    monkeypatch.setattr(
+        service.state.proxy,
+        "models_list",
+        lambda: {
+            "data": [
+                {
+                    "id": "unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M",
+                    "context_length": 262144,
+                    "input_modalities": ["text", "image", "pdf"],
+                }
+            ]
+        },
+    )
+    await service.connect("codex-app", confirm=False)
+    entry = json.loads((service.state.paths.codex_app_dir / "models.json").read_text())["models"][0]
+    assert entry["input_modalities"] == ["text", "image"]
+
+
 async def test_codex_catalog_entry_has_the_fields_codex_requires(service, monkeypatch):
     native = [
         {"slug": "gpt-hidden", "visibility": "hide", "priority": 0, "base_instructions": "H"},
