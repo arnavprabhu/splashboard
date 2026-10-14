@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, ClassVar, TypeVar
 from ..errors import ApiError
 from ..events.alerts import action
 from ..hubcache import blob_partials, blobs_dir, range_partial, remove_partial, repo_folder
+from ..models.catalog import installable_id
 from ..models.hf import HubError, is_blob_id
 from ..models.layout import read_all
 from ..models.service import valid_id
@@ -165,6 +166,13 @@ class Downloads:
         if self.state.jobs.running("storage_move") or self.state.jobs.running("import"):
             raise ApiError(409, "Wait for the storage operation to finish", "storage_busy")
         valid_id(body.id)
+        repo_id, variant = split_model_id(body.id)
+        if variant is not None and not draft:
+            try:
+                listing = await self.state.models.hf.repo_info(repo_id, body.revision)
+            except HubError as error:
+                raise ApiError(error.status, error.message, "hub_unreachable") from None
+            body = body.model_copy(update={"id": installable_id(repo_id, variant, listing.files)})
         if self.active_model(body.id):
             raise ApiError(409, "This model is already in the queue", "already_queued")
         item = DownloadItem(

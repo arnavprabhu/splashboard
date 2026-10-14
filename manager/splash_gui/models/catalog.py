@@ -14,6 +14,7 @@ falling back to the smaller ones; the authoritative tensor-type check happens in
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -103,6 +104,28 @@ def is_projector(filename: str) -> bool:
     """A vision projector GGUF, as Splash names one: `mmproj` anywhere in the stem
     (`mmproj-BF16.gguf`, Prism's `MODEL-mmproj-BF16.gguf`), install/upstream.py:59-62."""
     return "mmproj" in Path(filename).stem.lower()
+
+
+def installable_id(repo_id: str, variant: str | None, files: Iterable[str]) -> str:
+    """The model ID Splash installs for `repo_id:variant`. In a repository with one
+    root GGUF besides its projector, Splash's `select_gguf` strips that file's whole
+    name as the shared model name, so a :VARIANT that is the whole name
+    (`q4_k_m.gguf` as :q4_k_m) matches nothing. Without :VARIANT Splash takes the
+    only GGUF, so such an ID is installed as the bare repository. Its own -VARIANT
+    ending (:Q4_K_M for `X-Q4_K_M.gguf`) resolves and is kept."""
+    if variant is None:
+        return repo_id
+    names = list(files)
+    targets = [n for n in names if "/" not in n and n.endswith(".gguf") and not is_projector(n)]
+    # A bare ID with safetensors in the repository is read as an MLX model
+    # (install/upstream.py `inspect_target`).
+    if (
+        len(targets) == 1
+        and Path(targets[0]).stem.lower() == variant.lower()
+        and not any(n.endswith(".safetensors") for n in names)
+    ):
+        return repo_id
+    return f"{repo_id}:{variant}"
 
 
 def quant(name: str) -> str:

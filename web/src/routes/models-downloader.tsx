@@ -26,7 +26,7 @@ import { CompatTag, FitTag, type CompatState } from "./models/bits";
 import { DownloadsPanel } from "./models/DownloadsPanel";
 import { useDownloadsPoll, useDrawerParam, useInstalled, useModelsTitle } from "./models/hooks";
 import { ModelDrawer } from "./models/ModelDrawer";
-import { checkModelId, diskCheck, formatLabel, hfUrl, isClefId, isProjector, inspectProgress, MAX_LAZY_CHECKS, pickVariant, projectorRow, shortName } from "./models/logic";
+import { checkModelId, diskCheck, formatLabel, hfUrl, isClefId, isProjector, inspectProgress, MAX_LAZY_CHECKS, pickVariant, projectorRow, shortName, variantModelId } from "./models/logic";
 import { VariantTable } from "./models/VariantTable";
 import { MODELS_TABS } from "./tabs";
 
@@ -50,9 +50,6 @@ async function startDownload(id: string, opts: { language_only?: boolean; revisi
 /** Hub download sizes are decimal, as in the downloads panel and the plan. */
 const HUB = { base: 1000 } as const;
 
-function variantId(repo: string, v: string | null): string {
-  return v ? `${repo}:${v}` : repo;
-}
 
 export default function Downloader() {
   useDownloadsPoll();
@@ -134,8 +131,8 @@ function EntryRow({ e, index, installedIds, memory, onDetails }: { e: CatalogEnt
   const rec = e.recommended_variant ?? null;
   const loadable = variants.filter((v) => v.loadable !== false);
   // A GGUF repo is installed per variant (`repo:VARIANT`): say which one, and load that one.
-  const installedVariants = variants.filter((v) => installedIds.has(variantId(e.repo_id, v.name))).map((v) => v.name);
-  const loadId = variants.length ? (installedVariants[0] ? variantId(e.repo_id, installedVariants[0]) : null) : e.installed || installedIds.has(e.id) ? e.id : null;
+  const installedVariants = variants.filter((v) => installedIds.has(variantModelId(e.repo_id, v.name, variants))).map((v) => v.name);
+  const loadId = variants.length ? (installedVariants[0] ? variantModelId(e.repo_id, installedVariants[0], variants) : null) : e.installed || installedIds.has(e.id) ? e.id : null;
   // Choosing in the Variant menu selects; only the button downloads (Enter on the menu never starts a download).
   const [picked, setPicked] = useState<string | null>(null);
   const choice = variants.find((v) => v.name === (picked ?? rec)) ?? loadable[0] ?? null;
@@ -203,7 +200,7 @@ function EntryRow({ e, index, installedIds, memory, onDetails }: { e: CatalogEnt
         )}
         {variants.length > 0 ? (
           <span class="cluster">
-            <Button size="s" variant="solid" disabled={!canDownload} onClick={() => choice && void startDownload(variantId(e.repo_id, choice.name))}>
+            <Button size="s" variant="solid" disabled={!canDownload} onClick={() => choice && void startDownload(variantModelId(e.repo_id, choice.name, variants))}>
               {choice && dlSize ? t("downloader.download_variant_size", { name: choice.name, size: dlSize }) : t("downloader.download_variant", { name: choice?.name ?? "" })}
             </Button>
             <Menu
@@ -335,7 +332,7 @@ function ById({ initial, free, memory, installedIds }: { initial: string; free: 
   const disk = plan
     ? { ok: plan.fits_on_disk, neededBytes: plan.remaining_bytes + plan.margin_bytes, freeBytes: plan.free_bytes ?? free }
     : diskCheck(size, free);
-  const target = variants.length ? variantId(repo, variant) : (result?.id ?? id.trim());
+  const target = variants.length ? variantModelId(repo, variant, variants) : (result?.id ?? id.trim());
   const progress = inspectProgress(result);
   const isInstalled = installedIds.has(target);
 

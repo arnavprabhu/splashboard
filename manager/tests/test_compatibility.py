@@ -397,6 +397,46 @@ def test_variant_labels_resolve_with_splash_s_own_selector(tmp_path):
     assert json.loads(result.stdout) == ["Q4_0", "UD-Q4_K_M", "UD-Q4_K_XL", "imatrix_unsloth"]
 
 
+def test_a_one_gguf_repository_installs_an_id_splash_resolves():
+    """Hcompany/Holo4-27B-GGUF has one GGUF, `q4_k_m.gguf`, whose variant the
+    table names `q4_k_m`. Splash's `select_gguf` matches no :q4_k_m there, so the
+    download is queued under the ID it does resolve (checked on the live
+    repository, 2026-10-13)."""
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from splash_gui.models import catalog as cat
+
+    reference = Path(__file__).resolve().parents[2] / "splash"
+    if not (reference / "install" / "upstream.py").exists():
+        pytest.skip("no Splash reference clone to resolve against")
+    script = (
+        "import json, sys\n"
+        "from install import upstream\n"
+        "files, variant = json.loads(sys.argv[1]), json.loads(sys.argv[2])\n"
+        "print(upstream.select_gguf(files, variant)[0])\n"
+    )
+    for files, variant in [
+        (["q4_k_m.gguf", "mmproj.f16.gguf"], "q4_k_m"),
+        (["Holo4-27B-Q4_K_M.gguf"], "Holo4-27B-Q4_K_M"),
+        (["Holo4-27B-Q4_K_M.gguf"], "Q4_K_M"),
+    ]:
+        model = cat.installable_id("Hcompany/Holo4-27B-GGUF", variant, files)
+        chosen = model.partition(":")[2] or None
+        result = subprocess.run(
+            [sys.executable, "-c", script, json.dumps(files), json.dumps(chosen)],
+            env={"PYTHONPATH": str(reference), "PATH": "/usr/bin:/bin"},
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        assert result.returncode == 0, (model, result.stderr)
+        assert result.stdout.strip() == files[0]
+
+
 # --- The likely pick's verdict first, the rest as they come ------------
 
 MANY = "unsloth/Qwen3.8-27B-GGUF"  # the fake Hub lists 8 root GGUFs for it

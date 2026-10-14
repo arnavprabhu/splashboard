@@ -100,6 +100,27 @@ def test_variant_names(filename: str, expected: str | None) -> None:
     assert cat.variant_name("unsloth/Qwen3.8-27B-GGUF", filename) == expected
 
 
+@pytest.mark.parametrize(
+    ("variant", "files", "expected"),
+    [
+        # One GGUF named for its quant alone: Splash matches no :VARIANT for it.
+        ("q4_k_m", ["q4_k_m.gguf", "mmproj.f16.gguf"], "Hcompany/Holo4-27B-GGUF"),
+        ("Holo4-27B-Q4_K_M", ["Holo4-27B-Q4_K_M.gguf"], "Hcompany/Holo4-27B-GGUF"),
+        # Its -VARIANT ending resolves, so the ID keeps it.
+        ("Q4_K_M", ["Holo4-27B-Q4_K_M.gguf"], "Hcompany/Holo4-27B-GGUF:Q4_K_M"),
+        # Several GGUFs: the variant picks one.
+        ("q4_k_m", ["q4_k_m.gguf", "q8_0.gguf"], "Hcompany/Holo4-27B-GGUF:q4_k_m"),
+        # A variant that names another file is left for Splash to refuse.
+        ("q8_0", ["q4_k_m.gguf"], "Hcompany/Holo4-27B-GGUF:q8_0"),
+        # Safetensors beside it would make the bare ID an MLX model.
+        ("q4_k_m", ["q4_k_m.gguf", "model.safetensors"], "Hcompany/Holo4-27B-GGUF:q4_k_m"),
+        (None, ["q4_k_m.gguf"], "Hcompany/Holo4-27B-GGUF"),
+    ],
+)
+def test_installable_id(variant: str | None, files: list[str], expected: str) -> None:
+    assert cat.installable_id("Hcompany/Holo4-27B-GGUF", variant, files) == expected
+
+
 def test_variant_pick_and_fit_rules() -> None:
     files: dict[str, int | None] = {
         "Qwen3.8-27B-UD-IQ3_XXS.gguf": 11 * GIB,

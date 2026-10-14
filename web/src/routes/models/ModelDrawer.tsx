@@ -22,7 +22,7 @@ import * as flows from './actions';
 import { getCard, getModel } from './api';
 import { streamInspect } from './inspect';
 import { CompatTag } from './bits';
-import { formatLabel, hfUrl, inspectProgress, installedVariants, isClefId, isProjector, pickVariant, projectorRow, repoOf, sha7, shortName } from './logic';
+import { formatLabel, hfUrl, inspectProgress, installedVariants, isClefId, isProjector, pickVariant, projectorRow, repoOf, sha7, shortName, variantModelId } from './logic';
 import { isLocalId } from './local';
 import { Markdown } from './markdown';
 import { VariantTable } from './VariantTable';
@@ -61,7 +61,7 @@ export function ModelDrawer({ id, installed, activeId, onClose, onDelete, onVeri
   const format = det?.format ?? model?.format ?? ins?.format ?? null;
   const isGguf = format === 'gguf' || (ins?.variants?.length ?? 0) > 0;
   const variants: VariantOut[] = (ins?.variants ?? []).filter((v) => !isProjector(v.name));
-  const installedSet = installedVariants(repo, installed);
+  const installedSet = installedVariants(repo, installed, variants);
   const rec = pickVariant(ins, requestedVariant);
   const isActive = model ? model.id === activeId : false;
   const install = isActive ? installOf(engine.value) : null;
@@ -71,7 +71,7 @@ export function ModelDrawer({ id, installed, activeId, onClose, onDelete, onVeri
   const updateAvailable = det?.update_available || model?.status === 'update_available';
 
   const download = (variant: string | null) => {
-    const target = variant ? `${repo}:${variant}` : repo;
+    const target = variantModelId(repo, variant, variants);
     const size = variant ? (ins?.variants?.find((v) => v.name === variant)?.size_bytes ?? null) : null;
     void flows.startDownload({ id: target, language_only: ins?.badge === 'text_only' }, size).catch(() => undefined);
   };

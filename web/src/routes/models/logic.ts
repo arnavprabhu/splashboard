@@ -391,12 +391,30 @@ export function variantSpan(variants: readonly VariantOut[] | null | undefined, 
   return `${loNum}–${formatBytes(hi, { base })}`;
 }
 
-/** Installed variants of a repo, from the installed list. */
-export function installedVariants(repo: string, installed: readonly Pick<InstalledModel, 'id'>[]): Set<string> {
+/** Installed variants of a repo, from the installed list. The one variant of a
+ * one-GGUF repository installed as the bare repository counts under its name
+ * (`variantModelId`). */
+export function installedVariants(
+  repo: string,
+  installed: readonly Pick<InstalledModel, 'id'>[],
+  variants: readonly Pick<VariantOut, 'name' | 'files'>[] = [],
+): Set<string> {
   const out = new Set<string>();
   for (const m of installed) {
     const { repo: r, variant } = splitModelId(m.id);
     if (r.toLowerCase() === repo.toLowerCase()) out.add(variant ?? '');
   }
+  for (const v of variants) if (out.has('') && variantModelId(repo, v.name, variants) === repo) out.add(v.name);
   return out;
+}
+
+/** The model ID a variant installs under. A repository with one GGUF names no
+ * variant apart from its model, so the manager installs a variant that is that
+ * file's whole name (`q4_k_m.gguf` as `q4_k_m`) as the bare repository. */
+export function variantModelId(repo: string, variant: string | null, variants: readonly Pick<VariantOut, 'name' | 'files'>[]): string {
+  if (!variant) return repo;
+  const only = variants.length === 1 ? variants[0] : undefined;
+  const file = only?.files?.length === 1 ? only.files[0] : undefined;
+  if (only && file && only.name === variant && file.replace(/\.gguf$/i, '').toLowerCase() === variant.toLowerCase()) return repo;
+  return `${repo}:${variant}`;
 }
