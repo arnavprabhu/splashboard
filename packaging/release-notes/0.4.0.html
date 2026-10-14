@@ -1,0 +1,15 @@
+<!--
+  Release notes for 0.4.0 (TEMPLATE.html says how these are used).
+-->
+<h2>Splashboard 0.4.0</h2>
+<p>Splashboard now requires Splash 1.3.2. Update the engine with <code>brew upgrade incoai/tap/splash</code>, or from Settings → About.</p>
+<ul>
+  <li>The SSD cache is now on by default, as it is in Splash 1.3.2: it uses up to 32 GiB and follows your disk's free space, so follow-up turns start faster. Existing installs are moved to the new default once. To turn it off, set Settings → Cache → SSD cache to Off.</li>
+  <li>New settings: Thinking budget (caps how long a model thinks before it answers) and, under Advanced, state format (BF16 holds about twice as many cached conversations), the text that ends thinking at the budget, and a daily SSD write budget. Chat and profiles can also set a thinking budget for each request.</li>
+  <li>Release memory: free the model's weights now and keep the cache, from Status, the menu bar, or <code>splash release-memory</code>. The next request loads them again.</li>
+  <li>Status lists the requests running right now and how many cached tokens were shared between requests. Each Chat reply shows how many draft tokens were accepted.</li>
+  <li>More models load: GGUF <code>UD-Q8_K_XL</code> and other layouts, and NVFP4 and FP8 checkpoints, which Models now labels and finds in search.</li>
+  <li>The Codex CLI keeps your ChatGPT Apps connectors on, since Splash now accepts their tool names. Stop sequences now work with tools, and a reply limit longer than the context is shortened instead of refused.</li>
+</ul>
+<p>Engine: <a href="https://github.com/incoai/splash">Splash</a> by inco.ai, 1.3.2 or newer (Homebrew <code>incoai/tap/splash</code>). Restart the server after upgrading Splash. Splashboard is not an inco.ai product.</p>
+<p>Splashboard is not notarized. On a first install, open it once from System Settings → Privacy &amp; Security → Open Anyway.</p>
