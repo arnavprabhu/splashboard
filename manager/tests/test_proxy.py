@@ -211,6 +211,7 @@ OVERLAY = {
     "reasoning_effort": "low",
     "chat_template_kwargs": {"enable_thinking": False},
     "ignore_eos": False,
+    "thinking_token_budget": 64,
 }
 
 
@@ -231,6 +232,7 @@ def test_chat_receives_every_chat_field(h_shapes: EngineHarness):
     assert sent["reasoning_effort"] == "low"
     assert sent["chat_template_kwargs"] == {"enable_thinking": False}
     assert sent["ignore_eos"] is False
+    assert sent["thinking_token_budget"] == 64
 
 
 def test_chat_max_tokens_spelling_counts_as_explicit(h_shapes: EngineHarness):
@@ -251,7 +253,12 @@ def test_completions_get_max_tokens_but_no_chat_only_fields(h_shapes: EngineHarn
     assert response.status_code == 200, response.text
     sent = last_body(h, "/v1/completions")
     assert sent["max_tokens"] == 9 and sent["min_p"] == 0.05 and sent["stop"] == ["STOP"]
-    for absent in ("reasoning_effort", "chat_template_kwargs", "max_completion_tokens"):
+    for absent in (
+        "reasoning_effort",
+        "chat_template_kwargs",
+        "max_completion_tokens",
+        "thinking_token_budget",  # Splash refuses it on text completions
+    ):
         assert absent not in sent, absent
 
 
@@ -263,7 +270,9 @@ def test_responses_get_max_output_tokens_and_reasoning_effort(h_shapes: EngineHa
     assert sent["max_output_tokens"] == 9
     assert sent["reasoning"] == {"effort": "low"}
     assert sent["min_p"] == 0.05
-    for absent in ("reasoning_effort", "chat_template_kwargs", "ignore_eos", "max_tokens"):
+    assert sent["chat_template_kwargs"] == {"enable_thinking": False}
+    assert sent["thinking_token_budget"] == 64
+    for absent in ("reasoning_effort", "ignore_eos", "max_tokens"):
         assert absent not in sent, absent
     row = usage_row(h, response.headers["x-splash-request-id"])
     assert row["injected"]["reasoning.effort"] == "low"
@@ -288,14 +297,15 @@ def test_messages_get_only_what_anthropic_accepts(h_shapes: EngineHarness):
     sent = last_body(h, "/v1/messages")
     assert sent["temperature"] == 0.3 and sent["top_k"] == 7 and sent["seed"] == 11
     assert sent["priority"] == "background" and sent["max_tokens"] == 16
+    assert sent["chat_template_kwargs"] == {"enable_thinking": False}
     for absent in (
         "min_p",
         "presence_penalty",
         "stop",
         "reasoning_effort",
-        "chat_template_kwargs",
         "ignore_eos",
         "max_completion_tokens",
+        "thinking_token_budget",  # Messages caps thinking with thinking.budget_tokens
     ):
         assert absent not in sent, absent
 

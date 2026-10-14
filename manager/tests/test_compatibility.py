@@ -27,7 +27,8 @@ MLX_7BIT = "mlx-community/Qwen3.6-35B-A3B-7bit"
 LEGACY = "incoai/Qwen3.6-35B-A3B-Splash"
 PLAIN_MLX = (
     "Splash runs MLX models quantized as affine 2, 3, 4, 5, 6 or 8 bits "
-    "(groups of 32, 64 or 128) or as mxfp4."
+    "(groups of 32, 64 or 128), mxfp4 or nvfp4, and NVFP4 or FP8 checkpoints "
+    "from Model Optimizer or compressed-tensors."
 )
 
 
@@ -100,6 +101,34 @@ def test_8bit_mlx_is_compatible(hub_harness):
     assert result["family"] == "Qwen3.6-35B-A3B"
 
 
+@pytest.mark.parametrize(
+    ("repo", "label"),
+    [
+        ("nvidia/Qwen3.8-27B-NVFP4", "NVFP4 · Model Optimizer"),
+        ("unsloth/Qwen3.6-35B-A3B-NVFP4", "NVFP4 · compressed-tensors"),
+    ],
+)
+def test_nvfp4_checkpoints_are_safetensors_targets_labelled_apart(hub_harness, repo, label):
+    """Splash 1.3.2 checks a Model Optimizer or compressed-tensors checkpoint as it
+    does an MLX one; the label from the Hub's tags keeps it from showing as MLX."""
+    harness = hub_harness()
+    result = inspect(harness, repo)
+    assert result["compatible"] is True and result["format"] == "mlx", result
+    assert result["checkpoint"] == label
+    hits = harness.client.get("/api/admin/search?q=NVFP4").json()["results"]
+    hit = next(r for r in hits if r["id"] == repo)
+    assert hit["format_guess"] == "mlx" and hit["checkpoint"] == label
+
+
+def test_the_catalog_lists_nvidia_s_nvfp4_checkpoint(hub_harness):
+    catalog = hub_harness().client.get("/api/admin/catalog").json()
+    rows = {e["id"]: e for f in catalog["families"] for g in f["groups"] for e in g["entries"]}
+    row = rows["nvidia/Qwen3.8-27B-NVFP4"]
+    assert row["format"] == "mlx" and row["checkpoint"] == "NVFP4 · Model Optimizer"
+    assert row["size_bytes"] and row["download_bytes"]
+    assert rows["mlx-community/Qwen3.6-35B-A3B-nvfp4"]["checkpoint"] is None
+
+
 def test_7bit_mlx_is_rejected_with_the_reason(hub_harness):
     """Splash has no kernels for affine 7-bit, so this must not be offered as
     downloadable."""
@@ -167,7 +196,7 @@ def test_inspect_rows_carry_their_quality_tier_and_the_projector_is_labelled(hub
     assert tiers["UD-Q4_K_M"] == "Balanced"
     assert tiers["UD-IQ2_XXS"] == "Compact"
     assert tiers["Q8_0"] == "Highest"
-    assert tiers["UD-Q8_K_XL"] is None
+    assert tiers["BF16"] is None
     projector = result["vision"]["projector"]
     assert projector and "mmproj" in projector, result["vision"]
     assert result["vision"]["projector_bytes"] > 0
@@ -483,7 +512,7 @@ def test_the_likely_recommended_variant_is_checked_and_shown_first(hub_harness, 
     # The snapshot: the whole table at once, nothing checked yet.
     _, _, snapshot = events[0]
     assert snapshot["badge"] == "checking" and snapshot["first_variant"] == "UD-Q4_K_M"
-    assert len(snapshot["variants"]) == 8 and checked(snapshot) == {}
+    assert len(snapshot["variants"]) == 9 and checked(snapshot) == {}
     assert sorted(snapshot["pending"]) == sorted(v["name"] for v in snapshot["variants"])
 
     # The first verdict is the likely pick's, alone, and it already decides the badge.
@@ -491,7 +520,7 @@ def test_the_likely_recommended_variant_is_checked_and_shown_first(hub_harness, 
     first = progress[0][2]
     assert checked(first) == {"UD-Q4_K_M": True}, checked(first)
     assert first["badge"] == "compatible" and first["recommended_variant"] == "UD-Q4_K_M"
-    assert len(first["pending"]) == 7 and "UD-Q4_K_M" not in first["pending"]
+    assert len(first["pending"]) == 8 and "UD-Q4_K_M" not in first["pending"]
 
     # The rest fill in afterwards, and the stream ends complete.
     assert len(progress) >= 2, "the other variants must arrive as further events"
@@ -499,9 +528,10 @@ def test_the_likely_recommended_variant_is_checked_and_shown_first(hub_harness, 
     assert result["pending"] == [] and result["badge"] == "compatible"
     assert result["recommended_variant"] == "UD-Q4_K_M"
     verdicts = checked(result)
-    assert len(verdicts) == 8
-    assert verdicts["UD-Q8_K_XL"] is False and verdicts["imatrix_unsloth"] is False
-    assert all(verdicts[n] for n in verdicts if n not in ("UD-Q8_K_XL", "imatrix_unsloth"))
+    assert len(verdicts) == 9
+    # Splash 1.3.2 refuses only a whole unquantized model: UD-Q8_K_XL loads.
+    assert verdicts["BF16"] is False and verdicts["imatrix_unsloth"] is False
+    assert all(verdicts[n] for n in verdicts if n not in ("BF16", "imatrix_unsloth"))
     # The download plan is for the variant that was checked first.
     assert result["download_plan"]["variant"] is None
     assert any(f["name"].endswith("-UD-Q4_K_M.gguf") for f in result["download_plan"]["files"])
@@ -558,13 +588,13 @@ def test_verdicts_are_stored_per_variant_and_reused(hub_harness, monkeypatch):
     events = stream_inspect(harness, MANY, refresh=False)
     assert checked(events[0][2]) == {"Q8_0": True}, "the stored verdict is in the snapshot"
     result = events[-1][2]
-    assert result["cached"] is False and len(checked(result)) == 8
+    assert result["cached"] is False and len(checked(result)) == 9
     # The catalog shows Splash's own verdicts once they are stored.
     catalog = harness.client.get("/api/admin/catalog").json()
     rows = [e for f in catalog["families"] for g in f["groups"] for e in g["entries"]]
     row = next(r for r in rows if r["id"] == MANY)
     by_name = {v["name"]: v["loadable"] for v in row["variants"]}
-    assert by_name["Q8_0"] is True and by_name["UD-Q8_K_XL"] is False
+    assert by_name["Q8_0"] is True and by_name["BF16"] is False
 
 
 def test_a_waiting_request_and_a_stream_share_one_check(hub_harness, monkeypatch):
@@ -651,3 +681,19 @@ def test_inspect_fit_uses_the_catalog_estimate(hub_harness):
     rows = [e for f in catalog["families"] for g in f["groups"] for e in g["entries"]]
     listed = {v["name"]: v["fit"] for v in next(r for r in rows if r["id"] == MANY)["variants"]}
     assert all(listed[v["name"]] == v["fit"] for v in again["variants"] if v["name"] in listed)
+
+
+def test_only_an_explicit_ssd_cache_size_costs_state_staging() -> None:
+    """The automatic SSD cache sets its state staging aside only where the model and the
+    context already fit, so the estimate leaves it out; a size such as 16G always takes it
+    (64 MiB for 35B, 153 MiB for 27B, about half with bf16 states)."""
+    from splash_gui.models import catalog as cat
+
+    assert cat.state_staging_bytes("Qwen3.8-27B", None) == 0
+    assert cat.state_staging_bytes("Qwen3.8-27B", 0) == 0
+    assert cat.state_staging_bytes("Qwen3.8-27B", 16 * 1024**3) == 153 * 1024**2
+    assert cat.state_staging_bytes("Qwen3.6-35B-A3B", 16 * 1024**3) == 64 * 1024**2
+    assert cat.state_staging_bytes("Qwen3.6-35B-A3B", 16 * 1024**3, "bf16") == 32 * 1024**2
+    base = cat.memory_need(16 * 1024**3, vision=False)
+    staged = cat.memory_need(16 * 1024**3, vision=False, staging=153 * 1024**2)
+    assert staged - base == 153 * 1024**2

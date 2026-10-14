@@ -24,8 +24,11 @@ if TYPE_CHECKING:
 
 DEFAULT_ENDPOINT = "https://huggingface.co"
 TIMEOUT_S = 15.0
-# The Hub filters on these tags (`filter=` ANDs, so one request per tag).
-SEARCH_TAGS = ("mlx", "gguf")
+# The Hub filters on these tags (`filter=` ANDs, so one request per tag): MLX and
+# GGUF repositories, and the NVFP4 and FP8 checkpoints Splash 1.3.2 loads, which
+# the Hub tags by their quantization library (nvidia/Qwen3.8-27B-NVFP4 `modelopt`,
+# unsloth/Qwen3.8-27B-NVFP4 `compressed-tensors`; checked on the Hub 2026-10-14).
+SEARCH_TAGS = ("mlx", "gguf", "modelopt", "compressed-tensors")
 _FRONT_MATTER = re.compile(r"\A---\s*\n.*?\n---\s*(\n|\Z)", re.DOTALL)
 # A Hub blob ID (a file's LFS sha256, or a git object ID for a small file) names a file in
 # the Hub cache, and downloads and removal join it into a path, so only this shape is kept
@@ -123,9 +126,10 @@ class HfClient:
         return response
 
     async def search(self, query: str, sort: str, limit: int) -> list[dict[str, Any]]:
-        """MLX and GGUF repositories only. The Hub ANDs repeated `filter`
-        values, so each format is one request; the two sorted lists are merged by the
-        same key, de-duplicated and cut to `limit`."""
+        """MLX, GGUF, Model Optimizer and compressed-tensors repositories only
+        (`SEARCH_TAGS`). The Hub ANDs repeated `filter` values, so each tag is one
+        request; the sorted lists are merged by the same key, de-duplicated and cut
+        to `limit`."""
         sort_key = {"downloads": "downloads", "likes": "likes", "recent": "lastModified"}[sort]
         batches = await asyncio.gather(
             *(

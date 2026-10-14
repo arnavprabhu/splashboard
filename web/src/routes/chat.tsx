@@ -491,8 +491,7 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
       stream_options: { include_usage: true },
       return_progress: true,
     };
-    // Splash refuses stop with tools or structured output (server/frontend.py).
-    if (constrained) delete body.stop;
+    // The user's stop goes with tools and structured output too: Splash cuts the output there.
     if (allTools.length) {
       body.tools = allTools;
       body.tool_choice = choice === "named" ? toolChoiceBody("named", named) : choice;
@@ -542,6 +541,7 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
           ...reply.meta,
           usage: acc.usage as Record<string, unknown> | null,
           timings: acc.timings as Record<string, unknown> | null,
+          ...(acc.speculation ? { speculation: acc.speculation as Record<string, unknown> } : {}),
           finish_reason: acc.finishReason,
           ttft_ms: acc.ttftMs,
           thinking_ms: acc.thinkingMs(),

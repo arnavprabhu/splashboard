@@ -45,6 +45,8 @@ SEVERITY: dict[str, Severity] = {
     "resource_timeout": "warn",
     "disk_tier_failures": "warn",
     "write_behind_refused": "info",
+    # The SSD cache's daily write budget (--max-cache-disk-writes) is spent for now.
+    "disk_write_budget": "info",
     "queue_full": "warn",
     "mask_timeout": "info",
     "download_failed": "warn",
@@ -64,8 +66,11 @@ NOTIFICATION_SETTING: dict[str, str] = {
     "disk_tier_failures": "disk_cache_errors",
     "write_behind_refused": "disk_cache_errors",
 }
-# Conditions that are banner-only.
-BANNER_ONLY = frozenset({"memory_warning", "schema_unrecognized", "mask_timeout"})
+# Conditions that are banner-only. A spent write budget is routine (it refills
+# through the day), so it never notifies.
+BANNER_ONLY = frozenset(
+    {"memory_warning", "schema_unrecognized", "mask_timeout", "disk_write_budget"}
+)
 _RANK = {"critical": 0, "warn": 1, "info": 2}
 
 

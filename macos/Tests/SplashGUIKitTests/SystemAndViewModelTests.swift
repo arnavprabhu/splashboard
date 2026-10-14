@@ -432,6 +432,27 @@ struct ViewModelTests {
         #expect(api.posted("/api/admin/engine/restart?force=true"))
     }
 
+    @Test func releaseMemoryPostsAndRefreshes() async throws {
+        let api = MockAPI(engine: engineJSON("ready"))
+        api.set("POST", "/api/admin/engine/release-memory", .success(["released": true]))
+        let (vm, host) = make(api: api)
+        await vm.refreshEngine()
+        await vm.perform(.releaseMemory)
+        #expect(api.mutating.map(\.path) == ["/api/admin/engine/release-memory"])
+        #expect(host.errors.isEmpty)
+        #expect(try await api.releaseMemory())
+    }
+
+    @Test func releaseMemoryBusyShowsTheManagersWords() async {
+        let api = MockAPI(engine: engineJSON("busy"))
+        api.set("POST", "/api/admin/engine/release-memory",
+                .failure(.http(status: 409, code: "engine_busy", message: "The engine is busy; try again when requests finish.")))
+        let (vm, host) = make(api: api)
+        await vm.refreshEngine()
+        await vm.perform(.releaseMemory)
+        #expect(host.errors.last == "The engine is busy; try again when requests finish.")
+    }
+
     @Test func connectOpensAdminSheet() async {
         let (vm, host) = make()
         await vm.perform(.connectIntegration("claude-desktop"))

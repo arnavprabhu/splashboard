@@ -140,6 +140,7 @@ public enum Presentation {
         case .ready:
             return "● Splash is running — \(name) (Ready)"
         case .busy:
+            if engine.weightsRestoring { return "● Splash is running — \(name) (Restoring weights…)" }
             if let tps = liveTps { return "● Splash is running — \(name) (Generating · \(Format.integerTokPerSec(tps)))" }
             return "● Splash is running — \(name) (Generating)"
         case .idleReleased:

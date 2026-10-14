@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 from starlette.testclient import WebSocketDenialResponse
 
 from splash_gui.errors import ApiError
+from splash_gui.integrations import tool_names
 from splash_gui.integrations.service import IntegrationsService
 from splash_gui.integrations.snapshots import read_document
 from splash_gui.secrets import SecretName, redact_text
@@ -1402,17 +1403,14 @@ def test_quitting_the_manager_restores_byte_for_byte(
     assert json.loads(paths.integrations_state.read_text()) == {}
 
 
-# The ChatGPT app's own names that Splash 1.3.0 refuses (api_shapes.py `_namespace_alias`:
-# each part of a namespace tool must match [A-Za-z0-9_-]{1,64}): a connector tool name of
-# 70 characters (the user's Tableau connector, ~/.codex/cache/codex_apps_tools), and
-# names with characters outside the set.
+# The ChatGPT app's own names, which Splash 1.3.0 refused (each part of a namespace tool
+# had to match [A-Za-z0-9_-]{1,64}) and 1.3.2 takes: a connector tool name of 70
+# characters (the user's Tableau connector, ~/.codex/cache/codex_apps_tools), and names
+# with characters outside that set.
 TABLEAU = "mcp__codex_apps__tableau__mcp_only__eol_soon"
 LONG = "tableau_mcp_only_eol_soon_list_pulse_metrics_from_metric_definition_id"
-LONG_ALIAS = "tableau_mcp_only_eol_soon_list_pulse_metrics_from_met_b74a0d97d5"
 PLUGIN = "browser@openai-bundled"
-PLUGIN_ALIAS = "browser_openai-bundled_44e00c81aa"
 DOTTED = "sites.add_custom_domain"
-DOTTED_ALIAS = "sites_add_custom_domain_5a78e051fc"
 OBJECT = {"type": "object", "properties": {}}
 APP_TOOLS: list[dict[str, Any]] = [
     {"type": "function", "name": "exec_command", "parameters": OBJECT},
@@ -1437,14 +1435,44 @@ APP_TOOLS: list[dict[str, Any]] = [
     },
     {"type": "web_search", "external_web_access": False},
 ]
-ALIASED_TOOLS = [
-    APP_TOOLS[0],
-    {**APP_TOOLS[1], "name": DOTTED_ALIAS},
-    APP_TOOLS[2],
-    {**APP_TOOLS[3], "tools": [{**APP_TOOLS[3]["tools"][0], "name": LONG_ALIAS}]},
-    {**APP_TOOLS[4], "name": PLUGIN_ALIAS},
-]
 CALL_LONG = {"type": "function", "namespace": TABLEAU, "name": LONG}
+
+# Names Splash 1.3.2 still refuses (tool_schema.py `is_tag_name`: 1 to 256 characters
+# in NFC, without <, >, line breaks or surrounding whitespace, checked on
+# `<namespace>__<name>`): a child that takes the joined name past 256, a name with
+# angle brackets and a namespace with leading space.
+OVERLONG = "tableau_list_pulse_metrics_" * 8
+OVERLONG_ALIAS = OVERLONG[:116] + "_49a37971ad"
+BRACKETED = "sites<add_custom_domain>"
+BRACKETED_ALIAS = "sites_add_custom_domain__f69d2d17a5"
+SPACED = " browser@openai-bundled"
+SPACED_ALIAS = "browser@openai-bundled_ba803b663f"
+REFUSED_TOOLS: list[dict[str, Any]] = [
+    APP_TOOLS[0],
+    {"type": "function", "name": BRACKETED, "parameters": OBJECT},
+    APP_TOOLS[2],
+    {
+        "type": "namespace",
+        "name": TABLEAU,
+        "description": "",
+        "tools": [{"type": "function", "name": OVERLONG, "parameters": OBJECT}],
+    },
+    {
+        "type": "namespace",
+        "name": SPACED,
+        "description": "",
+        "tools": [{"type": "function", "name": "open", "parameters": OBJECT}],
+    },
+    APP_TOOLS[5],
+]
+ALIASED_TOOLS = [
+    REFUSED_TOOLS[0],
+    {**REFUSED_TOOLS[1], "name": BRACKETED_ALIAS},
+    REFUSED_TOOLS[2],
+    {**REFUSED_TOOLS[3], "tools": [{**REFUSED_TOOLS[3]["tools"][0], "name": OVERLONG_ALIAS}]},
+    {**REFUSED_TOOLS[4], "name": SPACED_ALIAS},
+]
+CALL_OVERLONG = {"type": "function", "namespace": TABLEAU, "name": OVERLONG}
 
 
 def _http(url: str) -> str:
@@ -1470,36 +1498,83 @@ def _calls(frames: list[dict[str, Any]]) -> list[tuple[str, str | None, str]]:
     return found
 
 
-def test_the_fake_engine_refuses_the_app_names_as_splash_does(harness_factory):
-    """Without the router's aliases the engine answers what the user saw."""
+def test_the_fake_engine_takes_the_app_names_as_splash_1_3_2_does(harness_factory):
+    """Splash 1.3.2 takes any non-empty namespace and a name of up to 256
+    characters without <, > or line breaks, so the app's names pass as they are."""
     h, _ = _ws_ready(harness_factory)
     key = {"Authorization": f"Bearer {h.state.secrets.get(SecretName.API_KEY)}"}
-    body = {"model": MODEL, "input": "hi", "tools": APP_TOOLS[2:5]}
-    refused = h.client.post("/v1/responses", json=body, headers=key)
-    assert refused.status_code == 400
-    assert refused.json()["error"]["message"] == "invalid namespace tool name"
+    body = {"model": MODEL, "input": "hi", "tools": APP_TOOLS[2:5], "store": False}
+    assert h.client.post("/v1/responses", json=body, headers=key).status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("name", "valid"),
+    [
+        (LONG, True),
+        (DOTTED, True),
+        (PLUGIN, True),
+        ("ツール.検索", True),  # any NFC text
+        ("x" * 256, True),
+        ("x" * 257, False),
+        ("", False),
+        (BRACKETED, False),
+        ("a\nb", False),
+        ("a\rb", False),
+        (SPACED, False),
+        ("open\t", False),
+        ("cafe\u0301", False),  # not NFC
+        ("a\ud800", False),
+    ],
+)
+def test_tool_names_follow_splash_1_3_2_rule(name: str, valid: bool) -> None:
+    assert tool_names.is_valid(name, tool_names.FUNCTION_LIMIT) is valid
+    renamed = tool_names.alias(name, tool_names.FUNCTION_LIMIT)
+    assert (renamed == name) is valid
+    assert tool_names.is_valid(renamed, tool_names.FUNCTION_LIMIT)
+
+
+def test_a_namespace_and_its_tool_join_within_splash_s_limit() -> None:
+    """Each part is cut to half the limit, so `<namespace>__<name>` always fits."""
+    namespace = tool_names.alias("n" * 300, tool_names.PART_LIMIT)
+    child = tool_names.alias("c" * 300, tool_names.PART_LIMIT)
+    joined = f"{namespace}__{child}"
+    assert len(joined) <= tool_names.FUNCTION_LIMIT
+    assert tool_names.is_valid(joined, tool_names.FUNCTION_LIMIT)
+    assert tool_names.alias(OVERLONG, tool_names.PART_LIMIT) == OVERLONG_ALIAS
+    assert tool_names.alias("", tool_names.PART_LIMIT).startswith("_")
+
+
+def test_the_fake_engine_refuses_the_names_splash_1_3_2_refuses(harness_factory):
+    """Without the router's aliases the engine answers what the user would see."""
+    h, _ = _ws_ready(harness_factory)
+    key = {"Authorization": f"Bearer {h.state.secrets.get(SecretName.API_KEY)}"}
+    for tools in (REFUSED_TOOLS[1:2], REFUSED_TOOLS[3:4], REFUSED_TOOLS[4:5]):
+        body = {"model": MODEL, "input": "hi", "tools": tools, "store": False}
+        refused = h.client.post("/v1/responses", json=body, headers=key)
+        assert refused.status_code == 400, tools
+        assert refused.json()["error"]["message"].startswith("tool name must be 1 to 256")
 
 
 def test_codex_http_aliases_tool_names_splash_refuses(harness_factory):
     """For a Splash model every refused name gets a valid alias on the way in and
     its original back on the way out; valid names are left alone."""
     h, url = _ws_ready(harness_factory)
-    body = _create("go", tools=APP_TOOLS, tool_choice=CALL_LONG)
+    body = _create("go", tools=REFUSED_TOOLS, tool_choice=CALL_OVERLONG)
     del body["type"]
     response = h.client.post(_http(url), json=body)
     assert response.status_code == 200, response.text
     (sent,) = _engine_responses(h)
     assert sent["tools"] == ALIASED_TOOLS
-    assert sent["tool_choice"] == {"type": "function", "namespace": TABLEAU, "name": LONG_ALIAS}
+    assert sent["tool_choice"] == {"type": "function", "namespace": TABLEAU, "name": OVERLONG_ALIAS}
     frames = _sse_frames(response.text)
     assert _calls(frames) == [
-        ("response.output_item.added", TABLEAU, LONG),
-        ("response.output_item.done", TABLEAU, LONG),
-        ("response.completed", TABLEAU, LONG),
+        ("response.output_item.added", TABLEAU, OVERLONG),
+        ("response.output_item.done", TABLEAU, OVERLONG),
+        ("response.completed", TABLEAU, OVERLONG),
     ]
     (done,) = [f for f in frames if f["type"] == "response.function_call_arguments.done"]
-    assert done["name"] == LONG
-    assert LONG_ALIAS not in response.text
+    assert done["name"] == OVERLONG
+    assert OVERLONG_ALIAS not in response.text
 
     # The next turn sends the call back with the names Codex knows.
     call = next(
@@ -1513,57 +1588,54 @@ def test_codex_http_aliases_tool_names_splash_refuses(harness_factory):
     again = h.client.post(_http(url), json=body)
     assert again.status_code == 200, again.text
     second = _engine_responses(h)[1]
-    assert second["input"][1] == {**call, "name": LONG_ALIAS}
+    assert second["input"][1] == {**call, "name": OVERLONG_ALIAS}
     assert second["input"][2] == output
     assert _text(_sse_frames(again.text)) == "Hello from the fake engine."
 
 
 def test_codex_http_aliases_a_plain_function_and_restores_a_json_answer(harness_factory):
     h, url = _ws_ready(harness_factory)
-    forced = {"type": "function", "name": DOTTED}
+    forced = {"type": "function", "name": BRACKETED}
     body = {
         "model": MODEL,
         "input": "go",
-        "tools": APP_TOOLS,
+        "tools": REFUSED_TOOLS,
         "tool_choice": forced,
         "stream": False,
     }
     response = h.client.post(_http(url), json=body)
     assert response.status_code == 200, response.text
-    assert _engine_responses(h)[0]["tool_choice"] == {"type": "function", "name": DOTTED_ALIAS}
+    assert _engine_responses(h)[0]["tool_choice"] == {"type": "function", "name": BRACKETED_ALIAS}
     (call,) = [i for i in response.json()["output"] if i["type"] == "function_call"]
-    assert call["name"] == DOTTED and "namespace" not in call
-    assert DOTTED_ALIAS not in response.text
+    assert call["name"] == BRACKETED and "namespace" not in call
+    assert BRACKETED_ALIAS not in response.text
 
 
 def test_codex_router_leaves_valid_names_alone(harness_factory):
     h, url = _ws_ready(harness_factory)
-    valid = APP_TOOLS[:1] + APP_TOOLS[2:3]
-    forced = {"type": "function", "namespace": "mcp__node_repl", "name": "js"}
-    body = _create("go", tools=valid, tool_choice=forced)
+    valid = APP_TOOLS[:5]  # Codex's own names, dots, @ and 70 characters among them
+    body = _create("go", tools=valid, tool_choice=CALL_LONG)
     del body["type"]
     response = h.client.post(_http(url), json=body)
     assert response.status_code == 200, response.text
     (sent,) = _engine_responses(h)
-    assert sent["tools"] == valid and sent["tool_choice"] == forced
-    assert ("response.output_item.done", "mcp__node_repl", "js") in _calls(
-        _sse_frames(response.text)
-    )
+    assert sent["tools"] == valid and sent["tool_choice"] == CALL_LONG
+    assert ("response.output_item.done", TABLEAU, LONG) in _calls(_sse_frames(response.text))
 
 
 def test_codex_websocket_aliases_tool_names_across_turns(harness_factory):
     """A call made under an alias continues on the same socket with only new items."""
     h, url = _ws_ready(harness_factory)
     with h.client.websocket_connect(url) as ws:
-        ws.send_text(json.dumps(_create("go", tools=APP_TOOLS, tool_choice=CALL_LONG)))
+        ws.send_text(json.dumps(_create("go", tools=REFUSED_TOOLS, tool_choice=CALL_OVERLONG)))
         first = _turn(ws)
         assert first[-1]["type"] == "response.completed", first[-1]
         assert _calls(first) == [
-            ("response.output_item.added", TABLEAU, LONG),
-            ("response.output_item.done", TABLEAU, LONG),
-            ("response.completed", TABLEAU, LONG),
+            ("response.output_item.added", TABLEAU, OVERLONG),
+            ("response.output_item.done", TABLEAU, OVERLONG),
+            ("response.completed", TABLEAU, OVERLONG),
         ]
-        assert LONG_ALIAS not in json.dumps(first)
+        assert OVERLONG_ALIAS not in json.dumps(first)
         call = next(
             f["item"]
             for f in first
@@ -1574,7 +1646,7 @@ def test_codex_websocket_aliases_tool_names_across_turns(harness_factory):
             json.dumps(
                 _create(
                     "",
-                    tools=APP_TOOLS,
+                    tools=REFUSED_TOOLS,
                     previous_response_id=first[-1]["response"]["id"],
                     input=[output],
                 )
@@ -1586,7 +1658,7 @@ def test_codex_websocket_aliases_tool_names_across_turns(harness_factory):
     assert engine[0]["tools"] == ALIASED_TOOLS
     assert engine[1]["tools"] == ALIASED_TOOLS
     calls = [i for i in engine[1]["input"] if i["type"] == "function_call"]
-    assert calls == [{**call, "name": LONG_ALIAS}]
+    assert calls == [{**call, "name": OVERLONG_ALIAS}]
     assert engine[1]["input"][-1] == output
 
 
@@ -1768,7 +1840,7 @@ def test_codex_tool_search_call_reaches_codex_as_a_tool_search_call(harness_fact
 
 def test_codex_found_tools_are_callable_on_the_next_turn(harness_factory):
     """The tool_search_output's tools reach Splash as tools (a 70-character name
-    aliased), the search items as function items, and the call comes back under the
+    as it is), the search items as function items, and the call comes back under the
     names Codex knows."""
     h, url = _ws_ready(harness_factory)
     body = _create("find the tableau metrics tool with tool_search", tools=SEARCH_TOOLS)
@@ -1797,7 +1869,7 @@ def test_codex_found_tools_are_callable_on_the_next_turn(harness_factory):
             "tools": [
                 {
                     "type": "function",
-                    "name": LONG_ALIAS,
+                    "name": LONG,
                     "description": "List Pulse metrics for a metric definition.",
                     "strict": False,
                     "parameters": OBJECT,
@@ -1829,13 +1901,12 @@ def test_codex_found_tools_are_callable_on_the_next_turn(harness_factory):
         "type": "function_call_output",
         "call_id": call["call_id"],
         "output": "These tools are now available; call them directly:\n"
-        "- mcp__codex_apps__tab__tableau_mcp_only_eol_soo__c8220a4d8a99177b: "
+        f"- {TABLEAU}__{LONG}: "
         "List Pulse metrics for a metric definition.\n"
         "- mcp__node_repl__js: Run JavaScript in a persistent Node REPL.",
     }
     frames = _sse_frames(second.text)
     assert ("response.output_item.done", TABLEAU, LONG) in _calls(frames)
-    assert LONG_ALIAS not in second.text
 
     # The call and its output go back; the found tools stay loaded from history.
     found_call = next(
@@ -1849,7 +1920,7 @@ def test_codex_found_tools_are_callable_on_the_next_turn(harness_factory):
     third = h.client.post(_http(url), json=body)
     assert third.status_code == 200, third.text
     sent = _engine_responses(h)[2]
-    assert sent["input"][3] == {**found_call, "name": LONG_ALIAS}
+    assert sent["input"][3] == found_call
     assert sent["input"][4] == result
     assert [t["name"] for t in sent["tools"]] == [
         "exec_command",

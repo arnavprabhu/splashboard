@@ -1,12 +1,13 @@
 /**
- * The lower Status bands: Memory, Neural Engine, Cache, Scheduler & admission,
+ * The lower Status bands: Active requests, Memory, Neural Engine, Cache, Scheduler & admission,
  * Latency and Claude Code. Field names are Splash's `/status` schema 6 (runtime/engine/Status.cpp,
- * server/latency.py; `weights` since 1.2.1, `ane_ffn` since 1.3.0). Loaded lazily: they sit below
- * the fold.
+ * server/latency.py; `weights` since 1.2.1, `ane_ffn` since 1.3.0, `active_requests` and the SSD
+ * cache's live limit and write gate since 1.3.2). Loaded lazily: they sit below the fold.
  */
 import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { Link } from 'wouter-preact';
+import { ApiError } from '../../api/client';
 import { Banner } from '../../components/Banner';
 import { CodeBlock } from '../../components/CodeBlock';
 import { copyText } from '../../components/CopyButton';
@@ -19,20 +20,26 @@ import { Table } from '../../components/Table';
 import { DASH, formatBytes, formatCount, formatMs, formatPercent, tildePath } from '../../lib/format';
 import { useApi } from '../../lib/use-api';
 import { engine, settings } from '../../store';
-import { loadSystem, systemInfo } from '../../store/live';
+import { liveSample, loadSystem, systemInfo } from '../../store/live';
 import { t } from '../../strings/bands';
-import { fetchApiKey, modelProfiles } from './api';
+import { fetchApiKey, modelProfiles, releaseMemory } from './api';
 import {
   FAILURE_FIELDS,
   STAGES,
+  activeRequests,
+  cacheOffReason,
   checkpointEntries,
   claudeEnv,
+  diskEnabled,
+  diskWrites,
   launchCommand,
+  promptProgress,
   rawGet,
   rawNum,
   stageBuckets,
   stageMeanMs,
   stagePercentileMs,
+  viewOf,
   type Stage,
 } from './logic';
 
@@ -64,9 +71,11 @@ export function idleText(seconds: number): string {
   return `${formatCount(seconds)} s`;
 }
 
-/** The Weights row: Splash's `weights` block (1.2.1+), `—` without it. */
-function weightsItem(raw: unknown): KeyValueItem {
+/** The Weights row: Splash's `weights` block (1.2.1+), `—` without it. A restore under way
+ * (`restoring`, 1.3.2+) keeps `released` true until the last image is back. */
+export function weightsItem(raw: unknown): KeyValueItem {
   const released = rawGet(raw, 'weights.released');
+  const restoring = rawGet(raw, 'weights.restoring') === true;
   const idle = rawGet(raw, 'weights.idle_release_seconds');
   const restores = rawNum(raw, 'weights.restores');
   const meta = [
@@ -76,12 +85,105 @@ function weightsItem(raw: unknown): KeyValueItem {
   return {
     key: 'weights',
     label: t('bands.memory.weights'),
-    value: typeof released === 'boolean' ? t(released ? 'bands.memory.weights_released' : 'bands.memory.weights_loaded') : null,
+    value: restoring
+      ? t('bands.memory.weights_restoring')
+      : typeof released === 'boolean'
+        ? t(released ? 'bands.memory.weights_released' : 'bands.memory.weights_loaded')
+        : null,
+    // The accent means live: a restore a request is waiting on.
+    accent: restoring,
     meta: meta.length ? meta.join(' · ') : undefined,
   };
 }
 
+// ---------- Active requests (Splash 1.3.2 `active_requests`) ----------
+
+const PHASES = ['queued', 'waiting_resources', 'waiting_prefix', 'prefill', 'decode', 'waiting_mask', 'completed', 'cancelled', 'failed'] as const;
+type Phase = (typeof PHASES)[number];
+
+/** Each request the engine holds now, from the live sample (1 s). Hidden when there are none. */
+export function ActiveRequestsBand({ raw, stopped }: BandsProps) {
+  const rows = stopped ? [] : activeRequests(liveSample.value, raw);
+  if (rows.length === 0) return null;
+  return (
+    <Section label={t('bands.active.label')} id="active-requests" meta={t('bands.active.meta', { n: rows.length })}>
+      <Table
+        caption={t('bands.active.label')}
+        rowKey={(r) => String(r.id)}
+        rows={rows}
+        columns={[
+          { key: 'id', label: t('bands.active.id'), render: (r) => <span class="mono">{r.id}</span> },
+          {
+            key: 'phase',
+            label: t('bands.active.phase'),
+            render: (r) => ((PHASES as readonly string[]).includes(r.phase) ? t(`bands.active.phase.${r.phase as Phase}`) : r.phase),
+          },
+          { key: 'priority', label: t('bands.active.priority'), render: (r) => r.priority ?? DASH },
+          {
+            key: 'prompt',
+            label: t('bands.active.prompt'),
+            align: 'right',
+            render: (r) => {
+              const p = promptProgress(r);
+              return p === null
+                ? DASH
+                : t('bands.active.prompt_v', { d: formatCount(r.prompt_processed), n: formatCount(r.prompt_tokens), p: formatPercent(p, 0) });
+            },
+          },
+          {
+            key: 'output',
+            label: t('bands.active.output'),
+            align: 'right',
+            render: (r) =>
+              r.max_new_tokens ? t('bands.active.output_v', { g: formatCount(r.generated_tokens), m: formatCount(r.max_new_tokens) }) : formatCount(r.generated_tokens),
+          },
+          { key: 'age', label: t('bands.active.age'), align: 'right', render: (r) => (r.age_ms == null ? DASH : formatMs(r.age_ms)) },
+        ]}
+      />
+    </Section>
+  );
+}
+
 // ---------- Memory ----------
+
+/** Whether "Release memory" applies: a model is loaded and its weights are in memory. */
+export function canReleaseMemory(state: string | null | undefined, raw: unknown): boolean {
+  if (state !== 'ready' && state !== 'busy') return false;
+  return rawGet(raw, 'weights.released') !== true;
+}
+
+/** Release memory now (POST /engine/release-memory). The manager's 409s (busy, no model) are
+ * plain advice, so they show as a toast of their own; anything else is an error. */
+export function ReleaseMemoryButton({ raw }: { raw: unknown }) {
+  const [busy, setBusy] = useState(false);
+  if (!canReleaseMemory(engine.value?.state, raw)) return null;
+  return (
+    <span class="cluster">
+      <button
+        type="button"
+        class="btn"
+        data-variant="text"
+        data-size="s"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await releaseMemory();
+            toast(t('bands.memory.released_toast'));
+          } catch (err) {
+            if (err instanceof ApiError && err.status === 409) toast(err.message);
+            else toastError(t('bands.memory.release_failed'), err);
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? t('bands.memory.releasing') : t('bands.memory.release')}
+      </button>
+      <span class="meta">{t('bands.memory.release_hint')}</span>
+    </span>
+  );
+}
 
 export function MemoryBand({ raw, stopped }: BandsProps) {
   useEffect(() => {
@@ -120,7 +222,22 @@ export function MemoryBand({ raw, stopped }: BandsProps) {
         rawNum(raw, 'memory_governor.host_available_bytes') === null
           ? null
           : `${bytes(rawNum(raw, 'memory_governor.host_available_bytes'))} · ${bytes(rawNum(raw, 'memory_governor.host_reserve_bytes'))}`,
-      meta: t('bands.memory.host_of', { ram: ram === null ? DASH : formatBytes(ram), v: bytes(rawNum(raw, 'memory_governor.host_headroom_bytes')) }),
+      meta: t('bands.memory.host_of', { ram: ram === null ? DASH : formatBytes(ram) }),
+    },
+    {
+      key: 'spare',
+      label: t('bands.memory.spare'),
+      value:
+        rawNum(raw, 'memory_governor.host_spare_bytes') === null
+          ? null
+          : t('bands.memory.spare_v', {
+              s: bytes(rawNum(raw, 'memory_governor.host_spare_bytes')),
+              r: bytes(rawNum(raw, 'memory_governor.host_spare_reserve_bytes')),
+            }),
+      meta:
+        rawNum(raw, 'memory_governor.host_headroom_bytes') === null
+          ? undefined
+          : t('bands.memory.spare_room', { v: bytes(rawNum(raw, 'memory_governor.host_headroom_bytes')) }),
     },
     {
       key: 'pressure',
@@ -168,6 +285,7 @@ export function MemoryBand({ raw, stopped }: BandsProps) {
           />
         )}
         <KeyValue items={items} label={t('bands.memory.label')} />
+        <ReleaseMemoryButton raw={raw} />
         <p class="meta">{t('bands.memory.explainer')}</p>
       </div>
     </Section>
@@ -237,8 +355,16 @@ export function CacheBand({ raw, stopped }: BandsProps) {
   if (stopped) return <Stopped label={t('bands.cache.label')} />;
   const serve = (settings.value?.settings.global?.serve ?? {}) as { max_cache_disk?: string | number; persistent_cache?: boolean };
   const capacity = rawNum(raw, 'disk.capacity_bytes');
-  const diskOn = (capacity !== null && capacity > 0) || (serve.max_cache_disk !== undefined && String(serve.max_cache_disk) !== '0');
+  // What the cache may hold now: the quota, or less when the volume's free space leaves less.
+  const limit = rawNum(raw, 'disk.limit_bytes') ?? capacity;
+  const limited = limit !== null && capacity !== null && limit < capacity;
+  const diskOn = diskEnabled(raw, serve.max_cache_disk);
+  const writes = diskWrites(raw);
   const persistent = rawGet(raw, 'disk.persistent') === true;
+  // Why Splash turned the SSD cache, or only its persistence, off this start.
+  const notices = viewOf(engine.value?.view).notices;
+  const diskOff = diskOn ? null : cacheOffReason(notices, 'disk_cache_off');
+  const persistentOff = persistent ? null : cacheOffReason(notices, 'persistent_cache_off');
   const checkpoints = checkpointEntries(rawGet(raw, 'state'))
     .map(([k, v]) => `${k.replace(/_/g, ' ')} ${k.endsWith('bytes') ? formatBytes(v) : formatCount(v)}`)
     .join(' · ');
@@ -286,12 +412,28 @@ export function CacheBand({ raw, stopped }: BandsProps) {
                 <MeterBar
                   label={t('bands.cache.ssd_meter')}
                   segments={[{ label: t('bands.cache.ssd'), value: used }]}
-                  total={capacity}
-                  valueText={t('bands.cache.ssd_used', { u: bytes(used), c: bytes(capacity) })}
+                  total={limit}
+                  valueText={t('bands.cache.ssd_used', { u: bytes(used), c: bytes(limit) })}
                 />
                 <span>
-                  {t('bands.cache.ssd_used', { u: bytes(used), c: bytes(capacity) })} · {t('bands.cache.on_disk', { v: bytes(rawNum(raw, 'disk.file_bytes')) })}
+                  {t('bands.cache.ssd_used', { u: bytes(used), c: bytes(limit) })} · {t('bands.cache.on_disk', { v: bytes(rawNum(raw, 'disk.file_bytes')) })}
                 </span>
+                {limited && (
+                  <span data-testid="ssd-limited">
+                    {t('bands.cache.limited', { c: bytes(capacity), f: bytes(rawNum(raw, 'disk.volume_available_bytes')) })}
+                  </span>
+                )}
+                {writes && (
+                  <span data-testid="ssd-writes">
+                    {writes === 'closed' ? (
+                      <span class="acc" data-accent="true">
+                        {t('bands.cache.writes.closed')}
+                      </span>
+                    ) : (
+                      t(`bands.cache.writes.${writes}`, { b: bytes(rawNum(raw, 'disk.write_budget_bytes')) })
+                    )}
+                  </span>
+                )}
                 <span>{t('bands.cache.kv_blocks', { n: count(rawNum(raw, 'disk.kv_blocks')), b: bytes(rawNum(raw, 'disk.kv_bytes')) })}</span>
                 <span>
                   {t('bands.cache.demotions', {
@@ -311,8 +453,11 @@ export function CacheBand({ raw, stopped }: BandsProps) {
                 <span>{t('bands.cache.wear', { r: bytes(rawNum(raw, 'disk.read_bytes')), w: bytes(rawNum(raw, 'disk.written_bytes')) })}</span>
               </span>
             ) : (
-              <span>
-                {t('bands.cache.off')} · {settingsLink}
+              <span class="band-lines">
+                <span>
+                  {t('bands.cache.off')} · {settingsLink}
+                </span>
+                {diskOff && <span data-testid="ssd-off-reason">{t('bands.cache.off_reason', { reason: diskOff })}</span>}
               </span>
             ),
           },
@@ -340,8 +485,11 @@ export function CacheBand({ raw, stopped }: BandsProps) {
                 </span>
               </span>
             ) : (
-              <span>
-                {t('bands.cache.persistent_off')} · {settingsLink}
+              <span class="band-lines">
+                <span>
+                  {t('bands.cache.persistent_off')} · {settingsLink}
+                </span>
+                {persistentOff && <span data-testid="persistent-off-reason">{t('bands.cache.persistent_off_reason', { reason: persistentOff })}</span>}
               </span>
             ),
           },
@@ -617,6 +765,7 @@ export function ClaudeBand({ models }: { models: readonly string[] }) {
 export default function LowerBands({ raw, stopped, models }: BandsProps & { models: readonly string[] }) {
   return (
     <>
+      <ActiveRequestsBand raw={raw} stopped={stopped} />
       <MemoryBand raw={raw} stopped={stopped} />
       <NeuralEngineBand raw={raw} stopped={stopped} />
       <CacheBand raw={raw} stopped={stopped} />

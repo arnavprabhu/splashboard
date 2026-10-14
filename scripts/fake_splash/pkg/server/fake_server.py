@@ -27,11 +27,12 @@ import socketserver
 import sys
 import threading
 import time
+import unicodedata
 from collections import deque
 from collections.abc import Callable, Iterator
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from typing import Any, TypeGuard
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import fake_text, json_codec, serve_options
@@ -84,7 +85,10 @@ POST_ROUTES = (
     "/apply-template",
     "/v1/judgments",
     "/v1/systemone",
+    "/v1/memory/release",
 )
+# server/server.py POST_ROUTES (1.3.2): the routes that take no fields.
+FIELDLESS_ROUTES = ("/v1/memory/release",)
 PUBLIC_GET = ("/", "/index.html", "/favicon.ico", "/health", "/ready")
 
 
@@ -190,20 +194,51 @@ def concentration(probabilities: list[float]) -> float:
     return max(0.0, 1.0 - entropy / math.log(len(probabilities)))
 
 
+# server/tool_schema.py (1.3.2) MAX_NAME_LENGTH, NAME_SPACE and TAG_NAME_RULE.
+MAX_NAME_LENGTH = 256
+NAME_SPACE = " \t\n\r"
+TAG_NAME_RULE = (
+    f"1 to {MAX_NAME_LENGTH} characters in NFC, without <, >, line breaks, lone surrogates or surrounding whitespace"
+)
+
+
+def is_tag_name(name: object) -> TypeGuard[str]:
+    """server/tool_schema.py `is_tag_name` (1.3.2): a name that reads back as
+    written from a call's tags."""
+    return (
+        isinstance(name, str)
+        and 0 < len(name) <= MAX_NAME_LENGTH
+        and name == name.strip(NAME_SPACE)
+        and not any(character in name for character in "<>\n\r")
+        and not any("\ud800" <= character <= "\udfff" for character in name)
+        and unicodedata.is_normalized("NFC", name)
+    )
+
+
 def _namespace_alias(namespace: object, name: object) -> str:
-    """api_shapes.py `_namespace_alias` (1.3.0, lines 468-479)."""
-    if (
-        not isinstance(namespace, str)
-        or re.fullmatch(r"[A-Za-z0-9_-]{1,64}", namespace) is None
-        or not isinstance(name, str)
-        or re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name) is None
-    ):
+    """api_shapes.py `_namespace_alias` (1.3.2): the namespace and the name,
+    which the tools' own name rule then applies to."""
+    if not (isinstance(namespace, str) and namespace and isinstance(name, str) and name):
         raise APIError(400, "invalid namespace tool name")
-    alias = f"{namespace}__{name}"
-    if len(alias) <= 64:
-        return alias
-    digest = hashlib.sha256(f"{namespace}\0{name}".encode()).hexdigest()[:16]
-    return f"{namespace[:20]}__{name[:24]}__{digest}"
+    return f"{namespace}__{name}"
+
+
+def _check_tool_names(tools: list) -> None:
+    """tool_schema.py `normalize_tools` (1.3.2, lines 868-900): function tools
+    whose names follow TAG_NAME_RULE, each once."""
+    names: set[str] = set()
+    for tool in tools:
+        if not isinstance(tool, dict) or tool.get("type") not in (None, "function"):
+            raise APIError(400, "only function tools are supported")
+        function = tool.get("function")
+        if not isinstance(function, dict):
+            raise APIError(400, "a function tool needs a function object")
+        name = function.get("name")
+        if not is_tag_name(name):
+            raise APIError(400, f"tool name must be {TAG_NAME_RULE}")
+        if name in names:
+            raise APIError(400, f"duplicate tool name: {name}")
+        names.add(name)
 
 
 def _response_function(tool: dict, name: str | None = None) -> dict:
@@ -214,8 +249,8 @@ def _response_function(tool: dict, name: str | None = None) -> dict:
 
 
 def _responses_tools(tools: object) -> tuple[list | None, dict]:
-    """api_shapes.py `normalize_responses_tools` (1.3.0, lines 494-517), plus the
-    plain tool-name rule of tool_schema.py `normalize_tools` (lines 857-859)."""
+    """api_shapes.py `normalize_responses_tools` (1.3.0, lines 494-517); the
+    Chat body's tool names are checked by `_check_tool_names`."""
     if not isinstance(tools, list):
         raise APIError(400, "tools must be an array")
     output: list = []
@@ -238,9 +273,6 @@ def _responses_tools(tools: object) -> tuple[list | None, dict]:
         if not isinstance(tool, dict) or tool.get("type") != "function":
             kind = tool.get("type") if isinstance(tool, dict) else type(tool).__name__
             raise APIError(400, f"only function tools are supported, not {kind!r}")
-        name = tool.get("name")
-        if not isinstance(name, str) or re.fullmatch(r"[A-Za-z0-9_-]{1,128}", name) is None:
-            raise APIError(400, "tool name must match [A-Za-z0-9_-]{1,128}")
         output.append(_response_function(tool))
     return output or None, namespaces
 
@@ -637,16 +669,25 @@ class FakeHandler(BaseHTTPRequestHandler):
             self._safe_error(refusal, log=False)
             return
         admission = engine.token_counts if prompt_only else engine.requests
-        if (not prompt_only and engine.queue_full()) or not admission.acquire():
+        # A release is refused like a request but never queues in the native core.
+        queued = not prompt_only and path not in FIELDLESS_ROUTES
+        if (queued and engine.queue_full()) or not admission.acquire():
             self._safe_error(APIError(503, "frontend request capacity is exhausted", "frontend_overloaded"))
             return
         try:
-            with engine.latencies.measure("upload"):
-                body = self._read_json_body()
+            if path in FIELDLESS_ROUTES and not self._unread_body():
+                body: object = {}
+            else:
+                with engine.latencies.measure("upload"):
+                    body = self._read_json_body()
             if not isinstance(body, dict):
                 if systemone:
                     raise SystemOneError([detail([], "request body must be an object")])
                 raise APIError(400, "request body must be an object")
+            # server/server.py _serve (1.3.2): a field set to null is one left out.
+            body = {key: value for key, value in body.items() if value is not None}
+            if path in FIELDLESS_ROUTES and body:
+                raise APIError(400, "this endpoint takes no fields")
             deadline = self._deadline(body, started_at)
             handler: Callable[[dict, float], None] = {
                 "/v1/chat/completions": self._chat,
@@ -658,6 +699,7 @@ class FakeHandler(BaseHTTPRequestHandler):
                 "/apply-template": self._apply_template,
                 "/v1/judgments": self._judgment,
                 "/v1/systemone": self._systemone,
+                "/v1/memory/release": self._memory_release,
             }[path]
             handler(body, deadline)
         except SystemOneError as error:
@@ -673,6 +715,27 @@ class FakeHandler(BaseHTTPRequestHandler):
             admission.release()
             engine.latencies.observe("http_request", time.monotonic() - started_at)
 
+    def _unread_body(self) -> bool:
+        """server/server.py _unread_body: whether the request sent a body."""
+        lengths = self.headers.get_all("Content-Length", [])
+        return bool(self.headers.get_all("Transfer-Encoding")) or any(length.strip() != "0" for length in lengths)
+
+    def _memory_release(self, body: dict, deadline: float) -> None:
+        """server/server.py `_post_memory_release` (1.3.2, lines 807-823)."""
+        weights = self.engine.release_on_request()
+        if weights.get("released") is True and weights.get("restoring") is False:
+            self._json(200, {"released": True, "weights": weights})
+            return
+        # An answer about the engine's state, not a failure: the console does not log it.
+        self._safe_error(
+            APIError(
+                409,
+                "the engine is serving requests or restoring its weights; it releases them only while idle",
+                "engine_busy",
+            ),
+            log=False,
+        )
+
     def _deadline(self, body: dict, started_at: float) -> float:
         timeout = body.get("timeout")
         server_timeout = self.engine.settings.request_timeout or math.inf
@@ -684,13 +747,8 @@ class FakeHandler(BaseHTTPRequestHandler):
 
     # --- request preparation (server/frontend.py) -------------------------------
     def _check_model(self, body: dict) -> None:
-        if not self.engine.accepts_model(body.get("model", self.engine.settings.model)):
+        if not self.engine.accepts_model(body.get("model")):
             raise APIError(404, f"model {body['model']} not found", "model_not_found")
-
-    @staticmethod
-    def _drop_nulls(body: dict, extras: tuple[str, ...]) -> dict:
-        nullable = {*SAMPLING_FIELDS, *extras}
-        return {k: v for k, v in body.items() if v is not None or k not in nullable}
 
     @staticmethod
     def _priority(body: dict) -> str:
@@ -698,6 +756,14 @@ class FakeHandler(BaseHTTPRequestHandler):
         if not isinstance(priority, str) or priority not in PRIORITIES:
             raise APIError(400, "priority must be foreground, normal, or background")
         return priority
+
+    @staticmethod
+    def _cache_salt(body: dict) -> str | None:
+        """frontend.py _cache_salt (1.3.2). The fake's prefix cache keeps no salt."""
+        salt = body.get("cache_salt")
+        if salt is not None and (not isinstance(salt, str) or not salt):
+            raise APIError(400, "cache_salt must be a non-empty string")
+        return salt
 
     def _generation_options(self, body: dict) -> dict:
         for name, (default, accepts, requirement) in SAMPLING_NUMBERS.items():
@@ -721,12 +787,30 @@ class FakeHandler(BaseHTTPRequestHandler):
         ignore_eos = body.get("ignore_eos", False)
         if not isinstance(ignore_eos, bool):
             raise APIError(400, "ignore_eos must be a boolean")
-        seed = body.get("seed")
-        if seed is not None and (not isinstance(seed, int) or isinstance(seed, bool) or not 0 <= seed < 2**64):
-            raise APIError(400, "seed must be an unsigned 64-bit integer")
-        return {"stops": stops, "ignore_eos": ignore_eos, "priority": self._priority(body)}
+        # frontend.py _generation_options (1.3.2): -1 asks for a random seed.
+        seed = body.get("seed", -1)
+        if not isinstance(seed, int) or isinstance(seed, bool) or not -(2**63) <= seed < 2**64:
+            raise APIError(400, "seed must be a 64-bit integer")
+        # -1 sets no cap; an absent budget takes the server's.
+        budget = body.get("thinking_token_budget")
+        if budget is None:
+            budget = self.engine.settings.thinking_token_budget
+        elif not isinstance(budget, int) or isinstance(budget, bool) or budget < -1:
+            raise APIError(400, "thinking_token_budget must be a non-negative integer or -1 for no cap")
+        elif budget == -1:
+            budget = None
+        salt = self._cache_salt(body)
+        return {
+            "stops": stops,
+            "ignore_eos": ignore_eos,
+            "priority": self._priority(body),
+            "thinking_token_budget": budget,
+            "cache_salt": salt,
+        }
 
-    def _output_budget(self, requested: object, prompt_tokens: list[int], field: str, clamp: bool) -> tuple[int, bool]:
+    def _output_budget(self, requested: object, prompt_tokens: list[int], field: str) -> tuple[int, bool]:
+        """frontend.py _output_budget (1.3.2): a ceiling, so a request generates
+        up to the end of the context its prompt leaves; whether it was lowered."""
         context = self.engine.max_context
         if len(prompt_tokens) >= context:
             raise ContextLengthError(len(prompt_tokens), context - 1)
@@ -734,17 +818,7 @@ class FakeHandler(BaseHTTPRequestHandler):
         max_new = remaining if requested is None else requested
         if not isinstance(max_new, int) or isinstance(max_new, bool) or max_new <= 0:
             raise APIError(400, f"{field} must be a positive integer")
-        clamped = False
-        if max_new > remaining:
-            if not clamp:
-                raise APIError(
-                    400,
-                    f"prompt and {field} exceed the context window: "
-                    f"{len(prompt_tokens)} + {max_new} > {context} tokens",
-                    "context_length_exceeded",
-                )
-            max_new, clamped = remaining, True
-        return max_new, clamped
+        return min(max_new, remaining), requested is not None and max_new > remaining
 
     def _normalize_messages(self, messages: object) -> list[dict]:
         if not isinstance(messages, list) or not messages:
@@ -776,7 +850,13 @@ class FakeHandler(BaseHTTPRequestHandler):
         return None
 
     def _thinking(self, body: dict) -> bool:
-        effort = body.get("reasoning_effort")
+        return self._reasoning(body)["thinking"]
+
+    def _reasoning(self, body: dict) -> dict:
+        """frontend.py _prepare_prompt: the reasoning a chat request asked for,
+        as backend.py ReasoningRequest records it, and whether it thinks."""
+        sent = body.get("reasoning_effort")
+        effort = sent
         if effort is None:
             effort = self.engine.settings.default_reasoning_effort
         if effort is not None and (not isinstance(effort, str) or effort not in REASONING_EFFORTS):
@@ -788,15 +868,16 @@ class FakeHandler(BaseHTTPRequestHandler):
             raise APIError(400, "chat_template_kwargs must be an object")
         elif reserved := sorted(RESERVED_TEMPLATE_KWARGS & kwargs.keys()):
             raise APIError(400, f"chat_template_kwargs cannot set {reserved[0]}")
-        if kwargs.get("enable_thinking") is False:
-            return False
-        return effort != "none"
+        enable = kwargs.get("enable_thinking")
+        return {
+            "sent_effort": sent,
+            "effort": effort,
+            "enable_thinking": enable if isinstance(enable, bool) else None,
+            "thinking": enable is not False and effort != "none",
+        }
 
-    def _chat_job(
-        self, body: dict, *, output_field: str | None, clamp: bool, thinking_display: str = "summarized"
-    ) -> FakeJob:
+    def _chat_job(self, body: dict, *, output_field: str | None, thinking_display: str = "summarized") -> FakeJob:
         """frontend.py Frontend._prepare for a Chat-shaped body."""
-        body = self._drop_nulls(body, ("n", "max_tokens", "max_completion_tokens", "stream", "parallel_tool_calls"))
         options = self._generation_options(body)
         n, logprobs = body.get("n", 1), body.get("logprobs")
         if (
@@ -807,15 +888,16 @@ class FakeHandler(BaseHTTPRequestHandler):
         ):
             raise APIError(400, "n and logprobs are not currently supported")
         self._check_model(body)
-        thinking = self._thinking(body)
+        reasoning = self._reasoning(body)
+        thinking = reasoning.pop("thinking")
         messages = self._normalize_messages(body.get("messages"))
         tools = body.get("tools")
         if tools is not None and not isinstance(tools, list):
             raise APIError(400, "tools must be an array")
+        _check_tool_names(tools or [])
         response_format = body.get("response_format")
         structured = isinstance(response_format, dict) and response_format.get("type") in ("json_object", "json_schema")
-        if options["stops"] and (tools or structured):
-            raise APIError(400, "stop cannot be combined with tools or structured output")
+        # 1.3.2 dropped the refusal of stop beside tools or structured output.
         if options["ignore_eos"] and (tools or structured):
             raise APIError(400, "ignore_eos cannot be combined with tools or structured output")
         with self.engine.latencies.measure("template"):
@@ -823,7 +905,9 @@ class FakeHandler(BaseHTTPRequestHandler):
         requested = body.get("max_completion_tokens", body.get("max_tokens"))
         if output_field is None:
             output_field = "max_completion_tokens" if "max_completion_tokens" in body else "max_tokens"
-        max_new, clamped = self._output_budget(requested, rendered.tokens, output_field, clamp)
+        max_new, clamped = self._output_budget(requested, rendered.tokens, output_field)
+        # A budget the output limit reaches first closes nothing.
+        budget = options["thinking_token_budget"]
         return FakeJob(
             public_id=secrets.token_hex(16),
             prompt_tokens=rendered.tokens,
@@ -840,6 +924,9 @@ class FakeHandler(BaseHTTPRequestHandler):
             output_clamped_to_context=clamped,
             priority=options["priority"],
             last_user=rendered.last_user,
+            thinking_token_budget=budget if thinking and budget is not None and budget < max_new else None,
+            cache_salt=options["cache_salt"],
+            reasoning={**reasoning, "thinking": thinking},
         )
 
     def _streaming_flags(self, body: dict, *, anthropic: bool = False) -> tuple[bool, bool]:
@@ -852,16 +939,16 @@ class FakeHandler(BaseHTTPRequestHandler):
         return stream is True, return_progress
 
     def _stream_options(self, body: dict, stream: object) -> dict:
-        options = body.get("stream_options")
-        if options is None:
-            options = {}
-        if (
-            not isinstance(body.get("stream", False) or False, bool)
-            or not isinstance(options, dict)
-            or not isinstance(options.get("include_usage", False), bool)
-        ):
+        """server/server.py _stream_options (1.3.2): a null include_usage is one left out."""
+        options = body.get("stream_options", {})
+        if not isinstance(body.get("stream", False), bool) or not isinstance(options, dict):
             raise APIError(400, "invalid streaming options")
-        return {"include_usage": options.get("include_usage", False)}
+        include_usage = options.get("include_usage")
+        if include_usage is None:
+            include_usage = False
+        if not isinstance(include_usage, bool):
+            raise APIError(400, "invalid streaming options")
+        return {"include_usage": include_usage}
 
     def _run(self, job: FakeJob, deadline: float) -> Iterator[tuple]:
         """The engine's events, cancelled when the client goes away."""
@@ -933,7 +1020,7 @@ class FakeHandler(BaseHTTPRequestHandler):
     def _chat(self, body: dict, deadline: float) -> None:
         stream, progress = self._streaming_flags(body)
         stream_options = self._stream_options(body, stream)
-        job = self._chat_job(body, output_field=None, clamp=False)
+        job = self._chat_job(body, output_field=None)
         job.return_progress = progress
         if stream:
             self._openai_stream(job, deadline, stream_options, chat=True)
@@ -949,7 +1036,6 @@ class FakeHandler(BaseHTTPRequestHandler):
     def _completions(self, body: dict, deadline: float) -> None:
         stream, progress = self._streaming_flags(body)
         stream_options = self._stream_options(body, stream)
-        body = self._drop_nulls(body, ("n", "best_of", "max_tokens", "suffix", "echo", "logprobs"))
         self._check_model(body)
         for name in ("suffix", "logprobs"):
             if name in body:
@@ -961,6 +1047,9 @@ class FakeHandler(BaseHTTPRequestHandler):
             if not isinstance(value, int) or isinstance(value, bool) or value != 1:
                 raise APIError(400, f"{name} must be 1")
         options = self._generation_options(body)
+        # frontend.py (1.3.2): a text completion has no reasoning split to close.
+        if body.get("thinking_token_budget") not in (None, -1):
+            raise APIError(400, "thinking_token_budget is not supported for text completions")
         prompt = body.get("prompt")
         if isinstance(prompt, str):
             tokens, text = fake_text.tokenize(prompt), prompt
@@ -974,13 +1063,14 @@ class FakeHandler(BaseHTTPRequestHandler):
             raise APIError(400, "prompt must not be empty")
         requested = body.get("max_tokens")
         max_new, _ = self._output_budget(
-            COMPLETION_DEFAULT_MAX_TOKENS if requested is None else requested, tokens, "max_tokens", requested is None
+            COMPLETION_DEFAULT_MAX_TOKENS if requested is None else requested, tokens, "max_tokens"
         )
         job = FakeJob(
             public_id=secrets.token_hex(16),
             prompt_tokens=tokens,
             prompt_text=text,
             max_new_tokens=max_new,
+            cache_salt=options["cache_salt"],
             stop_sequences=options["stops"],
             ignore_eos=options["ignore_eos"],
             priority=options["priority"],
@@ -1107,14 +1197,19 @@ class FakeHandler(BaseHTTPRequestHandler):
             "seed",
             "timeout",
             "priority",
+            "cache_salt",
             "stop",
             "parallel_tool_calls",
+            "ignore_eos",
+            "chat_template_kwargs",
+            "preserve_thinking",
+            "thinking_token_budget",
         ):
             if body.get(name) is not None:
                 chat[name] = body[name]
         if body.get("max_output_tokens") is not None:
             chat["max_completion_tokens"] = body["max_output_tokens"]
-        job = self._chat_job(chat, output_field="max_output_tokens", clamp=False)
+        job = self._chat_job(chat, output_field="max_output_tokens")
         job.tool_namespaces = namespaces
         job.response_store = store
         job.response_previous_id = previous_id
@@ -1355,6 +1450,11 @@ class FakeHandler(BaseHTTPRequestHandler):
                 effort = "none"
             if thinking.get("display") in ("omitted", "updates"):
                 display = "omitted"
+            if thinking["type"] == "enabled":
+                # api_shapes.py _anthropic_thinking_budget (1.3.2, lines 654-665)
+                budget = thinking.get("budget_tokens")
+                if not isinstance(budget, int) or isinstance(budget, bool) or budget < 1024:
+                    raise APIError(400, "thinking.budget_tokens must be an integer of at least 1024")
         translated: list[dict] = []
         system = body.get("system")
         if system is not None:
@@ -1367,6 +1467,10 @@ class FakeHandler(BaseHTTPRequestHandler):
                 raise APIError(400, "Anthropic message role must be user, assistant, or system")
             translated.append({"role": role, "content": message.get("content")})
         chat: dict = {"model": body["model"], "messages": translated, "reasoning_effort": effort}
+        if isinstance(thinking, dict) and thinking.get("type") == "enabled":
+            chat["thinking_token_budget"] = thinking["budget_tokens"]
+        if body.get("chat_template_kwargs") is not None:
+            chat["chat_template_kwargs"] = body["chat_template_kwargs"]
         tools = body.get("tools")
         if tools is not None:
             chat["tools"] = [
@@ -1410,10 +1514,11 @@ class FakeHandler(BaseHTTPRequestHandler):
             ("seed", "seed"),
             ("timeout", "timeout"),
             ("priority", "priority"),
+            ("cache_salt", "cache_salt"),
         ):
             if body.get(source) is not None:
                 chat[target] = body[source]
-        job = self._chat_job(chat, output_field="max_tokens", clamp=True, thinking_display=display)
+        job = self._chat_job(chat, output_field="max_tokens", thinking_display=display)
         job.return_progress = progress
         if stream:
             self._anthropic_stream(job, deadline)
@@ -1569,7 +1674,7 @@ class FakeHandler(BaseHTTPRequestHandler):
         self._json(200, {"prompt": rendered.text})
 
     # --- scoring ---------------------------------------------------------------------
-    def _score(self, prompt: str, options: int, deadline: float, priority: str):
+    def _score(self, prompt: str, options: int, deadline: float, priority: str, salt: str | None = None):
         tokens = fake_text.tokenize(prompt)
         if len(tokens) > self.engine.max_context:
             raise ContextLengthError(len(tokens), self.engine.max_context)
@@ -1580,6 +1685,7 @@ class FakeHandler(BaseHTTPRequestHandler):
             max_new_tokens=0,
             priority=priority,
             deadline=deadline,
+            cache_salt=salt,
         )
         result = None
         for event in self.engine.score(job, options):
@@ -1588,7 +1694,9 @@ class FakeHandler(BaseHTTPRequestHandler):
         return job, result
 
     def _judgment(self, body: dict, deadline: float) -> None:
-        unknown = sorted(set(body) - {"id", "state", "question", "options", "model", "timeout", "priority"})
+        unknown = sorted(
+            set(body) - {"id", "state", "question", "options", "model", "timeout", "priority", "cache_salt"}
+        )
         if unknown:
             raise APIError(400, f"unsupported fields: {', '.join(unknown)}")
         self._check_model(body)
@@ -1610,6 +1718,7 @@ class FakeHandler(BaseHTTPRequestHandler):
         if len({o["id"] for o in options}) != len(options):
             raise APIError(400, "Option IDs must be unique")
         priority = self._priority(body)
+        salt = self._cache_salt(body)
         payload = {
             "evidence": body["state"],
             "criterion": body["question"],
@@ -1622,7 +1731,7 @@ class FakeHandler(BaseHTTPRequestHandler):
             ],
             thinking=False,
         ).text
-        _, result = self._score(prompt, len(options), deadline, priority)
+        _, result = self._score(prompt, len(options), deadline, priority, salt)
         logits = list(result.option_logits)
         self._json(
             200,
@@ -1706,6 +1815,11 @@ class FakeHandler(BaseHTTPRequestHandler):
         except APIError as error:
             details.append(detail(["priority"], error.message))
             priority = "normal"
+        salt = None
+        try:
+            salt = self._cache_salt(body)
+        except APIError as error:
+            details.append(detail(["cache_salt"], error.message))
         if details:
             raise SystemOneError(details)
         answers: dict = {}
@@ -1715,7 +1829,7 @@ class FakeHandler(BaseHTTPRequestHandler):
                 probabilities = [1.0]
             else:
                 prompt = json.dumps({"state": body["state"], "question": qid, "labels": labels})
-                _, result = self._score(prompt, len(labels), deadline, priority)
+                _, result = self._score(prompt, len(labels), deadline, priority, salt)
                 input_tokens += result.prompt_tokens
                 probabilities = softmax(list(result.option_logits))
             if kind == "noul":
@@ -1858,7 +1972,8 @@ def settings_from_args(args) -> ServeSettings:
         port=args.port,
         max_context=args.max_context,
         max_memory=args.max_memory,
-        max_cache_disk=args.max_cache_disk or 0,
+        # None (auto, 1.3.2's default), 0 (off) or a size, as serve_options parses it.
+        max_cache_disk=args.max_cache_disk,
         persistent_cache=args.persistent_cache,
         cache_dir=args.cache_dir,
         kv_format=args.kv_format,
@@ -1874,6 +1989,10 @@ def settings_from_args(args) -> ServeSettings:
         idle_release=args.idle_release,
         disable_ane=args.disable_ane,
         allow_idle_sleep=args.allow_idle_sleep,
+        max_cache_disk_writes=args.max_cache_disk_writes or 0,
+        state_format=args.state_format,
+        thinking_token_budget=args.thinking_token_budget,
+        thinking_end_text=args.thinking_end_text,
     )
 
 

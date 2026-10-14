@@ -68,6 +68,7 @@ COMMANDS = (
     "rm",
     "load",
     "unload",
+    "release-memory",
     "run",
     "launch",
     "open",
@@ -287,6 +288,7 @@ EXAMPLES = {
     "doctor": "splash doctor\n  splash doctor --json\n  splash doctor --uninstall\n"
     "  splash doctor --uninstall --yes --delete-cache",
     "version": "splash version --json",
+    "release-memory": "splash release-memory",
 }
 
 
@@ -385,6 +387,7 @@ Serving
   ps                 The active model, uptime, requests in flight, memory
   load <ID[:profile]>   Load a model (switches if another is active)
   unload             Stop the engine, keep the manager running
+  release-memory     Free the model's memory now; the next request restores it
 
 Models
   ls                 Installed models
@@ -450,9 +453,12 @@ def manager_pid(paths: Paths) -> tuple[int | None, float | None]:
 
 
 def format_label(row: dict[str, Any] | None) -> str:
-    """The FORMAT column: `MLX`, `GGUF`, or `Package` for an installed Splash package."""
+    """The FORMAT column: `MLX`, `GGUF`, or `Package` for an installed Splash package. A Model
+    Optimizer or compressed-tensors checkpoint shows its kind (`NVFP4`, `FP8`) instead of MLX."""
     if not row:
         return DASH
+    if row.get("format") == "mlx" and row.get("checkpoint"):
+        return str(row["checkpoint"]).split(" · ")[0]
     return {"mlx": "MLX", "legacy": "Package"}.get(str(row.get("format")), "GGUF")
 
 
@@ -552,6 +558,7 @@ def status_data(client: Client) -> dict[str, Any]:
             "model": engine.get("model"),
             "profile": None,
             "format": row.get("format") if row else None,
+            "checkpoint": row.get("checkpoint") if row else None,
             "variant": row.get("variant") if row else None,
             "max_context": engine.get("maximum_context_tokens"),
             "vision": engine.get("vision"),
@@ -583,6 +590,8 @@ def status_data(client: Client) -> dict[str, Any]:
             "reused_tokens": totals.get("reused_tokens"),
             "disk_used_bytes": disk.get("used_bytes"),
             "disk_capacity_bytes": disk.get("capacity_bytes"),
+            "disk_limit_bytes": disk.get("limit_bytes"),
+            "disk_writes_gated": disk.get("writes_gated"),
             "persistent": disk.get("persistent") if disk.get("enabled") else None,
             "dir": (settings.get("resolved") or {}).get("cache_dir"),
         },
@@ -642,7 +651,7 @@ def status_lines(data: dict[str, Any], style: Style) -> list[str]:
     state = e.get("state") or "stopped"
     if state in SERVING_STATES:
         details = [
-            {"mlx": "MLX", "gguf": "GGUF"}.get(e.get("format") or ""),
+            format_label(e) if e.get("format") in ("mlx", "gguf") else None,
             e.get("variant") if e.get("format") == "gguf" else None,
             f"{fmt_tokens(e['max_context'])} context" if e.get("max_context") else None,
             "vision" if e.get("vision") else None,
@@ -669,11 +678,20 @@ def status_lines(data: dict[str, Any], style: Style) -> list[str]:
             f" · {fmt_count(req.get('queued'))} queued"
         )
         ssd = DASH
-        if cache.get("disk_capacity_bytes"):
-            ssd = (
-                f"{fmt_bytes(cache.get('disk_used_bytes'))} of "
-                f"{fmt_bytes(cache['disk_capacity_bytes'])}"
+        capacity = cache.get("disk_capacity_bytes") or 0
+        # What the volume's free space leaves of the quota now (Splash 1.3.2+), else the quota.
+        # A full volume reports 0, which is a real limit, not a missing one.
+        limit = cache.get("disk_limit_bytes")
+        disk_limit = capacity if limit is None else limit
+        if capacity > 0 or disk_limit > 0:
+            ssd = f"{fmt_bytes(cache.get('disk_used_bytes'))} of {fmt_bytes(disk_limit)}"
+            if capacity and disk_limit < capacity:
+                ssd += f" (quota {fmt_bytes(capacity)})"
+            gate = {"budget": "write budget spent", "closed": "stopped taking writes"}.get(
+                cache.get("disk_writes_gated") or ""
             )
+            if gate:
+                ssd += f", {gate}"
         persistent = {True: "on", False: "off"}.get(cache.get("persistent"), DASH)
         where = (
             f" ({home_relative(cache['dir'])})"
@@ -1768,6 +1786,11 @@ def dispatch(ctx: Ctx, client: Client, rest: list[str]) -> int:
         require(client)
         client.request("POST", "/engine/stop")
         ctx.ok("Engine stopped")
+        return 0
+    if name == "release-memory":
+        require(client)
+        client.request("POST", "/engine/release-memory")
+        ctx.ok("Memory released; the next request restores the weights")
         return 0
     if name == "run":
         client.start(note=not ctx.quiet)

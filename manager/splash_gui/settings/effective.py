@@ -68,6 +68,7 @@ _COMPARE: dict[str, Any] = {
     "serve.max_memory": p.parse_max_memory,
     "serve.max_context": p.parse_max_context,
     "serve.max_cache_disk": p.parse_max_cache_disk,
+    "serve.max_cache_disk_writes": p.parse_max_cache_disk_writes,
     "serve.max_request_size": p.parse_request_size,
     "serve.idle_release": p.parse_idle_release,
 }
@@ -154,6 +155,10 @@ class EffectiveServe:
     idle_release: str = "10m"
     disable_ane: bool = False
     allow_idle_sleep: bool = False
+    state_format: str = "fp32"
+    max_cache_disk_writes: str = "0"
+    thinking_token_budget: int | None = None
+    thinking_end_text: str | None = None
 
 
 def effective_serve(doc: SettingsDocument, model_id: str) -> EffectiveServe:
@@ -184,6 +189,10 @@ def effective_serve(doc: SettingsDocument, model_id: str) -> EffectiveServe:
         idle_release=str(v("serve.idle_release")),
         disable_ane=bool(v("serve.disable_ane")),
         allow_idle_sleep=bool(v("serve.allow_idle_sleep")),
+        state_format=str(v("serve.state_format")),
+        max_cache_disk_writes=str(v("serve.max_cache_disk_writes")),
+        thinking_token_budget=v("serve.thinking_token_budget"),
+        thinking_end_text=v("serve.thinking_end_text"),
     )
 
 

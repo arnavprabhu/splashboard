@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseMaxCacheDisk, parseMaxContext, parseMaxMemory, parseRequestSize, parseSize } from '../src/lib/size';
+import { parseMaxCacheDisk, parseMaxCacheDiskWrites, parseMaxContext, parseMaxMemory, parseRequestSize, parseSize } from '../src/lib/size';
 
 const G = 1024 ** 3;
 
@@ -32,8 +32,18 @@ describe('parseMaxCacheDisk', () => {
     expect(parseMaxCacheDisk('0')).toEqual({ ok: true, bytes: 0 });
     expect(parseMaxCacheDisk('32G')).toEqual({ ok: true, bytes: 32 * G });
   });
-  it('rejects auto, matching Splash', () => {
-    expect(parseMaxCacheDisk('auto')).toEqual({ ok: false, error: 'use 0 to disable, or a size such as 5G' });
+  it('accepts auto (Splash 1.3.2) and words its error like Splash', () => {
+    expect(parseMaxCacheDisk('auto')).toEqual({ ok: true, bytes: null });
+    expect(parseMaxCacheDisk(' AUTO ')).toEqual({ ok: true, bytes: null });
+    expect(parseMaxCacheDisk('-1G')).toEqual({ ok: false, error: 'use auto, 0 to disable, or a size such as 16G' });
+  });
+});
+
+describe('parseMaxCacheDiskWrites', () => {
+  it('accepts 0 (no limit) and sizes, refuses auto', () => {
+    expect(parseMaxCacheDiskWrites('0')).toEqual({ ok: true, bytes: 0 });
+    expect(parseMaxCacheDiskWrites('200G')).toEqual({ ok: true, bytes: 200 * G });
+    expect(parseMaxCacheDiskWrites('auto')).toEqual({ ok: false, error: 'use 0 for no limit, or a size such as 200G' });
   });
 });
 

@@ -574,6 +574,9 @@ public final class MenuBarViewModel {
                 else { return }
             }
             await interruptingInstall(model: nil) { api, force in try await api.restartEngine(force: force || inFlight > 0) }
+        case .releaseMemory:
+            // A 409 (busy, or no model) shows the manager's own words.
+            await call { try await $0.releaseMemory() }
         case .openAdmin(let path):
             await openAdminSignedIn(path)
         case .connectIntegration(let name):

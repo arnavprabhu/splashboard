@@ -389,14 +389,10 @@ class IntegrationsService:
                     "model_context_window=<context>",
                     "-c",
                     "model_auto_compact_token_limit=<90% of context>",
-                    "-c",
-                    "features.apps=false",
                 ],
                 notes=[
                     session.format("codex"),
                     "Only `-c` overrides; no file is written.",
-                    "ChatGPT Apps connectors are off for the session: Splash rejects "
-                    "tool names over 64 characters.",
                 ],
             )
         if name == "opencode":

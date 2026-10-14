@@ -86,9 +86,9 @@ export function brewStatus(brew: BrewInfo | null): CheckStatus {
   return brew.installed ? 'ok' : 'fail';
 }
 
-/** The lowest supported Splash version from the manager's `supported_range` (">=1.3.1 <1.4.0" → "1.3.1"). */
+/** The lowest supported Splash version from the manager's `supported_range` (">=1.3.2 <1.4.0" → "1.3.2"). */
 export function minimumEngine(range: string | null | undefined): string {
-  return /^\s*>=\s*(\d+\.\d+\.\d+)/.exec(range ?? '')?.[1] ?? '1.3.1';
+  return /^\s*>=\s*(\d+\.\d+\.\d+)/.exec(range ?? '')?.[1] ?? '1.3.2';
 }
 
 /** Splash: found and in the manager's supported range; newer minor = warning; older = blocking. */
@@ -147,7 +147,7 @@ function getPath(obj: unknown, dotted: string): unknown {
   return cur;
 }
 
-/** Equal as Splash would read them ("0" = "0G" off, "128K" = "131072"). */
+/** Equal as Splash would read them ("auto" = "AUTO", "1G" = "1024M", "128K" = "131072"). */
 export function sameValue(key: string, a: unknown, b: unknown): boolean {
   if (typeof a === 'string' && typeof b === 'string') {
     if (key === 'serve.max_cache_disk') {
@@ -173,6 +173,7 @@ export function formatSettingValue(key: string, value: unknown): string {
   if (key === 'serve.max_cache_disk' && typeof value === 'string') {
     const parsed = parseMaxCacheDisk(value);
     if (parsed.ok && parsed.bytes === 0) return t('welcome.value.disk_off');
+    if (parsed.ok && parsed.bytes === null) return t('welcome.value.disk_auto');
   }
   return String(value);
 }

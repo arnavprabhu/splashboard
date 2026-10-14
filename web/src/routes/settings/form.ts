@@ -239,6 +239,15 @@ export const SECTION_TO_SLUG: Readonly<Record<string, string>> = Object.fromEntr
   Object.entries(SLUG_TO_SECTION).map(([slug, id]) => [id, slug]),
 );
 
+/**
+ * A section's fields, with the ones metadata marks `advanced` set apart (they render folded
+ * under "Advanced" at the end of the section). The Advanced section itself shows everything.
+ */
+export function splitAdvanced<F extends { advanced?: boolean }>(fields: readonly F[], section: string): { main: F[]; advanced: F[] } {
+  if (section === 'advanced') return { main: [...fields], advanced: [] };
+  return { main: fields.filter((f) => !f.advanced), advanced: fields.filter((f) => f.advanced) };
+}
+
 /** Keys the global page renders with dedicated controls instead of the generic field. */
 export const CUSTOM_KEYS: ReadonlySet<string> = new Set(['chat.mcp_servers', 'engine.extra_flags', 'ui.theme']);
 

@@ -69,6 +69,8 @@ _CODE_EXIT = {
     "incompatible": EXIT_MODEL,
     "model_switch_busy": EXIT_BUSY,
     "install_in_progress": EXIT_BUSY,  # the engine is busy downloading
+    "engine_busy": EXIT_BUSY,  # a memory release while requests are in service
+    "engine_not_loaded": EXIT_ENGINE,
     "engine_unavailable": EXIT_ENGINE,
     "engine_recovering": EXIT_ENGINE,
     "engine_failed": EXIT_ENGINE,

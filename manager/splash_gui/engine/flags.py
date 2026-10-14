@@ -1,7 +1,8 @@
 """Build the exact `splash serve` argv and environment.
 
 Like Splash's own `serve_argv`, an option is passed only when its value differs
-from Splash's default, so the command line shows what was actually chosen. The
+from Splash's default, so the command line shows what was actually chosen
+(`--max-cache-disk 0` included: the SSD cache is on unless it is turned off). The
 internal key goes in the environment only; `--host`/`--allowed-*` and the user's
 API key are never passed to the engine (the manager enforces them on its port).
 """
@@ -20,7 +21,7 @@ from ..settings import parsers as p
 from ..settings.effective import EffectiveServe, effective_serve
 from ..settings.model import ExtraFlag
 from ..settings.store import SettingsStore
-from ..settings.validation import managed_flag_for
+from ..settings.validation import PERSISTENT_NEEDS_CACHE, WRITES_NEED_CACHE, managed_flag_for
 
 ENGINE_HOST = "127.0.0.1"
 INTERNAL_PORT_RANGE = range(18000, 19000)
@@ -77,8 +78,11 @@ def serve_flags(
     if serve.announce_served_name and not serve.served_model_names:
         raise LaunchError("--announce-served-name needs --served-model-name")
     cache_disk = p.parse_max_cache_disk(serve.max_cache_disk)
-    if serve.persistent_cache and not cache_disk:
-        raise LaunchError("--persistent-cache needs --max-cache-disk")
+    if serve.persistent_cache and cache_disk == 0:
+        raise LaunchError(PERSISTENT_NEEDS_CACHE)
+    cache_writes = p.parse_max_cache_disk_writes(serve.max_cache_disk_writes)
+    if cache_writes and cache_disk == 0:
+        raise LaunchError(WRITES_NEED_CACHE)
 
     argv: list[str] = []
     if serve.revision:
@@ -98,12 +102,24 @@ def serve_flags(
             "--default-reasoning-effort",
             p.parse_reasoning_effort(serve.default_reasoning_effort),
         ]
+    if serve.thinking_token_budget is not None:
+        argv += [
+            "--thinking-token-budget",
+            str(p.parse_thinking_token_budget(str(serve.thinking_token_budget))),
+        ]
+    if serve.thinking_end_text is not None:
+        argv += _opt("--thinking-end-text", p.check_thinking_end_text(serve.thinking_end_text))
     if p.parse_kv_format(serve.kv_format) != "int8":
         argv += ["--kv-format", serve.kv_format]
+    if p.parse_state_format(serve.state_format) != "fp32":
+        argv += ["--state-format", serve.state_format]
     if p.parse_max_memory(serve.max_memory) is not None:
         argv += ["--max-memory", serve.max_memory.strip()]
-    if cache_disk:
+    # Auto is Splash's default; 0 (off) and a size are passed.
+    if cache_disk is not None:
         argv += ["--max-cache-disk", serve.max_cache_disk.strip()]
+    if cache_writes:
+        argv += ["--max-cache-disk-writes", serve.max_cache_disk_writes.strip()]
     if serve.persistent_cache:
         argv += ["--persistent-cache", "--cache-dir", str(cache_dir)]
     if p.parse_max_context(serve.max_context) is not None:

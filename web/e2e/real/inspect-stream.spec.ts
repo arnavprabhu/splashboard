@@ -45,14 +45,16 @@ test('By ID: the recommended variant’s verdict shows first, the others fill in
     // First verdict: UD-Q4_K_M is checked and recommended; the others are still being checked.
     await expect(row('UD-Q4_K_M')).toContainText('Recommended');
     await expect(row('Q8_0')).toContainText('Checking…');
-    await expect(page.getByTestId('inspect-progress')).toHaveText('1 of 8 variants checked. The rest are still being checked.');
+    await expect(page.getByTestId('inspect-progress')).toHaveText('1 of 9 variants checked. The rest are still being checked.');
     await expect(page.getByText('Compatible', { exact: true }).first()).toBeVisible();
     await expect(page.getByRole('radio', { name: 'UD-Q4_K_M' })).toBeChecked();
 
-    // Then every row has its verdict: UD-Q8_K_XL and the imatrix file refused, no "Checking…".
+    // Then every row has its verdict: the whole-BF16 model and the imatrix file refused (UD-Q8_K_XL
+    // loads since Splash 1.3.2), no "Checking…".
     await expect(table.getByTestId('variant-checking')).toHaveCount(0, { timeout: 30_000 });
     await expect(page.getByTestId('inspect-progress')).toHaveCount(0);
-    await expect(row('UD-Q8_K_XL')).toContainText('Unsupported');
+    await expect(row('BF16')).toContainText('Unsupported');
+    await expect(row('UD-Q8_K_XL')).not.toContainText('Unsupported');
     await expect(row('imatrix_unsloth')).toContainText('Unsupported');
     await expect(row('Q8_0')).not.toContainText('Checking');
     await expect(page.getByRole('radio', { name: 'UD-Q4_K_M' })).toBeChecked();
@@ -83,7 +85,7 @@ test('detail sheet: the variant table fills in, the likely pick first', async ({
     await expect(sheet.getByTestId('drawer-download')).toHaveText(/UD-Q4_K_M/);
     await expect(sheet.getByTestId('drawer-download')).toBeEnabled();
     await expect(table.getByTestId('variant-checking')).toHaveCount(0, { timeout: 30_000 });
-    await expect(row('UD-Q8_K_XL')).toContainText('Unsupported');
+    await expect(row('BF16')).toContainText('Unsupported');
     await expect(row('Q4_0').getByRole('button', { name: 'Download Q4_0' })).toBeVisible();
   } finally {
     await manager.stop();

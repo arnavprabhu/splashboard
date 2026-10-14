@@ -30,12 +30,12 @@ _WEIGHTS_RESTORED = re.compile(r"Weights restored in ([\d.]+) s")
 _TAKEN_BACK = re.compile(
     r"took back (\d+) restore points over (\d+) KV blocks \((\d+) MiB\); left (\d+) copies behind"
 )
-_DISK_SUGGESTION = re.compile(r"may not hold a (\d+)-token request")
 
 Phase = Literal["installing", "loading", "warming"]
 TemplateMode = Literal["native", "patched", "unsupported"]
 NoticeKind = Literal[
-    "disk_tier_suggestion",
+    "disk_cache_off",
+    "persistent_cache_off",
     "hub_unreachable",
     "new_commit_not_installed",
     "weights_restored",
@@ -198,7 +198,7 @@ def classify_error(text: str) -> EngineError | None:
         "no supported model has this architecture" in lowered
         or "which splash no longer loads" in lowered
         or explain_refusal(text)[1] is not None
-        or "stores tensors splash cannot load" in lowered
+        or "stores every projection and expert unquantized" in lowered
         or "unsupported gguf" in lowered
         or "input rotation is not one splash runs" in lowered
         or "has no vision tower" in lowered
@@ -213,7 +213,7 @@ def classify_error(text: str) -> EngineError | None:
                     patch={"serve.language_only": True},
                 )
             )
-        if "choose another variant" in lowered:
+        if "choose another variant" in lowered or "choose a quantized variant" in lowered:
             suggestions.append(
                 EngineSuggestion(action="smaller_variant", label="Pick another variant")
             )
@@ -224,6 +224,17 @@ def classify_error(text: str) -> EngineError | None:
             message=explain_refusal(message)[0] or message,
             raw=[text],
             suggestions=suggestions,
+        )
+    # server/backend.py thinking_end_tokens: the engine refuses the setting at startup.
+    if "--thinking-end-text must end with" in lowered or (
+        "--thinking-end-text takes" in lowered and "the most is" in lowered
+    ):
+        return EngineError(
+            kind="other",
+            code="invalid_setting",
+            message=f"Settings · Thinking end text (serve.thinking_end_text): {message}",
+            raw=[text],
+            suggestions=[EngineSuggestion(action="open_logs", label="Open logs")],
         )
     if (
         "cannot bind" in lowered
@@ -374,7 +385,8 @@ class StartupParser:
         # MoE model at a long context can take a minute or more).
         if _WEIGHTS_LOADED.search(line):  # RuntimeResources.mm:394
             return [PhaseEvent("warming")]
-        if line.startswith("Weights released after"):  # NativeRuntime.cpp:133
+        # NativeRuntime.cpp:133 (idle release) and :373 (POST /v1/memory/release).
+        if line.startswith(("Weights released after", "Weights released on request")):
             return [WeightsEvent("released")]
         restored = _WEIGHTS_RESTORED.search(line)
         if restored:  # NativeRuntime.cpp:143
@@ -382,8 +394,12 @@ class StartupParser:
         taken = _TAKEN_BACK.search(line)
         if taken:  # RuntimeResources.mm:564
             return [TakenBackEvent(*(int(g) for g in taken.groups()))]
-        if _DISK_SUGGESTION.search(line):  # Bootstrap.mm:288
-            return [NoticeEvent("disk_tier_suggestion", line)]
+        # Why the SSD cache, or only its persistence, is off this start
+        # (RuntimeResources.mm "SSD cache off: <reason>; …", "Persistent cache off: …").
+        if line.startswith("SSD cache off: "):
+            return [NoticeEvent("disk_cache_off", line)]
+        if line.startswith("Persistent cache off: "):
+            return [NoticeEvent("persistent_cache_off", line)]
         if line.startswith("Could not reach the Hub"):  # upstream.py:148/330
             return [NoticeEvent("hub_unreachable", line)]
         if line.startswith("Warning: keeping the installed"):  # upstream.py _keeping_installation

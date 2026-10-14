@@ -197,7 +197,7 @@ def test_save_is_atomic_and_private(paths: Paths) -> None:
 def test_invalid_save_writes_nothing(paths: Paths) -> None:
     store = SettingsStore(paths)
     raw = SettingsDocument().to_json_dict()
-    raw["global"]["serve"]["persistent_cache"] = True
+    raw["global"]["serve"].update(max_cache_disk="0", persistent_cache=True)
     result, changes = store.save(raw)
     assert not result.ok and changes == []
     assert not paths.settings_file.exists()
@@ -213,7 +213,7 @@ def test_loose_file_mode_is_tightened(paths: Paths) -> None:
 def test_migrate_from_unversioned() -> None:
     data, newer = migrate({"global": {"serve": {"offline": True}}})
     assert not newer
-    assert data["version"] == 2
+    assert data["version"] == SETTINGS_VERSION
     assert data["global"]["hf"]["offline"] is True
     assert "offline" not in data["global"]["serve"]
 
@@ -222,7 +222,7 @@ def test_unversioned_file_is_rewritten(paths: Paths) -> None:
     paths.settings_file.write_text(json.dumps({"global": {"ui": {"theme": "dark"}}}))
     doc_ = SettingsStore(paths).load()
     assert doc_.global_.ui.theme == "dark"
-    assert json.loads(paths.settings_file.read_text())["version"] == 2
+    assert json.loads(paths.settings_file.read_text())["version"] == SETTINGS_VERSION
 
 
 def test_v1_turns_admin_sign_in_on_once(paths: Paths) -> None:
@@ -236,12 +236,36 @@ def test_v1_turns_admin_sign_in_on_once(paths: Paths) -> None:
     store = SettingsStore(paths)
     assert store.load().global_.security.admin_requires_key is True
     on_disk = json.loads(paths.settings_file.read_text())
-    assert on_disk["version"] == 2 and on_disk["global"]["security"]["admin_requires_key"] is True
+    assert on_disk["version"] == SETTINGS_VERSION
+    assert on_disk["global"]["security"]["admin_requires_key"] is True
     raw = store.current.to_json_dict()
     raw["global"]["security"]["admin_requires_key"] = False
     result, _ = store.save(raw, ValidationContext(api_key_present=True))
     assert result.ok
     assert SettingsStore(paths).load().global_.security.admin_requires_key is False
+
+
+def test_v2_moves_ssd_cache_off_to_auto_once(paths: Paths) -> None:
+    """Version 2 stored the whole global section with the SSD cache's old default,
+    "0". It becomes auto once; a size is kept, and so is a later choice of 0."""
+    v2 = {"version": 2, "global": {"serve": {"max_cache_disk": "0"}}}
+    paths.settings_file.write_text(json.dumps(v2))
+    store = SettingsStore(paths)
+    assert store.load().global_.serve.max_cache_disk == "auto"
+    on_disk = json.loads(paths.settings_file.read_text())
+    assert on_disk["version"] == 3 and on_disk["global"]["serve"]["max_cache_disk"] == "auto"
+    raw = store.current.to_json_dict()
+    raw["global"]["serve"]["max_cache_disk"] = "0"
+    result, _ = store.save(raw)
+    assert result.ok
+    assert SettingsStore(paths).load().global_.serve.max_cache_disk == "0"
+
+    sized, _ = migrate({"version": 2, "global": {"serve": {"max_cache_disk": "32G"}}})
+    assert sized["global"]["serve"]["max_cache_disk"] == "32G"
+    number, _ = migrate({"version": 2, "global": {"serve": {"max_cache_disk": 0}}})
+    assert number["global"]["serve"]["max_cache_disk"] == "auto"
+    bare, _ = migrate({"version": 2, "global": {}})
+    assert bare == {"version": 3, "global": {}}
 
 
 def test_repair_drops_only_bad_values(paths: Paths) -> None:
@@ -314,13 +338,16 @@ def test_coding_preset_is_valid_and_complete() -> None:
     result = validate_document(raw)
     assert result.ok and result.document is not None
     s = result.document.global_.serve
-    assert (s.max_context, s.max_cache_disk, s.persistent_cache) == ("128K", "32G", True)
+    assert (s.max_context, s.max_cache_disk, s.persistent_cache) == ("128K", "auto", True)
     assert result.document.global_.wizard.preset == "coding"
 
 
 @pytest.mark.parametrize("preset", ["chat", "speed"])
 def test_other_presets_valid(preset: Any) -> None:
-    assert validate_document(apply_preset(SettingsDocument(), preset)).ok
+    result = validate_document(apply_preset(SettingsDocument(), preset))
+    assert result.ok and result.document is not None
+    serve = result.document.global_.serve
+    assert (serve.max_cache_disk, serve.persistent_cache) == ("auto", False)
 
 
 @pytest.mark.parametrize(
@@ -406,3 +433,72 @@ def test_each_step_is_the_largest_that_fits() -> None:
         for bigger in larger:
             wider = cat.memory_need(20 * GIB, vision=True, kv=cat.kv_bytes("Qwen3.8-27B", bigger))
             assert cat.fit_for(wider, memory) == "wont_fit", (memory, bigger)
+
+
+def test_v2_makes_messages_thinking_valid() -> None:
+    """Splash now refuses enabled thinking without a budget_tokens of at least 1024.
+    A stored overlay keeps working: no budget becomes adaptive, a small one 1024."""
+    model = "mlx-community/Qwen3.8-27B-4bit"
+    v2 = {
+        "version": 2,
+        "global": {},
+        "models": {
+            model: {
+                "sampling_defaults": {"thinking": {"type": "enabled"}},
+                "profiles": {
+                    "small": {"thinking": {"type": "enabled", "budget_tokens": 512}},
+                    "big": {"thinking": {"type": "enabled", "budget_tokens": 4096}},
+                    "off": {"thinking": {"type": "disabled"}},
+                    "hidden": None,
+                },
+            }
+        },
+    }
+    data, _ = migrate(v2)
+    entry = data["models"][model]
+    assert entry["sampling_defaults"]["thinking"] == {"type": "adaptive"}
+    assert entry["profiles"]["small"]["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert entry["profiles"]["big"]["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+    assert entry["profiles"]["off"]["thinking"] == {"type": "disabled"}
+    assert entry["profiles"]["hidden"] is None
+    SettingsDocument.model_validate(data)
+
+
+def test_v2_moves_extra_flags_that_are_now_settings() -> None:
+    """An option once passed through engine.extra_flags that now has a setting moves
+    into it, so the upgrade doesn't refuse it as a managed flag. Abbreviations and
+    `--flag=value` count; a value the setting refuses, and unrelated flags, stay."""
+    v2 = {
+        "version": 2,
+        "global": {
+            "engine": {
+                "extra_flags": [
+                    {"flag": "--state-format", "value": "bf16"},
+                    {"flag": "--thinking-token-budget=2048"},
+                    {"flag": "--max-cache-disk-w", "value": "200G"},
+                    {"flag": "--thinking-end-text", "value": "\n\nAnswer now.</think>"},
+                    {"flag": "--queue-siz", "value": "8"},
+                    {"flag": "--some-new-flag"},
+                ]
+            }
+        },
+    }
+    data, _ = migrate(v2)
+    serve = data["global"]["serve"]
+    assert serve["state_format"] == "bf16"
+    assert serve["thinking_token_budget"] == 2048
+    assert serve["max_cache_disk_writes"] == "200G"
+    assert serve["thinking_end_text"] == "\n\nAnswer now.</think>"
+    assert data["global"]["engine"]["extra_flags"] == [
+        {"flag": "--queue-siz", "value": "8"},
+        {"flag": "--some-new-flag"},
+    ]
+    SettingsDocument.model_validate(data)
+
+    bad = {
+        "version": 2,
+        "global": {"engine": {"extra_flags": [{"flag": "--state-format", "value": "fp16"}]}},
+    }
+    data, _ = migrate(bad)
+    assert data["global"]["engine"]["extra_flags"] == [{"flag": "--state-format", "value": "fp16"}]
+    assert "state_format" not in data["global"].get("serve", {})

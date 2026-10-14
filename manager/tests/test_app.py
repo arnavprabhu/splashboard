@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from splash_gui.app import AppConfig, create_app
+from splash_gui.engine.discovery import SUPPORTED_RANGE
 from splash_gui.paths import Paths
 from splash_gui.secrets import SecretName, SecretStore
 
@@ -207,7 +208,7 @@ def test_unknown_admin_route_is_json_404(client: TestClient) -> None:
 
 def test_engine_view_when_stopped(client: TestClient) -> None:
     body = client.get("/api/admin/engine").json()
-    assert body["state"] == "stopped" and body["engine"]["version"] == "1.3.1"
+    assert body["state"] == "stopped" and body["engine"]["version"] == "1.3.2"
     assert body["restart"]["auto_restart"] is True
     status = client.get("/api/admin/engine/status")
     assert status.status_code == 503 and status.headers["retry-after"] == "5"
@@ -217,7 +218,7 @@ def test_engine_view_when_stopped(client: TestClient) -> None:
 def test_versions(client: TestClient) -> None:
     body = client.get("/api/admin/versions").json()
     assert body["engine"]["support"] == "supported"
-    assert body["engine"]["supported_range"] == ">=1.3.1 <1.4.0"
+    assert body["engine"]["supported_range"] == SUPPORTED_RANGE == ">=1.3.2 <1.4.0"
 
 
 def test_system(client: TestClient) -> None:
@@ -230,7 +231,7 @@ def test_system(client: TestClient) -> None:
 
 def test_get_settings(client: TestClient, paths: Paths) -> None:
     body = client.get("/api/admin/settings").json()
-    assert body["settings"]["version"] == 2
+    assert body["settings"]["version"] == 3
     assert body["settings"]["global"]["server"]["port"] == 8000
     # Sign-in is on by default, and the manager creates the key it needs.
     assert body["settings"]["global"]["security"]["admin_requires_key"] is True
@@ -311,10 +312,13 @@ def test_put_settings_invalid(client: TestClient, paths: Paths) -> None:
 
 def test_validate_route(client: TestClient) -> None:
     doc = _settings(client)
-    doc["global"]["serve"]["persistent_cache"] = True
+    doc["global"]["serve"].update(max_cache_disk="0", persistent_cache=True)
     body = client.post("/api/admin/settings/validate", json=doc).json()
     assert body["valid"] is False
-    assert body["errors"][0]["message"] == "--persistent-cache needs --max-cache-disk"
+    assert (
+        body["errors"][0]["message"]
+        == "--persistent-cache needs the SSD cache --max-cache-disk 0 turns off"
+    )
     doc["global"]["serve"]["max_cache_disk"] = "100M"
     body = client.post("/api/admin/settings/validate", json=doc).json()
     assert body["valid"] is True and body["warnings"][0]["key"] == "serve.max_cache_disk"
@@ -600,7 +604,7 @@ def test_doctor_covers_the_spec_checks(client: TestClient) -> None:
         "integrations",
     }
     by = {c["id"]: c for c in report["checks"]}
-    assert by["engine"]["status"] == "ok" and "1.3.1" in by["engine"]["message"]
+    assert by["engine"]["status"] == "ok" and "1.3.2" in by["engine"]["message"]
     assert by["permissions"]["status"] == "ok"
     assert by["hf_token"]["status"] == "warn", "the suite never sees the developer's token"
     assert by["integrations"]["status"] == "ok"

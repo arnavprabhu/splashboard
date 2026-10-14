@@ -5,7 +5,7 @@
  */
 import { ApiError } from '../../api/client';
 import { t } from '../../strings/chat';
-import type { ChatSummary, ModelEntry } from './types';
+import type { ChatSummary, MessageMeta, ModelEntry } from './types';
 
 // ---------- sampling panel ----------
 
@@ -13,6 +13,7 @@ export const REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'x
 export const PRIORITIES = ['normal', 'foreground', 'background'] as const;
 
 export type NumField =
+  | 'thinking_token_budget'
   | 'temperature'
   | 'top_p'
   | 'top_k'
@@ -25,6 +26,7 @@ export type NumField =
   | 'timeout';
 
 export const NUM_FIELDS: readonly NumField[] = [
+  'thinking_token_budget',
   'temperature',
   'top_p',
   'top_k',
@@ -80,12 +82,15 @@ export function samplingForm(stored: Record<string, unknown> | null | undefined)
 const isInt = (n: number) => Number.isInteger(n);
 
 /** One field's error, or null. Empty is always fine. */
-export function numError(field: NumField, raw: string, context?: number | null): string | null {
+export function numError(field: NumField, raw: string): string | null {
   const text = raw.trim();
   if (!text) return null;
   const n = Number(text);
   if (!Number.isFinite(n)) return t(`chat.err.${field === 'max_completion_tokens' ? 'max_tokens' : field}` as 'chat.err.temperature');
   switch (field) {
+    case 'thinking_token_budget':
+      // server/frontend.py: a non-negative integer, or -1 for no cap.
+      return isInt(n) && n >= -1 ? null : t('chat.err.thinking_token_budget');
     case 'temperature':
       return n >= 0 && n <= 2 ? null : t('chat.err.temperature');
     case 'top_p':
@@ -101,13 +106,19 @@ export function numError(field: NumField, raw: string, context?: number | null):
     case 'repetition_penalty':
       return n > 0 ? null : t('chat.err.repetition_penalty');
     case 'seed':
-      return isInt(n) && n >= 0 ? null : t('chat.err.seed');
+      // A 64-bit integer: -1 asks for a random seed, another negative one is taken as its 64 bits.
+      return isInt(n) && n >= -(2 ** 63) && n < 2 ** 64 ? null : t('chat.err.seed');
     case 'max_completion_tokens':
-      if (!isInt(n) || n < 1) return t('chat.err.max_tokens');
-      return context && n > context ? t('chat.err.max_tokens_ctx', { n: context }) : null;
+      return isInt(n) && n >= 1 ? null : t('chat.err.max_tokens');
     case 'timeout':
       return n > 0 ? null : t('chat.err.timeout');
   }
+}
+
+/** A limit above the context is not an error: Splash generates up to the end of the context. */
+export function maxTokensHint(raw: string, context?: number | null): string | null {
+  const n = Number(raw.trim());
+  return raw.trim() && Number.isInteger(n) && context && n > context ? t('chat.hint.max_tokens_ctx', { n: context }) : null;
 }
 
 /** Splash accepts up to 4 stop sequences (help line `chat.help.stop`). */
@@ -131,6 +142,8 @@ export function kwargsError(text: string): string | null {
 
 export interface SamplingErrors {
   num: Partial<Record<NumField, string>>;
+  /** Notes that don't block sending. */
+  hints: Partial<Record<NumField, string>>;
   stop: string | null;
   kwargs: string | null;
 }
@@ -138,10 +151,11 @@ export interface SamplingErrors {
 export function samplingErrors(f: SamplingForm, context?: number | null): SamplingErrors {
   const num: Partial<Record<NumField, string>> = {};
   for (const k of NUM_FIELDS) {
-    const e = numError(k, f.num[k], context);
+    const e = numError(k, f.num[k]);
     if (e) num[k] = e;
   }
-  return { num, stop: stopError(f.stop), kwargs: kwargsError(f.kwargs) };
+  const hint = num.max_completion_tokens ? null : maxTokensHint(f.num.max_completion_tokens, context);
+  return { num, hints: hint ? { max_completion_tokens: hint } : {}, stop: stopError(f.stop), kwargs: kwargsError(f.kwargs) };
 }
 
 export function hasSamplingErrors(e: SamplingErrors): boolean {
@@ -169,6 +183,28 @@ export function samplingBody(f: SamplingForm, opts: { allowIgnoreEos: boolean })
   return out;
 }
 
+// ---------- speculative decoding ----------
+
+export interface DraftStats {
+  /** Accepted ÷ drafted, 0–1. */
+  acceptance: number;
+  drafted: number;
+  accepted: number;
+  /** What each draft cycle yields, 1 + accepted ÷ cycles (the engine's Done line); null without cycles. */
+  perCycle: number | null;
+}
+
+/** A reply's own draft numbers: `timings.draft_n` / `draft_n_accepted`, cycles from `metrics.speculation`. */
+export function draftStats(meta: MessageMeta): DraftStats | null {
+  const sp = meta.speculation;
+  const drafted = meta.timings?.draft_n ?? sp?.drafted_tokens;
+  const accepted = meta.timings?.draft_n_accepted ?? sp?.accepted_draft_tokens;
+  if (typeof drafted !== 'number' || typeof accepted !== 'number' || drafted <= 0) return null;
+  const cycles = sp?.cycles;
+  const perCycle = typeof cycles === 'number' && cycles > 0 && typeof sp?.accepted_draft_tokens === 'number' ? 1 + sp.accepted_draft_tokens / cycles : null;
+  return { acceptance: accepted / drafted, drafted, accepted, perCycle };
+}
+
 // ---------- tools ----------
 
 export interface ToolCheck {
@@ -191,7 +227,19 @@ export function jsonErrorText(text: string, err: unknown): string {
   return t('chat.json.invalid', { msg });
 }
 
-const TOOL_NAME = /^[A-Za-z0-9_-]{1,128}$/;
+/** server/tool_schema.py `is_tag_name`: 1 to 256 characters in NFC, without <, >, line breaks,
+ * lone surrogates or surrounding whitespace. */
+export function isToolName(name: string): boolean {
+  const length = [...name].length;
+  return (
+    length > 0 &&
+    length <= 256 &&
+    name === name.replace(/^[ \t\n\r]+|[ \t\n\r]+$/g, '') &&
+    !/[<>\n\r]/.test(name) &&
+    !/[\uD800-\uDFFF]/u.test(name) &&
+    name.normalize('NFC') === name
+  );
+}
 
 export function checkTools(text: string): ToolCheck {
   if (!text.trim()) return { tools: [], names: [], error: null };
@@ -206,11 +254,15 @@ export function checkTools(text: string): ToolCheck {
   for (let i = 0; i < v.length; i++) {
     const tool = v[i] as Record<string, unknown> | null;
     const n = i + 1;
-    if (!tool || tool.type !== 'function') return { tools: [], names, error: t('chat.json.tool_type', { i: n }) };
+    // A tool that names no type is a function, the only kind Splash has.
+    if (!tool || typeof tool !== 'object' || Array.isArray(tool) || (tool.type != null && tool.type !== 'function'))
+      return { tools: [], names, error: t('chat.json.tool_type', { i: n }) };
     const fn = tool.function as Record<string, unknown> | undefined;
     const name = typeof fn?.name === 'string' ? fn.name : '';
-    if (!TOOL_NAME.test(name)) return { tools: [], names, error: t('chat.json.tool_name', { i: n }) };
-    if (fn?.parameters !== undefined && (typeof fn.parameters !== 'object' || fn.parameters === null || Array.isArray(fn.parameters)))
+    if (!isToolName(name)) return { tools: [], names, error: t('chat.json.tool_name', { i: n }) };
+    // server/tool_schema.py: a missing or null schema is {}, and a schema may be an object or a boolean.
+    const params = fn?.parameters;
+    if (params !== undefined && params !== null && typeof params !== 'boolean' && (typeof params !== 'object' || Array.isArray(params)))
       return { tools: [], names, error: t('chat.json.tool_params', { i: n }) };
     if (names.includes(name)) return { tools: [], names, error: t('chat.json.tool_dup', { i: n, name }) };
     names.push(name);

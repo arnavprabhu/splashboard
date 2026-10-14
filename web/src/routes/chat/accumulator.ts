@@ -9,9 +9,10 @@
  * - with `return_progress: true`, empty-delta chunks carry `prompt_progress
  *   {total, cache, processed, time_ms}` (backend.py), monotone, before any output;
  * - the finish chunk carries `finish_reason` and `timings` (metrics.py timings_dict);
- * - with `stream_options.include_usage`, a last chunk with `choices: []` carries `usage`.
+ * - with `stream_options.include_usage`, a last chunk with `choices: []` carries `usage`, and
+ *   `metrics` whose `speculation` (when the request drafted) counts its draft cycles.
  */
-import type { PromptProgress, Segment, Timings, ToolCall, Usage } from './types';
+import type { PromptProgress, Segment, Speculation, Timings, ToolCall, Usage } from './types';
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
@@ -26,6 +27,7 @@ export interface AccSnapshot {
   outputStarted: boolean;
   usage: Usage | null;
   timings: Timings | null;
+  speculation: Speculation | null;
   finishReason: string | null;
   ttftMs: number | null;
   thinkingMs: number | null;
@@ -42,6 +44,7 @@ export class StreamAccumulator {
   progress: PromptProgress | null = null;
   usage: Usage | null = null;
   timings: Timings | null = null;
+  speculation: Speculation | null = null;
   finishReason: string | null = null;
   readonly startedAt: number;
   firstOutputAt: number | null = null;
@@ -63,6 +66,7 @@ export class StreamAccumulator {
     if (isRecord(progress) && this.firstOutputAt === null) this.applyProgress(progress);
     if (isRecord(chunk.usage)) this.usage = chunk.usage as Usage;
     if (isRecord(chunk.timings)) this.timings = chunk.timings as Timings;
+    if (isRecord(chunk.metrics) && isRecord(chunk.metrics.speculation)) this.speculation = chunk.metrics.speculation as Speculation;
     const choices = Array.isArray(chunk.choices) ? chunk.choices : [];
     for (const choice of choices) {
       if (!isRecord(choice)) continue;
@@ -165,6 +169,7 @@ export class StreamAccumulator {
       outputStarted: this.outputStarted,
       usage: this.usage,
       timings: this.timings,
+      speculation: this.speculation,
       finishReason: this.finishReason,
       ttftMs: this.ttftMs,
       thinkingMs: this.thinkingMs(now),

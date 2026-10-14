@@ -49,7 +49,7 @@ export interface SettingsEnvelope {
 
 /** settings.json's current version (manager `SETTINGS_VERSION`). The manager
  * refuses a PUT whose `version` differs, so the fallback document must carry this one. */
-export const SETTINGS_VERSION = 2;
+export const SETTINGS_VERSION = 3;
 
 export function readEnvelope(body: unknown): SettingsEnvelope {
   const b = (body ?? {}) as Partial<SettingsEnvelope> & { settings?: SettingsDoc };

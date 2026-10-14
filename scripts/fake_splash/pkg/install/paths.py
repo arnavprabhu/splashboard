@@ -37,7 +37,7 @@ def hub_cache() -> Path:
 
 
 def default_cache_dir() -> Path:
-    """--persistent-cache without --cache-dir. The real default is
-    ~/Library/Caches/Splash/prefix-cache (serve_options.DEFAULT_CACHE_DIR);
-    the fake keeps it inside its data dir."""
+    """--persistent-cache without --cache-dir. The real engine defaults to
+    ~/Library/Caches/Splash/prefix-cache (runtime/main.mm, 1.3.2; serve_options
+    names it only in the --cache-dir help); the fake keeps it inside its data dir."""
     return DATA / "prefix-cache"

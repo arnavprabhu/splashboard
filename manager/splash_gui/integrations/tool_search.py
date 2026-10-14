@@ -11,8 +11,8 @@ item (`{"call_id", "status", "execution", "tools": [<namespace or function specs
 `input`. It never adds the found tools to `tools`: the model's server is expected to
 read them from that history item (`core/tests/suite/search_tool.rs` L554-830).
 
-Splash 1.3.0 takes function and namespace tools and message, reasoning, function_call and
-function_call_output items only (`server/api_shapes.py` L449-454, L494-517). So, for a
+Splash 1.3.2 takes function and namespace tools and message, reasoning, function_call and
+function_call_output items only (`server/api_shapes.py` L362-367, L402-425). So, for a
 Splash model, the router:
 
 - turns the `tool_search` tool into a plain function tool of the same name;
@@ -28,12 +28,11 @@ nothing is kept between turns.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 from typing import Any
 
-from .tool_names import FUNCTION_LIMIT, NAMESPACE_LIMIT, alias
+from .tool_names import FUNCTION_LIMIT, PART_LIMIT, alias
 
 log = logging.getLogger(__name__)
 
@@ -154,7 +153,7 @@ def _merge(tools: list[Any], found: list[dict[str, Any]]) -> int:
                 namespaces[tool["name"]] = target
             have = {c.get("name") for c in target["tools"] if isinstance(c, dict)}
             for child in tool.get("tools") or []:
-                # Splash runs function children only (api_shapes.py L504-505).
+                # Splash runs function children only (api_shapes.py L411-412).
                 if (
                     isinstance(child, dict)
                     and child.get("type") == "function"
@@ -176,15 +175,10 @@ def _merge(tools: list[Any], found: list[dict[str, Any]]) -> int:
 
 def splash_name(namespace: str | None, name: str) -> str:
     """The name the model sees for a tool: Splash's `_namespace_alias` join
-    (`server/api_shapes.py` L468-479) of the router's aliases."""
+    (`server/api_shapes.py` L381-388) of the router's aliases."""
     if namespace is None:
         return alias(name, FUNCTION_LIMIT)
-    namespace, name = alias(namespace, NAMESPACE_LIMIT), alias(name, NAMESPACE_LIMIT)
-    joined = f"{namespace}__{name}"
-    if len(joined) <= 64:
-        return joined
-    digest = hashlib.sha256(f"{namespace}\0{name}".encode()).hexdigest()[:16]
-    return f"{namespace[:20]}__{name[:24]}__{digest}"
+    return f"{alias(namespace, PART_LIMIT)}__{alias(name, PART_LIMIT)}"
 
 
 def _summary(found: list[dict[str, Any]]) -> str:

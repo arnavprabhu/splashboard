@@ -25,7 +25,11 @@ VISION_BYTES = int(0.9 * GIB)
 KV_RUNWAY_BYTES = int(0.5 * GIB)
 RESERVE_BYTES = 2 * GIB
 
-# (family, repo, format, notes, perf note).
+# (family, repo, group, notes, perf note). The group is the row's format, but for
+# "nvfp4": a Model Optimizer or compressed-tensors checkpoint, a safetensors target
+# like MLX's (format "mlx") listed apart (splash/DEVELOPMENT.md "Model Optimizer
+# targets" names nvidia/Qwen3.8-27B-NVFP4). Both NVFP4 rows were checked on the Hub
+# on 2026-10-14.
 SEED: list[tuple[str, str, str, str, str | None]] = [
     (
         "Qwen3.8-27B",
@@ -49,6 +53,13 @@ SEED: list[tuple[str, str, str, str, str | None]] = [
         None,
     ),
     (
+        "Qwen3.8-27B",
+        "nvidia/Qwen3.8-27B-NVFP4",
+        "nvfp4",
+        "NVIDIA's NVFP4 checkpoint (Model Optimizer), about 22 GB of weights.",
+        None,
+    ),
+    (
         "Qwen3.6-35B-A3B",
         "mlx-community/Qwen3.6-35B-A3B-4bit",
         "mlx",
@@ -62,6 +73,13 @@ SEED: list[tuple[str, str, str, str, str | None]] = [
         "Recommended: UD-Q4_K_M (≥ 36 GB), UD-Q2_K_XL (24 GB, 256K context).",
         "UD-Q4_K_M ≈175 tok/s on an M5 Pro; UD-Q2_K_XL ≈145 tok/s on a 24 GB M6",
     ),
+    (
+        "Qwen3.6-35B-A3B",
+        "mlx-community/Qwen3.6-35B-A3B-nvfp4",
+        "mlx",
+        "MLX nvfp4, about 20 GB of weights.",
+        None,
+    ),
 ]
 
 # Each family's DFlash2 draft, which every install fetches beside the target
@@ -73,16 +91,17 @@ DRAFT_REPOS: dict[str, str] = {
 
 _SHARD = re.compile(r"-\d{5}-of-\d{5}$")
 _BITS = re.compile(r"(?:I?Q|PQ)(\d)", re.I)
-# Variants Splash cannot load, known from the name before `/inspect` reads headers
-# . splash/DEVELOPMENT.md "GGUF targets" (:599-613): the loader
-# takes Q2_K…Q8_0, the IQ formats, MXFP4 and PQ2_0, so every Unsloth file of both
-# families loads but UD-Q8_K_XL and BF16; F16/F32 linears are in no accepted list.
-UNLOADABLE = {
-    "UD-Q8_K_XL": "Splash has no kernels for this variant (UD-Q8_K_XL)",
-    "BF16": "Splash has no kernels for BF16 tensors yet",
-    "F16": "this GGUF stores F16 tensors Splash cannot load; choose another variant",
-    "F32": "this GGUF stores F32 tensors Splash cannot load; choose another variant",
-}
+# MXFP4 and NVFP4 (llama.cpp's MXFP4_MOE, NVFP4) are 4-bit formats.
+_FP4 = re.compile(r"(?:MX|NV)FP4", re.I)
+# Variants Splash cannot load, known from the name before `/inspect` reads headers.
+# Splash 1.3.2 loads BF16 and F16 tensors inside a quantized GGUF (UD-Q8_K_XL's
+# among them) but refuses a whole unquantized model, one whose projections and
+# experts are all BF16, F16 or F32 (install/gguf.py `require_loadable`), which is
+# what a BF16, F16 or F32 variant is.
+WHOLE_UNQUANTIZED = (
+    "Splash loads quantized GGUFs, not whole BF16, F16 or F32 models; choose a quantized variant"
+)
+UNLOADABLE = dict.fromkeys(("BF16", "F16", "F32"), WHOLE_UNQUANTIZED)
 # A llama.cpp importance matrix (`imatrix*.gguf`) is calibration data, not a model.
 # Splash's own check of unsloth/Qwen3.8-27B-GGUF's `imatrix_unsloth.gguf` says this
 # (install/gguf.py via the compatibility helper, run 2026-10-04).
@@ -188,10 +207,31 @@ def kv_bytes(family: str, tokens: int, *, bf16: bool = False) -> int:
     return per_token * tokens
 
 
-def memory_need(target: int, *, vision: bool, kv: int | None = None) -> int:
-    """`kv` is the KV cache the context needs (`kv_bytes`); the default is the 64-page runway."""
+# The SSD cache stages a state's write through one resident buffer of a state's size,
+# which the memory plan sets aside (runtime/engine/RuntimeResources.mm, "a state's write
+# staging"). bf16 recurrent states (`--state-format bf16`) halve it.
+STATE_STAGING_BYTES: dict[str, int] = {
+    "Qwen3.8-27B": 153 * 1024**2,
+    "Qwen3.6-35B-A3B": 64 * 1024**2,
+}
+
+
+def state_staging_bytes(family: str, cache_bytes: int | None, state_format: str = "fp32") -> int:
+    """The staging an SSD cache of `cache_bytes` (`--max-cache-disk`) costs in the plan.
+    Only an explicit size counts: with the automatic quota (None) Splash sets the staging
+    aside only where the model and the requested context already fit beside it, and 0
+    turns the cache off."""
+    if not cache_bytes:
+        return 0
+    staging = STATE_STAGING_BYTES.get(family, 0)
+    return staging // 2 if state_format == "bf16" else staging
+
+
+def memory_need(target: int, *, vision: bool, kv: int | None = None, staging: int = 0) -> int:
+    """`kv` is the KV cache the context needs (`kv_bytes`); the default is the 64-page runway.
+    `staging` is the SSD cache's state staging (`state_staging_bytes`), 0 by default."""
     cache = KV_RUNWAY_BYTES if kv is None else max(kv, KV_RUNWAY_BYTES)
-    return target + DRAFT_BYTES + (VISION_BYTES if vision else 0) + cache + RESERVE_BYTES
+    return target + DRAFT_BYTES + (VISION_BYTES if vision else 0) + cache + staging + RESERVE_BYTES
 
 
 def fit_for(need: int, memory: int) -> str:
@@ -223,6 +263,8 @@ def bits(name: str) -> int | None:
         return 16
     if name.upper() == "F32":
         return 32
+    if _FP4.search(name):
+        return 4
     match = _BITS.search(name)
     return int(match.group(1)) if match else None
 

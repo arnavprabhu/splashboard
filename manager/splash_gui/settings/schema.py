@@ -82,11 +82,19 @@ PROFILE_FIELDS: tuple[FieldMeta, ...] = (
         "number",
         min=0,
     ),
-    FieldMeta("seed", "Seed", "Unsigned 64-bit integer.", "reasoning_sampling", "number", min=0),
+    FieldMeta(
+        "seed",
+        "Seed",
+        "64-bit integer; -1 = a random seed.",
+        "reasoning_sampling",
+        "number",
+        min=-(2**63),
+    ),
     FieldMeta(
         "stop",
         "Stop sequences",
-        "Up to four strings. Not sent to Messages.",
+        "Up to four strings. Not sent to Messages, nor added to a request with tools or "
+        "structured output, where a stop inside a call drops the call.",
         "reasoning_sampling",
         "tags",
     ),
@@ -125,9 +133,19 @@ PROFILE_FIELDS: tuple[FieldMeta, ...] = (
         choices=("none", "minimal", "low", "medium", "high", "xhigh", "max"),
     ),
     FieldMeta(
+        "thinking_token_budget",
+        "Thinking budget",
+        "Thinking tokens before thinking closes, for Chat and Responses; -1 = no cap. "
+        "Unset takes the server's budget.",
+        "reasoning_sampling",
+        "number",
+        min=-1,
+        unit="tokens",
+    ),
+    FieldMeta(
         "chat_template_kwargs",
         "Chat template kwargs",
-        'JSON object, e.g. {"enable_thinking": false}. Chat only.',
+        'JSON object, e.g. {"enable_thinking": false}. Chat, Responses and Messages.',
         "reasoning_sampling",
         "json",
     ),
@@ -141,7 +159,8 @@ PROFILE_FIELDS: tuple[FieldMeta, ...] = (
     FieldMeta(
         "thinking",
         "Messages thinking",
-        "Anthropic `thinking` object, sent to Messages only when set.",
+        "Anthropic `thinking` object, sent to Messages only when set. Enabled thinking "
+        "needs budget_tokens of at least 1024; one at or above max_tokens sets no cap.",
         "reasoning_sampling",
         "json",
     ),

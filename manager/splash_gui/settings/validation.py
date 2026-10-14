@@ -15,8 +15,14 @@ from .model import SettingsDocument
 
 Severity = Literal["error", "warning"]
 
-# One state's size: below it Splash disables the SSD tier (splash/DEVELOPMENT.md
-# "--max-cache-disk", 1.3.1).
+# Splash's refusal of --persistent-cache with the SSD cache off
+# (serve_options.py check_serve_arguments).
+PERSISTENT_NEEDS_CACHE = "--persistent-cache needs the SSD cache --max-cache-disk 0 turns off"
+WRITES_NEED_CACHE = "--max-cache-disk-writes needs the SSD cache --max-cache-disk 0 turns off"
+STATE_BF16_TRADEOFF = "Results differ from fp32 in the last bits"
+
+# One state's size: a quota below it leaves the SSD cache off (splash/DEVELOPMENT.md
+# "SSD cache", 1.3.2).
 MIN_USEFUL_CACHE_DISK = {"Qwen3.6-35B-A3B": 64 * 1024**2, "Qwen3.8-27B": 153 * 1024**2}
 
 # Flags the GUI sets itself; `engine.extra_flags` may not repeat them.
@@ -34,9 +40,13 @@ MANAGED_FLAGS = frozenset(
         "--served-model-name",
         "--announce-served-name",
         "--default-reasoning-effort",
+        "--thinking-token-budget",
+        "--thinking-end-text",
         "--kv-format",
+        "--state-format",
         "--max-memory",
         "--max-cache-disk",
+        "--max-cache-disk-writes",
         "--persistent-cache",
         "--cache-dir",
         "--max-context",
@@ -148,18 +158,24 @@ def cross_field_issues(doc: SettingsDocument, context: ValidationContext) -> Ite
     g = doc.global_
     serve = g.serve
 
-    if serve.persistent_cache and not p.parse_max_cache_disk(serve.max_cache_disk):
+    cache_bytes = p.parse_max_cache_disk(serve.max_cache_disk)
+    if serve.persistent_cache and cache_bytes == 0:
         yield Issue(
             ("global", "serve", "persistent_cache"),
-            "--persistent-cache needs --max-cache-disk",
+            PERSISTENT_NEEDS_CACHE,
             code="requires",
         )
-    cache_bytes = p.parse_max_cache_disk(serve.max_cache_disk)
-    if 0 < cache_bytes < max(MIN_USEFUL_CACHE_DISK.values()):
+    if cache_bytes == 0 and p.parse_max_cache_disk_writes(serve.max_cache_disk_writes):
+        yield Issue(
+            ("global", "serve", "max_cache_disk_writes"),
+            WRITES_NEED_CACHE,
+            code="requires",
+        )
+    if cache_bytes is not None and 0 < cache_bytes < max(MIN_USEFUL_CACHE_DISK.values()):
         yield Issue(
             ("global", "serve", "max_cache_disk"),
             "Below about one state's size (64 MiB for 35B, 153 MiB for 27B) Splash "
-            "disables the SSD tier",
+            "leaves the SSD cache off",
             severity="warning",
             code="too_small",
         )
@@ -167,6 +183,13 @@ def cross_field_issues(doc: SettingsDocument, context: ValidationContext) -> Ite
         yield Issue(
             ("global", "serve", "kv_format"),
             "≈2× KV memory, can be slower at long context",
+            severity="warning",
+            code="tradeoff",
+        )
+    if serve.state_format == "bf16":
+        yield Issue(
+            ("global", "serve", "state_format"),
+            STATE_BF16_TRADEOFF,
             severity="warning",
             code="tradeoff",
         )
@@ -278,4 +301,9 @@ def _model_issues(doc: SettingsDocument, model_id: str) -> Iterable[Issue]:
             "≈2× KV memory, can be slower at long context",
             severity="warning",
             code="tradeoff",
+        )
+    state = values["serve.state_format"]
+    if state.source == "model" and state.value == "bf16":
+        yield Issue(
+            (*base, "state_format"), STATE_BF16_TRADEOFF, severity="warning", code="tradeoff"
         )

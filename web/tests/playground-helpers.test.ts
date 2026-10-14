@@ -63,8 +63,9 @@ function input(id: string, body: unknown = null, extra: Partial<SnippetInput> = 
 
 describe('endpoints', () => {
   it('every route is consistent: a body only on POST, a path parameter where the path has {id}', () => {
+    // POST /v1/memory/release takes no fields, so it is the one POST sent without a body.
     for (const ep of ENDPOINTS) {
-      expect(ep.body, ep.id).toBe(ep.method === 'POST');
+      expect(ep.body, ep.id).toBe(ep.method === 'POST' && ep.id !== 'memory_release');
       expect(ep.path.includes('{id}'), ep.id).toBe(ep.param !== undefined);
     }
   });
@@ -132,6 +133,13 @@ describe('snippets', () => {
     const out = curlSnippet(input('models', null, { raw: true }));
     expect(out.split('\n')[0]).toBe(`# ${RAW_NOTE}`);
     expect(out).toContain(`curl -X GET ${ORIGIN}/v1/models`);
+  });
+
+  it('sends POST /v1/memory/release without a body', () => {
+    expect(endpointFor('POST', '/v1/memory/release')?.endpoint.group).toBe('health');
+    expect(curlSnippet(input('memory_release'))).toContain(`curl -X POST ${ORIGIN}/v1/memory/release`);
+    const py = pythonOpenAiSnippet(input('memory_release'));
+    if (py !== null) expect(py).toContain(`client.post("/memory/release", cast_to=object)`);
   });
 
   it('references SPLASH_API_KEY and never the value when a key is required', () => {

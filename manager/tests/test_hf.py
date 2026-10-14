@@ -41,7 +41,12 @@ def test_search_maps_sort_and_sends_the_query(app: FastAPI) -> None:
     hf, seen = client_for(app, lambda r: httpx.Response(200, json=[{"id": "a/b"}, "junk"]))
     result = run(hf.search("qwen3.8", "recent", 50))
     assert result == [{"id": "a/b"}]
-    assert [r.url.params["filter"] for r in seen] == ["mlx", "gguf"], "one request per format"
+    assert [r.url.params["filter"] for r in seen] == [
+        "mlx",
+        "gguf",
+        "modelopt",
+        "compressed-tensors",
+    ], "one request per tag"
     params = seen[0].url.params
     assert seen[0].url.path == "/api/models"
     assert params["search"] == "qwen3.8" and params["sort"] == "lastModified"
@@ -73,7 +78,12 @@ def test_search_merges_mlx_and_gguf_by_sort_key_without_duplicates(app: FastAPI)
 def test_search_filters_on_the_model_tags_only(app: FastAPI) -> None:
     hf, seen = client_for(app, lambda r: httpx.Response(200, json=[]))
     run(hf.search("q", "likes", 5))
-    assert sorted(r.url.params["filter"] for r in seen) == ["gguf", "mlx"]
+    assert sorted(r.url.params["filter"] for r in seen) == [
+        "compressed-tensors",
+        "gguf",
+        "mlx",
+        "modelopt",
+    ]
     assert all(r.url.params["sort"] == "likes" for r in seen)
 
 

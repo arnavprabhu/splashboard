@@ -82,8 +82,9 @@ def test_catalog_lists_no_splash_packages(hub_harness) -> None:
     rows = entries(payload)
     assert not [r for r in rows if r.endswith("-Splash")]
     assert {r["format"] for r in rows.values()} == {"mlx", "gguf"}
-    for family in payload["families"]:
-        assert [g["format"] for g in family["groups"]] == ["mlx", "gguf"]
+    groups = {f["family"]: [g["format"] for g in f["groups"]] for f in payload["families"]}
+    # NVIDIA's NVFP4 checkpoint is a safetensors target ("mlx") in a group of its own.
+    assert groups == {"Qwen3.8-27B": ["mlx", "nvfp4", "gguf"], "Qwen3.6-35B-A3B": ["mlx", "gguf"]}
 
 
 @pytest.mark.parametrize(
@@ -134,8 +135,9 @@ def test_variant_pick_and_fit_rules() -> None:
     }
     variants = cat.gguf_variants("unsloth/Qwen3.8-27B-GGUF", files)
     by = {v.name: v for v in variants}
-    assert by["UD-Q8_K_XL"].size == 30 * GIB and by["UD-Q8_K_XL"].unloadable
-    assert by["BF16"].unloadable and not by["UD-Q4_K_M"].unloadable
+    # Splash 1.3.2 loads UD-Q8_K_XL's BF16 tensors; a whole BF16 model stays refused.
+    assert by["UD-Q8_K_XL"].size == 30 * GIB and not by["UD-Q8_K_XL"].unloadable
+    assert by["BF16"].unloadable == cat.WHOLE_UNQUANTIZED and not by["UD-Q4_K_M"].unloadable
     assert cat.projector(files) == "mmproj-BF16.gguf", "BF16 preferred, F16 refused"
     big = cat.pick_variant(variants, 64 * GIB, True)
     small = cat.pick_variant(variants, 24 * GIB, True)
@@ -412,26 +414,30 @@ def test_quality_tiers_follow_the_bit_width_and_dash_what_splash_cannot_load() -
     assert cat.quality_tier("UD-Q4_K_M") == "Balanced"
     assert cat.quality_tier("UD-Q5_K_XL") == "Higher"
     assert cat.quality_tier("Q8_0") == "Highest"
-    assert cat.quality_tier("UD-Q8_K_XL") is None
+    assert cat.quality_tier("UD-Q8_K_XL") == "Highest"
     assert cat.quality_tier("BF16") is None
+    # MXFP4 and NVFP4 GGUFs are 4-bit.
+    assert cat.quality_tier("MXFP4_MOE") == "Balanced"
+    assert cat.quality_tier("NVFP4") == "Balanced"
+    assert cat.bits("UD-MXFP4_MOE") == 4
     assert cat.quality_tier("imatrix_unsloth", ["imatrix_unsloth.gguf"]) is None
     assert cat.quality_tier("Mystery") is None
     facts = cat.entry_facts("unsloth/Qwen3.8-27B-GGUF", "gguf", _Info(QWEN27_GGUF), 64 * GIB)
     by = {v["name"]: v for v in facts["variants"]}
     assert by["UD-Q4_K_M"]["quality"] == "Balanced"
     assert by["UD-IQ3_XXS"]["quality"] == "Compact"
-    assert by["UD-Q8_K_XL"]["quality"] is None
+    assert by["UD-Q8_K_XL"]["quality"] == "Highest"
     assert all("quality" in v for v in facts["variants"])
 
 
 def test_catalog_variants_carry_what_splash_cannot_load() -> None:
-    """Every catalog variant had `loadable: null`, so the imatrix file,
-    F16 and UD-Q8_K_XL were offered as downloads."""
+    """Every catalog variant had `loadable: null`, so the imatrix file and F16
+    were offered as downloads. UD-Q8_K_XL loads from Splash 1.3.2, so /inspect decides it."""
     facts = cat.entry_facts("unsloth/Qwen3.8-27B-GGUF", "gguf", _Info(QWEN27_GGUF), 64 * GIB)
     by = {v["name"]: v for v in facts["variants"]}
     assert by["imatrix_unsloth"]["loadable"] is False
     assert by["imatrix_unsloth"]["reason"] == cat.NOT_A_MODEL
-    assert by["UD-Q8_K_XL"]["loadable"] is False and by["UD-Q8_K_XL"]["reason"]
+    assert by["UD-Q8_K_XL"]["loadable"] is None and by["UD-Q8_K_XL"]["reason"] is None
     assert "mmproj-BF16" not in by and "BF16" not in by  # projector; BF16/ is a subfolder
     assert by["UD-Q4_K_M"]["loadable"] is None, "the rest is checked by /inspect"
     assert facts["size_bytes"] != QWEN27_GGUF["imatrix_unsloth.gguf"]
@@ -439,7 +445,7 @@ def test_catalog_variants_carry_what_splash_cannot_load() -> None:
         "prism-ml/Ternary-Bonsai-2-27B-gguf", "gguf", _Info(BONSAI_GGUF), 64 * GIB
     )
     f16 = next(v for v in bonsai["variants"] if v["name"] == "F16")
-    assert f16["loadable"] is False and "F16" in f16["reason"]
+    assert f16["loadable"] is False and f16["reason"] == cat.WHOLE_UNQUANTIZED
 
 
 def test_language_only_selection_drops_prism_s_projector() -> None:
@@ -485,20 +491,71 @@ def test_an_mlx_repo_with_processor_config_has_vision() -> None:
 def test_mlx_refusals_get_a_plain_line() -> None:
     from splash_gui.models.compat import MLX_QUANTIZATION, MLX_UNQUANTIZED, explain_refusal
 
+    # Splash 1.3.2's wording (runtime/model/ModelDescriptor.mm `requireMlxQuantization`,
+    # `requireQuantization`).
     seven = (
         "quantization language_model.model.embed_tokens is affine 7-bit in groups of 64; MLX "
-        "weights load as affine 2, 3, 4, 5, 6 or 8 bits in groups of 32, 64 or 128, or as mxfp4"
+        "weights load as affine 2, 3, 4, 5, 6 or 8 bits in groups of 32, 64 or 128, or as "
+        "mxfp4 or nvfp4"
     )
     assert explain_refusal(seven) == (MLX_QUANTIZATION, seven)
     bf16 = (
         "this model requires an MLX checkpoint (affine 2, 3, 4, 5, 6 or 8 bits in groups of "
-        "32, 64 or 128, or mxfp4) or a supported GGUF"
+        "32, 64 or 128, mxfp4 or nvfp4), an NVFP4 or FP8 checkpoint of Model Optimizer or "
+        "compressed-tensors, or a supported GGUF"
     )
     assert explain_refusal(bf16) == (MLX_QUANTIZATION, bf16)
-    unquantized = (
-        "quantization lm_head is unquantized; Splash loads quantized MLX projections and "
-        "token tables"
-    )
+    unquantized = "quantization lm_head is unquantized; Splash loads quantized MLX projections"
     assert explain_refusal(unquantized) == (MLX_UNQUANTIZED, unquantized)
     assert explain_refusal("something else") == ("something else", None)
     assert explain_refusal(None) == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("engine", "plain"),
+    [
+        (
+            "quantization_config is INT4_AWQ; Model Optimizer weights load as NVFP4, "
+            "W4A16_NVFP4 or FP8",
+            "CHECKPOINT_QUANTIZATION",
+        ),
+        (
+            "quantization_config quantized_layers lm_head is NVFP4 in groups of 32; Model "
+            "Optimizer NVFP4 loads in groups of 16",
+            "CHECKPOINT_QUANTIZATION",
+        ),
+        (
+            "quantization_config config_groups group_0 is pack-quantized: int 4-bit by group "
+            "in groups of 128; compressed-tensors weights load as NVFP4 (nvfp4-pack-quantized: "
+            "float 4-bit by tensor_group in groups of 16) or FP8 (float-quantized: float 8-bit "
+            "by channel or tensor)",
+            "CHECKPOINT_QUANTIZATION",
+        ),
+        (
+            "quantization_config config_groups group_0 is asymmetric or ordered by activation "
+            "groups; Splash loads symmetric compressed-tensors weights in their stored column "
+            "order",
+            "CHECKPOINT_QUANTIZATION",
+        ),
+        ("quantization_config ignore must be an array", "CHECKPOINT_QUANTIZATION"),
+        (
+            "quantization_config leaves lm_head unquantized; Splash loads quantized projections",
+            "CHECKPOINT_UNQUANTIZED",
+        ),
+        (
+            "this GGUF stores every projection and expert unquantized (BF16, F16 or F32): "
+            "Splash loads quantized GGUFs, not whole-BF16 or F16 models; choose a quantized "
+            "variant of the repository",
+            "WHOLE_UNQUANTIZED",
+        ),
+    ],
+)
+def test_checkpoint_and_whole_unquantized_refusals_get_a_plain_line(
+    engine: str, plain: str
+) -> None:
+    """Splash 1.3.2's refusals of a Model Optimizer or compressed-tensors checkpoint
+    (ModelDescriptor.mm) and of a whole-BF16 GGUF (install/gguf.py `require_loadable`)."""
+    from splash_gui.models import compat
+
+    expected = getattr(compat, plain, None) or getattr(cat, plain)
+    assert compat.explain_refusal(engine) == (expected, engine)

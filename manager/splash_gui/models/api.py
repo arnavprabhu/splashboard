@@ -31,6 +31,7 @@ from ..schemas import (
 )
 from ..sse import sse_response
 from ..state import ManagerState, get_state
+from . import checkpoint as cp
 from .hf import HubError
 from .service import Models
 
@@ -62,24 +63,30 @@ async def search(
     except HubError as error:
         raise ApiError(error.status, error.message, "hub_unreachable") from None
     return SearchResults(
-        query=q,
-        sort=sort,
-        results=[
-            SearchResult(
-                id=row.get("id") or row["modelId"],
-                downloads=row.get("downloads"),
-                likes=row.get("likes"),
-                tags=row.get("tags") or [],
-                last_modified=row.get("lastModified"),
-                format_guess="gguf"
-                if "gguf" in (row.get("tags") or [])
-                else "mlx"
-                if "mlx" in (row.get("tags") or [])
-                else "unknown",
-            )
-            for row in rows
-        ],
+        query=q, sort=sort, results=[SearchResult.model_validate(search_row(row)) for row in rows]
     )
+
+
+def search_row(row: dict[str, Any]) -> dict[str, Any]:
+    """A Hub search hit. A Model Optimizer or compressed-tensors checkpoint is a
+    safetensors target as MLX's is (`format_guess` "mlx"), labelled apart by
+    `checkpoint` ("NVFP4 · Model Optimizer")."""
+    model_id = row.get("id") or row["modelId"]
+    tags = [t for t in row.get("tags") or [] if isinstance(t, str)]
+    checkpoint = cp.from_hub(model_id, tags)
+    return {
+        "id": model_id,
+        "downloads": row.get("downloads"),
+        "likes": row.get("likes"),
+        "tags": tags,
+        "last_modified": row.get("lastModified"),
+        "format_guess": "gguf"
+        if "gguf" in tags
+        else "mlx"
+        if "mlx" in tags or checkpoint
+        else "unknown",
+        "checkpoint": checkpoint,
+    }
 
 
 @router.post("/inspect", response_model=InspectResult, responses=_ERR)

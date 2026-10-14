@@ -11,12 +11,14 @@ leaves it out or sets it to null; it never overrides an explicit value):
 | stop                   | ✓                     | ✓           | ✓                  | ✗        |
 | max_tokens             | max_completion_tokens | max_tokens  | max_output_tokens  | ✗        |
 | reasoning_effort       | reasoning_effort      | ✗           | reasoning.effort   | ✗        |
+| thinking_token_budget  | ✓                     | ✗           | ✓                  | ✗        |
 | thinking               | ✗                     | ✗           | ✗                  | thinking |
-| chat_template_kwargs   | ✓                     | ✗           | ✗                  | ✗        |
+| chat_template_kwargs   | ✓                     | ✗           | ✓                  | ✓        |
 | ignore_eos             | ✓                     | ✓           | ✗                  | ✗        |
 
-`stop` and `ignore_eos` are skipped for a request with tools or a structured
-format, which Splash would refuse with them.
+Text completions refuse `thinking_token_budget`; Messages caps thinking with
+`thinking.budget_tokens` instead. `stop` and `ignore_eos` are skipped for a request
+with tools or a structured format (see `UNCONSTRAINED_ONLY`).
 """
 
 from __future__ import annotations
@@ -46,10 +48,11 @@ DIRECT_FIELDS: dict[Shape, tuple[str, ...]] = {
         "chat_template_kwargs",
         "ignore_eos",
         "reasoning_effort",
+        "thinking_token_budget",
     ),
     "completions": (*_COMMON, *_PENALTIES, "stop", "ignore_eos"),
-    "responses": (*_COMMON, *_PENALTIES, "stop"),
-    "messages": (*_COMMON, "thinking"),
+    "responses": (*_COMMON, *_PENALTIES, "stop", "chat_template_kwargs", "thinking_token_budget"),
+    "messages": (*_COMMON, "thinking", "chat_template_kwargs"),
 }
 MAX_TOKENS_FIELD: dict[Shape, str] = {
     "chat": "max_completion_tokens",
@@ -62,9 +65,11 @@ def _missing(body: dict[str, Any], name: str) -> bool:
     return body.get(name) is None
 
 
-# Splash refuses these next to tools or structured output ("stop cannot be combined
-# with tools or structured output", "ignore_eos cannot be …"; server/frontend.py
-# around the `constrained` check), so a default never adds them to such a request.
+# A default never adds these to a request with tools or structured output. Splash
+# refuses ignore_eos there ("ignore_eos cannot be combined with constrained tool
+# calls, …"; server/frontend.py at the `constrained` check). It accepts stop, but a
+# stop inside a tool call or a structured answer cuts it, and the cut call is not
+# made, so a profile's stop would break such requests; one the client sends is kept.
 UNCONSTRAINED_ONLY = ("stop", "ignore_eos")
 
 

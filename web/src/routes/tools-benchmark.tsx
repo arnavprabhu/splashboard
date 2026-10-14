@@ -303,6 +303,11 @@ function results(run: BenchmarkRun, scenario: Scenario) {
   return run.results.filter((r) => r.scenario === scenario);
 }
 
+/** Requests whose output Splash capped at the end of the context, so they decoded fewer tokens than asked. */
+export function truncatedRequests(run: BenchmarkRun): number {
+  return run.results.reduce((n, r) => n + (num(r.summary.truncated_requests) ?? 0), 0);
+}
+
 function headlineOf(run: BenchmarkRun) {
   const dec = results(run, "decode_short")[0]?.summary ?? {};
   const pre = results(run, "cold_prefill");
@@ -344,6 +349,7 @@ function RunView({ id, onClose }: { id: string; onClose: () => void }) {
   const h = headlineOf(r);
   const hw = r.hardware as Record<string, unknown>;
   const decode = results(r, "decode_short")[0];
+  const truncated = truncatedRequests(r);
   return (
     <>
       <NumbersBand
@@ -363,6 +369,11 @@ function RunView({ id, onClose }: { id: string; onClose: () => void }) {
         <Stat label={t("tools.bm.h.cached_ttft")} value={msOf(h.cachedTtft)} />
         <Stat label={t("tools.bm.h.aggregate")} value={tps(h.aggregate)} />
       </NumbersBand>
+      {truncated > 0 && (
+        <p class="meta" data-testid="bm-truncated">
+          {t("tools.bm.truncated", { n: truncated })}
+        </p>
+      )}
       <Section label={t(`tools.bm.s.decode_short`)} meta={[r.engine_version && `Splash ${r.engine_version}`, hw.chip, r.revision && `rev ${String(r.revision).slice(0, 7)}`].filter(Boolean).join(" · ")}>
         {decode ? (
           <Table

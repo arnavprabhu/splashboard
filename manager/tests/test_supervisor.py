@@ -288,8 +288,8 @@ def test_stop_sequence_escalates_to_sigkill(
         found=True,
         cli=stubborn,
         source="setting",
-        version="1.3.1",
-        version_tuple=(1, 3, 0),
+        version="1.3.2",
+        version_tuple=(1, 3, 2),
         support="supported",
     )
     h.state.forget_engine()
@@ -324,8 +324,8 @@ def test_startup_failure_is_failed_not_a_restart_loop(
         found=True,
         cli=broken,
         source="setting",
-        version="1.3.1",
-        version_tuple=(1, 3, 0),
+        version="1.3.2",
+        version_tuple=(1, 3, 2),
         support="supported",
     )
     h.state.forget_engine()
@@ -416,7 +416,7 @@ def test_the_effective_command_line_is_in_the_engine_log(
 def test_persistent_cache_flags_tmpdir_and_restore(
     harness_factory: Callable[..., EngineHarness],
 ) -> None:
-    """--persistent-cache needs --max-cache-disk, gets --cache-dir
+    """--persistent-cache needs the SSD cache on, gets --cache-dir
     ~/.splash/cache, and TMPDIR is ~/.splash/cache/tmp; a restart restores states."""
     h = harness_factory()
     bad = h.settings_document()
@@ -509,6 +509,7 @@ def test_raw_status_passes_ane_ffn_and_weights_through(
     assert raw["weights"] == {
         "idle_release_seconds": 600.0,
         "released": False,
+        "restoring": False,
         "restores": 0,
         "restore_failures": 0,
     }
@@ -681,3 +682,31 @@ def portal(h: Any) -> Any:
     """The test client's portal, which exists while the client is open."""
     assert h.client.portal is not None
     return h.client.portal
+
+
+def test_a_weights_restore_is_busy_not_idle(app: Any) -> None:
+    """`weights.restoring` (Splash 1.3.2): the weights stay `released` until the restore
+    ends, so released and restoring is a request at work, not idle_released."""
+    sup = app.state.manager.supervisor
+    sup.state = "ready"
+    restoring = {"weights": {"released": True, "restoring": True}}
+    sup.status = restoring
+    sup._apply_weights(restoring)
+    assert sup.state == "ready"
+    assert sup.view().weights_restoring is True
+    sup.state = "idle_released"
+    sup._apply_weights(restoring)
+    assert sup.state == "busy"
+    released = {"weights": {"released": True, "restoring": False}}
+    sup.state = "ready"
+    sup.status = released
+    sup._apply_weights(released)
+    assert sup.state == "idle_released"
+    assert sup.view().weights_restoring is False
+
+
+def test_state_format_comes_from_the_memory_plan(app: Any) -> None:
+    sup = app.state.manager.supervisor
+    sup.status = {"memory_plan": {"model": {"kv_format": "int8", "state_format": "bf16"}}}
+    view = sup.view()
+    assert view.state_format == "bf16"

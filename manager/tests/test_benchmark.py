@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from splash_gui.app import AppConfig, create_app
-from splash_gui.benchmark.service import headline, running_gpu_apps, summarize
+from splash_gui.benchmark.service import headline, running_gpu_apps, summarize, truncated
 from splash_gui.paths import Paths
 from splash_gui.secrets import MemoryBackend, SecretStore
 from splash_gui.usage.db import UsageDB, iso
@@ -51,8 +51,8 @@ def test_a_full_run_is_saved_with_metrics(h: EngineHarness) -> None:
     assert started.status_code == 202, started.text
     run = wait_run(h, started.json()["run_id"])
     assert run["state"] == "done", run
-    assert run["model"] == MODEL and run["engine_version"] == "1.3.1"
-    assert run["hardware"] and "power" in run and run["settings"]["version"] == 2
+    assert run["model"] == MODEL and run["engine_version"] == "1.3.2"
+    assert run["hardware"] and "power" in run and run["settings"]["version"] == 3
     scenarios = [(r["scenario"], r["params"]["value"]) for r in run["results"]]
     assert scenarios == [
         ("decode_short", 128),
@@ -68,6 +68,9 @@ def test_a_full_run_is_saved_with_metrics(h: EngineHarness) -> None:
     assert decode["summary"]["status_delta"]["decode_output_tokens"] >= 512
     cold = by[("cold_prefill", 2048)]
     assert cold["params"]["max_tokens"] == 1 and cold["summary"]["prefill_tps"]
+    # Each cold sample sends a fresh cache_salt, so the warmup's cached prompt is not reused.
+    assert cold["summary"]["cached_tokens"] == 0
+    assert all(r["summary"]["truncated_requests"] == 0 for r in run["results"])
     cached = by[("cached_ttft", 32768)]
     assert cached["summary"]["cached_tokens"], "the replayed prompt hits the cache"
     pair = by[("concurrency", 2)]
@@ -260,3 +263,14 @@ def test_summaries_and_headline() -> None:
         ]
     )
     assert line == {"decode_tps": 100.0, "concurrency_peak_tps": 9.0}
+
+
+def test_a_clamped_decode_is_counted() -> None:
+    """Splash caps the output at the context the prompt leaves instead of refusing it,
+    so a request that asked for more tokens than it got is reported."""
+    short = {"max_tokens": 512, "completion_tokens": 300, "prompt_ms": 1, "predicted_ms": 1}
+    full = {**short, "completion_tokens": 512}
+    assert truncated(short) and not truncated(full)
+    assert not truncated({"max_tokens": 512, "completion_tokens": None})
+    samples = [{"requests": [short, full], "aggregate_tps": 1.0, "duration_ms": 1.0}]
+    assert summarize("decode_short", samples, {})["truncated_requests"] == 1

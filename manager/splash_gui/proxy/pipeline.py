@@ -594,8 +594,9 @@ class ProxyPipeline:
         requested = body.get("model")
         if route.model is not None and isinstance(requested, str):
             names = set(self.sup.aliases()) | {route.model}
-            # "" was routed to the active model, but Splash would answer `model  not found`,
-            # so it gets the name. A missing model stays missing: Splash accepts that.
+            # "" was routed to the active model and gets its name, so the response names
+            # the model (Splash takes "" as the served model too). A missing model stays
+            # missing.
             if not requested or route.profile is not None or requested not in names:
                 body = {**body, "model": route.model}
         return await self._forward(
@@ -1137,3 +1138,54 @@ class ProxyPipeline:
             anthropic=False,
             record=False,
         )
+
+    # POST /v1/memory/release -----------------------------------------------------------
+
+    async def release_engine_memory(self, content: bytes | None = None) -> httpx.Response:
+        """Ask the engine to give its weights back now (`POST /v1/memory/release`,
+        splash/server/server.py `_post_memory_release`): 200 `{"released": true,
+        "weights": …}` while idle, 409 `engine_busy` while it serves a request or
+        restores its weights, 503 `engine_busy` when it doesn't answer within 5 s.
+
+        It is not a request in flight: counting it would move a released engine to
+        busy. After a 200 the status is read again so the state shows the release
+        at once, not at the next poll. Raises ProxyError 503 when no engine runs."""
+        sup = self.sup
+        if sup is None or not sup.accepting or sup.base_url is None:
+            raise unavailable()
+        headers = {"authorization": f"Bearer {sup.internal_key}"}
+        if content:
+            # The route takes no fields; the engine judges what the client sent.
+            headers["content-type"] = "application/json"
+        try:
+            upstream = await self.client.post(
+                sup.base_url + "/v1/memory/release",
+                headers=headers,
+                content=content or None,
+                timeout=httpx.Timeout(30.0, connect=5.0),
+            )
+        except httpx.HTTPError as error:
+            log.warning("memory release request failed: %s", error)
+            raise unavailable(f"The engine did not answer: {error}") from None
+        if upstream.status_code == 200:
+            with contextlib.suppress(Exception):
+                await sup.poll_now()
+        return upstream
+
+    async def memory_release(self, request: Request) -> Response:
+        """The public `POST /v1/memory/release`: the API key as on every /v1 route,
+        then the engine's answer as it is."""
+        try:
+            allow = self.check(request)
+        except ProxyError as error:
+            return error.response()
+        cors = self.cors_headers(allow)
+        try:
+            upstream = await self.release_engine_memory(await request.body())
+        except ProxyError as error:
+            return error.response(extra=cors)
+        out_headers = {
+            k: v for k, v in upstream.headers.items() if k.lower() in FORWARD_RESPONSE_HEADERS
+        }
+        out_headers.update(cors)
+        return Response(upstream.content, status_code=upstream.status_code, headers=out_headers)

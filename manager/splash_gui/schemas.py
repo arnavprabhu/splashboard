@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .engine.discovery import SUPPORTED_RANGE
 from .settings.metadata import Applies, Control, Scope
 from .settings.model import McpServer, SamplingOverlay, SettingsDocument
 
@@ -103,7 +104,7 @@ class EngineDiscoveryInfo(ApiModel):
     source: Literal["setting", "env", "brew", "path"] | None = None
     version: str | None = None
     support: Literal["supported", "untested", "too_old", "unknown"] = "unknown"
-    supported_range: str = ">=1.3.1 <1.4.0"
+    supported_range: str = SUPPORTED_RANGE
     banner: str | None = None
     source_checkout: bool = False
     pkg: str | None = None
@@ -135,7 +136,8 @@ class EngineError(ApiModel):
 
 class EngineNotice(ApiModel):
     kind: Literal[
-        "disk_tier_suggestion",
+        "disk_cache_off",
+        "persistent_cache_off",
         "hub_unreachable",
         "new_commit_not_installed",
         "weights_restored",
@@ -192,6 +194,8 @@ class EngineView(ApiModel):
     maximum_context_tokens: int | None = None
     chat_template_mode: Literal["native", "patched", "unsupported"] | None = None
     kv_format: str | None = None
+    # `memory_plan.model.state_format` (Splash 1.3.2+): fp32 or bf16 recurrent states.
+    state_format: str | None = None
     vision: bool | None = None
     draft: str | None = None
     status_schema_version: int | None = None
@@ -207,6 +211,9 @@ class EngineView(ApiModel):
     # Keys: states, kv_blocks, bytes, left_behind. Null when not persistent/unknown.
     taken_back: dict[str, int] | None = None
     persistent_cache: bool | None = None
+    # `/status.weights.restoring` (Splash 1.3.2+): a request found the weights released
+    # and the engine is bringing them back.
+    weights_restoring: bool = False
     # Set while `starting.installing` downloads files (null otherwise).
     install: EngineInstall | None = None
     engine: EngineDiscoveryInfo
@@ -319,6 +326,7 @@ AlertCondition = Literal[
     "resource_timeout",
     "disk_tier_failures",
     "write_behind_refused",
+    "disk_write_budget",
     "queue_full",
     "mask_timeout",
     "download_failed",
@@ -470,6 +478,9 @@ class TotalsMetrics(ApiModel):
     decode_tokens: int | None = None
     total_tokens: int | None = None
     reused_tokens: int | None = None
+    # `/status.cache.deduplicated_kv_tokens` (Splash 1.3.2+): tokens whose KV a request
+    # read from blocks another request computed, past its cached prefix.
+    deduplicated_kv_tokens: int | None = None
     requests_submitted: int | None = None
     requests_completed: int | None = None
     requests_failed: int | None = None
@@ -514,6 +525,10 @@ class MemoryMetrics(ApiModel):
     headroom_bytes: int | None = None
     host_available_bytes: int | None = None
     host_reserve_bytes: int | None = None
+    # Splash 1.3.2+: the host's spare memory and the part of it kept for other apps.
+    host_spare_bytes: int | None = None
+    host_spare_reserve_bytes: int | None = None
+    host_headroom_bytes: int | None = None
     system_pressure: Literal["normal", "warning", "critical"] | None = None
     growth_allowed: bool | None = None
 
@@ -531,7 +546,29 @@ class DiskMetrics(ApiModel):
     read_bps: float | None = None
     written_bps: float | None = None
     used_bytes: int | None = None
+    # The quota (`--max-cache-disk`, or the automatic cap).
     capacity_bytes: int | None = None
+    # Splash 1.3.2+: what the volume's free space leaves of the quota now, the
+    # volume's free space, what holds writes back and the write budget left.
+    limit_bytes: int | None = None
+    volume_available_bytes: int | None = None
+    writes_gated: Literal["no", "budget", "closed"] | None = None
+    write_budget_bytes: int | None = None
+
+
+class ActiveRequest(ApiModel):
+    """One entry of `/status.active_requests` (Splash 1.3.2+)."""
+
+    id: int
+    # queued, waiting_resources, waiting_prefix, prefill, decode, waiting_mask,
+    # completed, cancelled or failed (Status.cpp phaseName).
+    phase: str
+    priority: str | None = None
+    prompt_tokens: int = 0
+    prompt_processed: int = 0
+    generated_tokens: int = 0
+    max_new_tokens: int | None = None
+    age_ms: float | None = None
 
 
 class StageLatency(ApiModel):
@@ -556,6 +593,8 @@ class LiveMetrics(ApiModel):
     memory: MemoryMetrics = Field(default_factory=MemoryMetrics)
     kv: KvMetrics = Field(default_factory=KvMetrics)
     disk: DiskMetrics = Field(default_factory=DiskMetrics)
+    # Each request the engine holds now, ordered by id.
+    active_requests: list[ActiveRequest] = Field(default_factory=list)
     # /status.latency histograms -> percentiles, by stage name (http_ttft, preparation, ...).
     stages: dict[str, StageLatency] = Field(default_factory=dict)
 
@@ -824,6 +863,9 @@ class InstalledModel(ApiModel):
     variant: str | None = None
     family: Family | None = None
     format: ModelFormat
+    # A Model Optimizer or compressed-tensors checkpoint (format "mlx": Splash loads it
+    # as a safetensors target), labelled e.g. "NVFP4 · Model Optimizer"; null otherwise.
+    checkpoint: str | None = None
     language_only: bool = False
     vision: bool | None = None
     size_bytes: int
@@ -968,6 +1010,9 @@ class InspectResult(ApiModel):
     badge: Literal["compatible", "text_only", "incompatible", "not_clef_accurate", "checking"]
     family: Family | None = None
     format: ModelFormat | None = None
+    # A Model Optimizer or compressed-tensors checkpoint (format "mlx": Splash loads it
+    # as a safetensors target), labelled e.g. "NVFP4 · Model Optimizer"; null otherwise.
+    checkpoint: str | None = None
     variants: list[VariantOut] = Field(default_factory=list)
     recommended_variant: str | None = None
     # The variant checked first (the likely recommendation), and the variants
@@ -995,6 +1040,9 @@ class CatalogEntry(ApiModel):
     repo_id: str
     family: Family
     format: ModelFormat
+    # A Model Optimizer or compressed-tensors checkpoint (format "mlx": Splash loads it
+    # as a safetensors target), labelled e.g. "NVFP4 · Model Optimizer"; null otherwise.
+    checkpoint: str | None = None
     notes: str | None = None
     # The target weights (GGUF: the default variant plus its projector).
     size_bytes: int | None = None
@@ -1044,6 +1092,9 @@ class SearchResult(ApiModel):
     last_modified: str | None = None
     tags: list[str] = Field(default_factory=list)
     format_guess: Literal["mlx", "gguf", "unknown"] = "unknown"
+    # A Model Optimizer or compressed-tensors checkpoint (format "mlx": Splash loads it
+    # as a safetensors target), labelled e.g. "NVFP4 · Model Optimizer"; null otherwise.
+    checkpoint: str | None = None
 
 
 class SearchResults(ApiModel):

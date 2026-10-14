@@ -119,7 +119,7 @@ const clock = (sec: number) => new Date(sec * 1000).toLocaleTimeString('en-GB');
 export interface ChartsBandProps {
   windowMin: WindowMin;
   onWindow: (w: WindowMin) => void;
-  /** SSD tier on (`disk.capacity_bytes > 0` or `serve.max_cache_disk` set). */
+  /** SSD tier on (`disk.capacity_bytes` or `disk.limit_bytes` above 0). */
   diskEnabled: boolean;
   /** `scheduler` group reported by this Splash version. */
   lanesReported: boolean;

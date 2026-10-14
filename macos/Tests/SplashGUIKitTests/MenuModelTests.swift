@@ -74,10 +74,26 @@ struct MenuModelTests {
         #expect(s == [
             "[x] ● Splash is running — Qwen3.8-27B-4bit (Ready)",
             "[x] Splash 1.2.0 · 127.0.0.1:8000 · up 2 h 05 m",
-            "Stop Server", "Load Model ▸", "Serving Stats ▸",
+            "Stop Server", "Load Model ▸", "Release Memory", "Serving Stats ▸",
         ] + Self.tail)
         let without = snap(running(engine("ready")))
         #expect(!without.contains("Load Model ▸"))
+    }
+
+    @Test func releaseMemoryOnlyWhileTheWeightsAreLoaded() {
+        func item(_ state: String) -> MenuItem? {
+            MenuModel.build(running(engine(state))).compactMap { entry -> MenuItem? in
+                if case .button(let b) = entry, b.command == .releaseMemory { return b }
+                return nil
+            }.first
+        }
+        #expect(item("ready")?.enabled == true)
+        #expect(item("busy")?.enabled == true)
+        #expect(item("idle_released")?.enabled == false)
+        #expect(item("recovering")?.enabled == false)
+        for state in ["stopped", "starting", "stopping", "crashed", "engine_failed"] {
+            #expect(item(state) == nil, "\(state)")
+        }
     }
 
     @Test func switcherChecksActiveModel() {
@@ -124,7 +140,7 @@ struct MenuModelTests {
         let s = snap(running(e))
         #expect(Array(s[0...5]) == [
             "[x] ● Splash is running — Qwen3.8-27B-4bit (Recovering)", "[x] Splash 1.2.0 · 127.0.0.1:8000",
-            "[x] Metal command buffer failed", "Stop Server", "Open Logs", "Serving Stats ▸",
+            "[x] Metal command buffer failed", "Stop Server", "Open Logs", "[x] Release Memory",
         ])
     }
 

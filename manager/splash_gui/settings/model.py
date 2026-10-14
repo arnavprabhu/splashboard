@@ -24,10 +24,11 @@ from pydantic import (
 
 from . import parsers as p
 
-SETTINGS_VERSION = 2
+SETTINGS_VERSION = 3
 
 Theme = Literal["light", "dark", "system"]
 KvFormat = Literal["int8", "bf16"]
+StateFormat = Literal["fp32", "bf16"]
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 Priority = Literal["foreground", "normal", "background"]
 SwitchWhenBusy = Literal["reject", "wait"]
@@ -54,6 +55,18 @@ def _to_text(value: Any) -> Any:
 
 
 SizeText = Annotated[str, BeforeValidator(_to_text)]
+
+
+def _thinking_budget(value: Any) -> Any:
+    """--thinking-token-budget: a JSON integer, never a boolean or a string."""
+    if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+        raise ValueError("must be a nonnegative integer")
+    return value
+
+
+def _end_text(value: Any) -> Any:
+    """An empty --thinking-end-text means none (Splash's `</think>` alone)."""
+    return None if value == "" else value
 
 
 class _Strict(BaseModel):
@@ -144,7 +157,10 @@ class GlobalServeSettings(_Strict):
     max_memory: SizeText = "auto"
     max_context: SizeText = "auto"
     kv_format: KvFormat = "int8"
-    max_cache_disk: SizeText = "0"
+    state_format: StateFormat = "fp32"
+    max_cache_disk: SizeText = "auto"
+    # --max-cache-disk-writes: a daily write budget; "0" is Splash's default, no limit.
+    max_cache_disk_writes: SizeText = "0"
     persistent_cache: bool = False
     decode_share: float = p.DEFAULT_DECODE_SHARE
     max_request_size: SizeText = "128M"
@@ -152,6 +168,9 @@ class GlobalServeSettings(_Strict):
     request_timeout: float | None = None
     queue_size: int = p.DEFAULT_QUEUE_SIZE
     default_reasoning_effort: ReasoningEffort | None = None
+    # None = no cap / `</think>` alone, Splash's defaults.
+    thinking_token_budget: Annotated[int | None, BeforeValidator(_thinking_budget)] = None
+    thinking_end_text: Annotated[str | None, BeforeValidator(_end_text)] = None
     # --idle-release as typed: a duration ("10m", "90s", "600") or "off".
     idle_release: str = p.DEFAULT_IDLE_RELEASE
     disable_ane: bool = False
@@ -175,11 +194,27 @@ class GlobalServeSettings(_Strict):
         p.parse_max_cache_disk(value)
         return value
 
+    @field_validator("max_cache_disk_writes")
+    @classmethod
+    def _max_cache_disk_writes(cls, value: str) -> str:
+        p.parse_max_cache_disk_writes(value)
+        return value
+
     @field_validator("max_request_size")
     @classmethod
     def _max_request_size(cls, value: str) -> str:
         p.parse_request_size(value)
         return value
+
+    @field_validator("thinking_token_budget")
+    @classmethod
+    def _thinking_token_budget(cls, value: int | None) -> int | None:
+        return None if value is None else p.parse_thinking_token_budget(str(value))
+
+    @field_validator("thinking_end_text")
+    @classmethod
+    def _thinking_end_text(cls, value: str | None) -> str | None:
+        return None if value is None else p.check_thinking_end_text(value)
 
     @field_validator("decode_share")
     @classmethod
@@ -449,7 +484,8 @@ class _Sparse(_Strict):
 class ModelServeOverrides(_Sparse):
     """Per-model engine overrides (scope M or G/M). Only keys present are overrides;
     an absent key inherits the global value. `default_reasoning_effort: null` is an
-    explicit override back to the model template's default."""
+    explicit override back to the model template's default, as `thinking_token_budget:
+    null` (no cap) and `thinking_end_text: null` (`</think>` alone) are to Splash's."""
 
     revision: str | None = None
     draft_model: str | None = None
@@ -457,7 +493,10 @@ class ModelServeOverrides(_Sparse):
     served_model_names: list[str] = Field(default_factory=list)
     announce_served_name: bool = False
     default_reasoning_effort: ReasoningEffort | None = None
+    thinking_token_budget: Annotated[int | None, BeforeValidator(_thinking_budget)] = None
+    thinking_end_text: Annotated[str | None, BeforeValidator(_end_text)] = None
     kv_format: KvFormat = "int8"
+    state_format: StateFormat = "fp32"
     max_context: SizeText = "auto"
     decode_share: float = p.DEFAULT_DECODE_SHARE
     max_image_pixels: int = p.MAX_IMAGE_PIXELS
@@ -466,7 +505,12 @@ class ModelServeOverrides(_Sparse):
     @model_validator(mode="before")
     @classmethod
     def _nulls_mean_inherit(cls, data: Any) -> Any:
-        return _drop_nulls(data, keep=frozenset({"default_reasoning_effort"}))
+        return _drop_nulls(
+            data,
+            keep=frozenset(
+                {"default_reasoning_effort", "thinking_token_budget", "thinking_end_text"}
+            ),
+        )
 
     @field_validator("revision")
     @classmethod
@@ -504,18 +548,46 @@ class ModelServeOverrides(_Sparse):
     def _max_image_pixels(cls, value: int) -> int:
         return p.parse_max_image_pixels(str(value))
 
+    @field_validator("thinking_token_budget")
+    @classmethod
+    def _thinking_token_budget(cls, value: int | None) -> int | None:
+        return None if value is None else p.parse_thinking_token_budget(str(value))
+
+    @field_validator("thinking_end_text")
+    @classmethod
+    def _thinking_end_text(cls, value: str | None) -> str | None:
+        return None if value is None else p.check_thinking_end_text(value)
+
+
+# server/api_shapes.py `_anthropic_thinking_budget`.
+MIN_MESSAGES_THINKING_BUDGET = 1024
+MESSAGES_BUDGET_REFUSAL = "thinking.budget_tokens must be an integer of at least 1024"
+
 
 class ThinkingConfig(_Strict):
-    """Anthropic Messages `thinking` (server/api_shapes.py `_anthropic_thinking`)."""
+    """Anthropic Messages `thinking` (server/api_shapes.py `_anthropic_thinking` and
+    `_anthropic_thinking_budget`). Enabled thinking needs `budget_tokens` of at least
+    1024, which caps it; one at or above the request's max_tokens caps nothing."""
 
     type: Literal["enabled", "disabled", "adaptive"]
-    budget_tokens: int | None = Field(default=None, ge=1)
+    budget_tokens: int | None = None
     display: Literal["summarized", "omitted", "updates"] | None = None
+
+    @field_validator("budget_tokens", mode="before")
+    @classmethod
+    def _budget_type(cls, value: Any) -> Any:
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+            raise ValueError(MESSAGES_BUDGET_REFUSAL)
+        return value
 
     @model_validator(mode="after")
     def _display(self) -> ThinkingConfig:
         if self.display is not None and self.type == "disabled":
             raise ValueError("thinking.display requires enabled or adaptive thinking")
+        if self.type == "enabled" and (
+            self.budget_tokens is None or self.budget_tokens < MIN_MESSAGES_THINKING_BUDGET
+        ):
+            raise ValueError(MESSAGES_BUDGET_REFUSAL)
         return self
 
 
@@ -530,7 +602,9 @@ _SAMPLING_REQUIREMENTS = {
 }
 _INTEGER_MESSAGES = {
     "top_k": "top_k must be 0 or -1 (disabled) or a positive integer",
-    "seed": "seed must be an unsigned 64-bit integer",
+    "seed": "seed must be a 64-bit integer",
+    "thinking_token_budget": "thinking_token_budget must be a non-negative integer or -1 "
+    "for no cap",
     "max_tokens": "max_tokens must be a positive integer",
 }
 
@@ -571,6 +645,8 @@ class SamplingOverlay(_Sparse):
     timeout: float | None = None
     max_tokens: int | None = None
     reasoning_effort: ReasoningEffort | None = None
+    # -1 = no cap for the request; unset takes the server's budget.
+    thinking_token_budget: int | None = None
     chat_template_kwargs: dict[str, Any] | None = None
     ignore_eos: bool | None = None
     thinking: ThinkingConfig | None = None
@@ -633,8 +709,16 @@ class SamplingOverlay(_Sparse):
     @field_validator("seed")
     @classmethod
     def _seed(cls, v: int | None) -> int | None:
-        if v is not None and not 0 <= v < 2**64:
-            raise ValueError("seed must be an unsigned 64-bit integer")
+        # -1 asks for a random seed; another negative one is taken as its 64 bits.
+        if v is not None and not -(2**63) <= v < 2**64:
+            raise ValueError("seed must be a 64-bit integer")
+        return v
+
+    @field_validator("thinking_token_budget")
+    @classmethod
+    def _thinking_token_budget(cls, v: int | None) -> int | None:
+        if v is not None and v < -1:
+            raise ValueError(_INTEGER_MESSAGES["thinking_token_budget"])
         return v
 
     @field_validator("stop")

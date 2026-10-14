@@ -7,6 +7,9 @@ import {
   checkTools,
   classifyError,
   countPdfPages,
+  draftStats,
+  isToolName,
+  maxTokensHint,
   emptySampling,
   groupChats,
   hasSamplingErrors,
@@ -58,11 +61,39 @@ describe('sampling panel', () => {
     expect(numError('top_k', '-1')).toBeNull();
     expect(numError('top_k', '1.5')).toBe('Top K must be 0, −1 or a positive integer.');
     expect(numError('repetition_penalty', '0')).toBe('Repetition penalty must be greater than 0.');
-    expect(numError('seed', '1.2')).toBe('Seed must be a whole number.');
+    expect(numError('seed', '1.2')).toBe('Seed must be a whole number (a 64-bit integer).');
     expect(numError('max_completion_tokens', '0')).toBe('Max tokens must be at least 1.');
-    expect(numError('max_completion_tokens', '200000', 131072)).toBe('Larger than the model’s context (131,072).');
+    expect(numError('max_completion_tokens', '200000')).toBeNull();
     expect(numError('timeout', '-3')).toBe('Timeout must be a positive number of seconds.');
     expect(numError('temperature', '')).toBeNull();
+  });
+
+  it('accepts seed -1 (random) and any 64-bit seed', () => {
+    expect(numError('seed', '-1')).toBeNull();
+    expect(numError('seed', '-5')).toBeNull();
+    expect(numError('seed', String(2 ** 64))).toBe('Seed must be a whole number (a 64-bit integer).');
+  });
+
+  it('takes a thinking budget: empty is the server default, -1 no cap', () => {
+    expect(numError('thinking_token_budget', '')).toBeNull();
+    expect(numError('thinking_token_budget', '-1')).toBeNull();
+    expect(numError('thinking_token_budget', '0')).toBeNull();
+    expect(numError('thinking_token_budget', '-2')).toBe('Thinking budget must be −1 (no cap) or a whole number of at least 0.');
+    expect(numError('thinking_token_budget', '1.5')).not.toBeNull();
+    const f = emptySampling();
+    f.num.thinking_token_budget = '-1';
+    expect(samplingBody(f, { allowIgnoreEos: true })).toEqual({ thinking_token_budget: -1 });
+    expect(samplingForm({ thinking_token_budget: 2048 }).num.thinking_token_budget).toBe('2048');
+  });
+
+  it('notes an output limit above the context without blocking the send', () => {
+    const f = emptySampling();
+    f.num.max_completion_tokens = '200000';
+    const e = samplingErrors(f, 131072);
+    expect(e.hints.max_completion_tokens).toBe('Above the model’s context (131,072); the reply stops where the context ends.');
+    expect(hasSamplingErrors(e)).toBe(false);
+    expect(maxTokensHint('1000', 131072)).toBeNull();
+    expect(maxTokensHint('200000', null)).toBeNull();
   });
 
   it('allows at most four stop sequences, as Splash does (server/frontend.py)', () => {
@@ -101,6 +132,33 @@ describe('tools and output', () => {
     expect(ok.error).toBeNull();
     expect(ok.names).toEqual(['get_weather']);
     expect(checkTools('[{"type":"function","function":{"name":"a"}},{"type":"function","function":{"name":"a"}}]').error).toContain('defined twice');
+  });
+
+  it('follows Splash 1.3.2 tool name rules (server/tool_schema.py is_tag_name)', () => {
+    const one = (name: string, extra = '') => checkTools(JSON.stringify([{ type: 'function', function: { name } }]).replace('"type":"function",', extra)).error;
+    expect(one('weather.lookup')).toBeNull();
+    expect(one('météo')).toBeNull();
+    expect(one('x'.repeat(256))).toBeNull();
+    expect(one('x'.repeat(257))).toContain('1–256 characters');
+    expect(one('')).toContain('Tool 1');
+    expect(one('a<b')).toContain('Tool 1');
+    expect(one('a\nb')).toContain('Tool 1');
+    expect(one(' padded')).toContain('Tool 1');
+    expect(one('e\u0301')).toContain('Tool 1');
+    expect(isToolName('e\u0301')).toBe(false);
+    expect(isToolName('\u00e9')).toBe(true);
+    expect(isToolName('\ud800')).toBe(false);
+    // A tool that names no type is a function.
+    expect(checkTools('[{"function":{"name":"f"}}]').error).toBeNull();
+    expect(checkTools('[{"type":null,"function":{"name":"f"}}]').error).toBeNull();
+    expect(checkTools('[{"type":"function","function":{"name":"f","parameters":[]}}]').error).toBe('Tool 1: function.parameters must be a JSON Schema object or a boolean.');
+    expect(checkTools('[{"type":"function","function":{"name":"f","parameters":true}}]').error).toBeNull();
+  });
+
+  it('reads a reply’s draft numbers from timings and metrics.speculation', () => {
+    expect(draftStats({ timings: { predicted_n: 10 } })).toBeNull();
+    expect(draftStats({ timings: { draft_n: 40, draft_n_accepted: 30 } })).toEqual({ acceptance: 0.75, drafted: 40, accepted: 30, perCycle: null });
+    expect(draftStats({ timings: { draft_n: 40, draft_n_accepted: 30 }, speculation: { drafted_tokens: 40, accepted_draft_tokens: 30, cycles: 10 } })?.perCycle).toBe(4);
   });
 
   it('maps tool choice', () => {

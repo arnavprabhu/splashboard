@@ -15,6 +15,7 @@ export const statusStrings = {
   'status.meta.label': 'Engine details',
   'status.meta.context': 'Context {v}',
   'status.meta.kv': 'KV {v}',
+  'status.meta.states': 'States {v}',
   'status.meta.vision_on': 'Vision on',
   'status.meta.vision_off': 'Vision off',
   'status.meta.draft': 'Draft {v}',
@@ -22,6 +23,7 @@ export const statusStrings = {
   'status.meta.uptime': 'Up {v}',
   'status.meta.version': 'Splash {v}',
   'status.meta.released': 'Weights released · reloads on next request (~1–3 s)',
+  'status.meta.restoring': 'Restoring weights for a request…',
   'status.meta.flushing': 'Flushing persistent cache (up to 6 s)…',
 
   // actions
@@ -67,13 +69,6 @@ export const statusStrings = {
   'status.banner.crashed': 'Engine restarting',
   'status.banner.crashed_msg': 'Splash exited unexpectedly. Restarting in {s} s (attempt {n} of 3).',
   'status.banner.crashed_msg_now': 'Splash exited unexpectedly. Restarting (attempt {n} of 3).',
-  'status.banner.ssd_title': 'SSD cache suggested',
-  'status.banner.ssd_msg': 'This Mac had {avail} available at startup, which may not hold a {tokens}-token request; without the SSD cache such a request is suspended and replays its prompt.',
-  'status.banner.ssd_action': 'Enable SSD cache ({size}) & restart',
-  'status.banner.ssd_settings': 'Cache settings',
-  'status.banner.ssd_dismiss': 'Dismiss',
-  'status.banner.ssd_done': 'SSD cache set to {size} · restarting…',
-  'status.banner.ssd_failed': 'Couldn’t enable the SSD cache.',
   'status.banner.hub': 'Hub notice',
   'status.banner.schema': 'Splash status schema {n} is not recognized; some panels may be empty.',
 
@@ -129,6 +124,7 @@ export const statusStrings = {
   'status.numbers.unit_tps': 'tok/s',
   'status.numbers.in_out': 'in {i} · out {o}',
   'status.numbers.kv_disk': 'kv {kv} · disk {disk}',
+  'status.numbers.dedup': 'shared {v}',
   'status.numbers.hit_rate': 'hit rate {v}',
   'status.numbers.eff_help': 'Cache efficiency is reused ÷ (reused + prefilled) tokens; the hit rate counts requests that found a cached prefix.',
   'status.numbers.cycle': 'cycle {v}',

@@ -66,6 +66,7 @@ def test_weights_block_follows_idle_release(make_engine, tmp_path):
     assert default.json("GET", "/status")[1]["weights"] == {
         "idle_release_seconds": 600.0,
         "released": False,
+        "restoring": False,
         "restores": 0,
         "restore_failures": 0,
     }
@@ -133,8 +134,9 @@ def test_agent_launcher_takes_its_own_port_and_passes_the_agents_after_the_separ
 
 
 def test_responses_namespace_tools_follow_splash_rules(engine):
-    """api_shapes.py `_namespace_alias` (1.3.0): each part must match
-    [A-Za-z0-9_-]{1,64}; a call comes back as its name plus its namespace."""
+    """api_shapes.py `_namespace_alias` (1.3.2): any non-empty namespace and
+    name, whose alias the tool-name rule then checks; a call comes back as its
+    name plus its namespace."""
     child = {"type": "function", "name": "js", "parameters": {"type": "object", "properties": {}}}
     tools = [{"type": "namespace", "name": "mcp__node_repl", "description": "", "tools": [child]}]
     forced = {"type": "function", "namespace": "mcp__node_repl", "name": "js"}
@@ -154,15 +156,18 @@ def test_responses_namespace_tools_follow_splash_rules(engine):
     ]
     assert engine.json("POST", "/v1/responses", {"input": history, "tools": tools, "store": False})[0] == 200
 
+    # 1.3.1 refused these names; 1.3.2 takes them.
     for namespace, name in (("browser@openai-bundled", "js"), ("mcp__node_repl", "x" * 65)):
-        bad = [{"type": "namespace", "name": namespace, "tools": [{**child, "name": name}]}]
-        status, error = engine.json("POST", "/v1/responses", {"input": "x", "tools": bad})
-        assert (status, error["error"]["message"]) == (400, "invalid namespace tool name")
-    bad_history = [{**history[1], "namespace": "a.b"}]
-    status, error = engine.json("POST", "/v1/responses", {"input": bad_history, "store": False})
+        loose = [{"type": "namespace", "name": namespace, "tools": [{**child, "name": name}]}]
+        assert engine.json("POST", "/v1/responses", {"input": "x", "tools": loose, "store": False})[0] == 200
+    dotted = {"input": "x", "tools": [{**child, "name": "a.b"}], "store": False}
+    assert engine.json("POST", "/v1/responses", dotted)[0] == 200
+    bad = [{"type": "namespace", "name": "", "tools": [child]}]
+    status, error = engine.json("POST", "/v1/responses", {"input": "x", "tools": bad})
     assert (status, error["error"]["message"]) == (400, "invalid namespace tool name")
-    status, error = engine.json("POST", "/v1/responses", {"input": "x", "tools": [{**child, "name": "a.b"}]})
-    assert (status, error["error"]["message"]) == (400, "tool name must match [A-Za-z0-9_-]{1,128}")
+    for name in ("a<b", " padded", "x" * 257):
+        status, error = engine.json("POST", "/v1/responses", {"input": "x", "tools": [{**child, "name": name}]})
+        assert status == 400 and error["error"]["message"].startswith("tool name must be 1 to 256 characters in NFC")
 
 
 def test_responses_refuse_codex_tool_search_shapes(engine):

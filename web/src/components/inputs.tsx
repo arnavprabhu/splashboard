@@ -183,10 +183,12 @@ export interface SizeInputProps extends Omit<TextInputProps, 'invalid'> {
   kind: SizeKind;
   /** Appended to the parsed size on the same line (`= 34.4 GB · 54% of 64 GB`). */
   suffix?: (bytes: number) => string | null;
+  /** What 0 means for this option (`Disabled` unless given). */
+  zeroText?: string;
 }
 
 /** Byte-size field validated like Splash's parsers (K/M/G = 1024). Shows the parsed size. */
-export function SizeInput({ kind, value, onChange, id, suffix, 'aria-describedby': describedBy, ...rest }: SizeInputProps) {
+export function SizeInput({ kind, value, onChange, id, suffix, zeroText = 'Disabled', 'aria-describedby': describedBy, ...rest }: SizeInputProps) {
   const result = parseSize(kind, value);
   const hintId = id ? `${id}-size` : undefined;
   const extra = result.ok && result.bytes ? suffix?.(result.bytes) : null;
@@ -207,7 +209,7 @@ export function SizeInput({ kind, value, onChange, id, suffix, 'aria-describedby
           ? result.bytes === null
             ? 'Automatic'
             : result.bytes === 0
-              ? 'Disabled'
+              ? zeroText
               : `= ${formatBytes(result.bytes, { digits: 2 })}${extra ? ` · ${extra}` : ''}`
           : result.error}
       </p>

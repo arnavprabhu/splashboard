@@ -124,6 +124,14 @@ def _mean(values: list[float | None]) -> float | None:
     return statistics.mean(data) if data else None
 
 
+def truncated(request: dict[str, Any]) -> bool:
+    """Whether a request generated fewer tokens than it asked for. Splash caps the
+    output at the end of the context window the prompt leaves instead of refusing
+    it, and the benchmark ignores EOS, so only that cap stops one early."""
+    asked, got = request.get("max_tokens"), request.get("completion_tokens")
+    return isinstance(asked, int) and isinstance(got, int) and got < asked
+
+
 def summarize(
     scenario: str, samples: list[dict[str, Any]], delta: dict[str, Any]
 ) -> dict[str, Any]:
@@ -141,6 +149,7 @@ def summarize(
         "ttft_p95_ms": percentile(ttfts, 0.95),
         "cached_tokens": _mean([r.get("cached_tokens") for r in requests]),
         "prompt_tokens": _mean([r.get("prompt_tokens") for r in requests]),
+        "truncated_requests": sum(1 for r in requests if truncated(r)),
     }
     drafted = delta.get("drafted_tokens")
     accepted = delta.get("accepted_draft_tokens")
@@ -239,25 +248,30 @@ class Benchmark:
         return BenchmarkStarted(run_id=self.current.id)
 
     async def sample(
-        self, client: httpx.AsyncClient, prompt: list[int], tokens: int
+        self,
+        client: httpx.AsyncClient,
+        prompt: list[int],
+        tokens: int,
+        cache_salt: str | None = None,
     ) -> dict[str, Any]:
+        """One streamed completion. A `cache_salt` no other request uses makes the
+        engine compute the whole prompt itself (a cold prefill)."""
         capture = UsageCapture(shape="completions", endpoint="/v1/completions", stream=True)
         started = time.monotonic()
+        body: dict[str, Any] = {
+            "prompt": prompt,
+            "model": self.state.active_model(),
+            "max_tokens": tokens,
+            "ignore_eos": True,
+            "temperature": 0,
+            "priority": "foreground",
+            "stream": True,
+        }
+        if cache_salt is not None:
+            body["cache_salt"] = cache_salt
         self.state.supervisor.request_started()
         try:
-            async with client.stream(
-                "POST",
-                "/v1/completions",
-                json={
-                    "prompt": prompt,
-                    "model": self.state.active_model(),
-                    "max_tokens": tokens,
-                    "ignore_eos": True,
-                    "temperature": 0,
-                    "priority": "foreground",
-                    "stream": True,
-                },
-            ) as response:
+            async with client.stream("POST", "/v1/completions", json=body) as response:
                 response.raise_for_status()
                 async for chunk in response.aiter_bytes():
                     capture.feed(chunk)
@@ -266,6 +280,7 @@ class Benchmark:
             self.state.supervisor.request_finished()
         return {
             "duration_ms": (time.monotonic() - started) * 1000,
+            "max_tokens": tokens,
             "ttft_ms": capture.ttft_ms,
             "prompt_tokens": capture.prompt_tokens,
             "completion_tokens": capture.completion_tokens,
@@ -341,17 +356,15 @@ class Benchmark:
                         samples: list[dict[str, Any]] = []
                         before = await self.status_metrics(client)
                         for _index in range(body.samples):
-                            if scenario == "cold_prefill":
-                                salt = await client.post(
-                                    "/tokenize", json={"content": uuid.uuid4().hex}
-                                )
-                                salt.raise_for_status()
-                                prefix = salt.json()["tokens"]
-                                prompt = (prefix + prompt)[:length]
+                            # A fresh salt per cold sample: the same prompt, never cached.
+                            salt = uuid.uuid4().hex if scenario == "cold_prefill" else None
                             width = value if scenario == "concurrency" else 1
                             start = time.monotonic()
                             batch = await asyncio.gather(
-                                *(self.sample(client, prompt, output_tokens) for _ in range(width))
+                                *(
+                                    self.sample(client, prompt, output_tokens, salt)
+                                    for _ in range(width)
+                                )
                             )
                             duration = time.monotonic() - start
                             samples.append(

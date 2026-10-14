@@ -49,28 +49,49 @@ export function isClefId(id: string): boolean {
   return /clef/i.test(id);
 }
 
-export type FormatKind = 'mlx' | 'gguf' | 'pq2' | 'legacy' | 'unknown';
+export type FormatKind = 'mlx' | 'gguf' | 'pq2' | 'nvfp4' | 'fp8' | 'legacy' | 'unknown';
+
+/**
+ * The label of a Model Optimizer or compressed-tensors checkpoint (`checkpoint`, e.g.
+ * `NVFP4 · Model Optimizer`) on any models API row; null for every other model. Splash loads
+ * these as safetensors targets, as it does MLX's, so their `format` is `mlx`.
+ */
+export function checkpointOf(row: object | null | undefined): string | null {
+  const value = row ? (row as { checkpoint?: unknown }).checkpoint : null;
+  return typeof value === 'string' && value ? value : null;
+}
 
 export function formatKind(format: string | null | undefined, id = ''): FormatKind {
   const variant = splitModelId(id).variant ?? '';
   if (format === 'pq2' || /^PQ2/i.test(variant)) return 'pq2';
-  if (format === 'mlx' || format === 'gguf' || format === 'legacy') return format;
+  if (format === 'gguf' || format === 'legacy') return format;
+  // The manager labels a checkpoint (`checkpoint`), so an `mlx` row without one is MLX's own,
+  // whatever its name says.
+  if (format === 'mlx') return format;
   if (!id) return 'unknown';
   // Not known yet (a download that is not installed): guess from the ID.
   if (/gguf/i.test(id)) return 'gguf';
+  if (!/mlx/i.test(id)) {
+    if (/nvfp4/i.test(id)) return 'nvfp4';
+    if (/(?<![a-z])fp8(?![a-z])/i.test(id)) return 'fp8';
+  }
   if (/mlx|4bit/i.test(id)) return 'mlx';
   return 'unknown';
 }
 
-/** `MLX`, `GGUF`, `GGUF PQ2_0`, `Splash package` (an installed one; uppercased by CSS). */
-export function formatLabel(format: string | null | undefined, id = ''): string {
+/**
+ * `MLX`, `GGUF`, `GGUF PQ2_0`, `Splash package` (an installed one; uppercased by CSS), or a
+ * checkpoint's label: `NVFP4 · Model Optimizer`, or with `short` its kind alone (`NVFP4`).
+ */
+export function formatLabel(format: string | null | undefined, id = '', checkpoint: string | null = null, short = false): string {
+  if (checkpoint && (format === 'mlx' || !format)) return short ? checkpoint.split(' · ')[0]! : checkpoint;
   return t(`models.format.${formatKind(format, id)}`);
 }
 
-/** `01 — MLX · 21 GB`. Disk sizes are base 1024. */
-export function rowLabel(index: number, format: string | null | undefined, id: string, bytes: number | null | undefined, base: 1024 | 1000 = 1024): string {
+/** `01 — MLX · 21 GB` (`01 — NVFP4 · 22 GB` for a checkpoint). Disk sizes are base 1024. */
+export function rowLabel(index: number, format: string | null | undefined, id: string, bytes: number | null | undefined, base: 1024 | 1000 = 1024, checkpoint: string | null = null): string {
   const size = bytes === null || bytes === undefined ? DASH : formatBytes(bytes, { base });
-  return `${formatIndex(index)} — ${formatLabel(format, id)} · ${size}`;
+  return `${formatIndex(index)} — ${formatLabel(format, id, checkpoint, true)} · ${size}`;
 }
 
 /** Installed rows: last used first, then by ID. */
@@ -366,13 +387,26 @@ export function catalogSeed(memoryBytes = 0): Catalog {
           { format: 'mlx', label: t('models.format.mlx'), entries: [entry('mlx-community/Qwen3.8-27B-4bit', 'Qwen3.8-27B', 'mlx', t('models.seed.dense_mlx'))] },
           { format: 'gguf', label: t('models.format.gguf'), entries: [entry('unsloth/Qwen3.8-27B-GGUF', 'Qwen3.8-27B', 'gguf', t('models.seed.dense_gguf'))] },
           { format: 'pq2', label: t('models.format.pq2'), entries: [entry('prism-ml/Ternary-Bonsai-2-27B-gguf:PQ2_0', 'Qwen3.8-27B', 'gguf', t('models.seed.pq2'))] },
+          // A safetensors target, as MLX's is, carrying the label the manager would give it.
+          {
+            format: 'nvfp4',
+            label: t('models.format.nvfp4'),
+            entries: [{ ...entry('nvidia/Qwen3.8-27B-NVFP4', 'Qwen3.8-27B', 'mlx', t('models.seed.dense_nvfp4')), checkpoint: 'NVFP4 · Model Optimizer' } as CatalogEntry],
+          },
         ],
       },
       {
         family: 'Qwen3.6-35B-A3B',
         label: t('models.catalog.family.moe'),
         groups: [
-          { format: 'mlx', label: t('models.format.mlx'), entries: [entry('mlx-community/Qwen3.6-35B-A3B-4bit', 'Qwen3.6-35B-A3B', 'mlx', t('models.seed.moe_mlx'))] },
+          {
+            format: 'mlx',
+            label: t('models.format.mlx'),
+            entries: [
+              entry('mlx-community/Qwen3.6-35B-A3B-4bit', 'Qwen3.6-35B-A3B', 'mlx', t('models.seed.moe_mlx')),
+              entry('mlx-community/Qwen3.6-35B-A3B-nvfp4', 'Qwen3.6-35B-A3B', 'mlx', t('models.seed.moe_mlx_nvfp4')),
+            ],
+          },
           { format: 'gguf', label: t('models.format.gguf'), entries: [entry('unsloth/Qwen3.6-35B-A3B-GGUF', 'Qwen3.6-35B-A3B', 'gguf', t('models.seed.moe_gguf'))] },
         ],
       },

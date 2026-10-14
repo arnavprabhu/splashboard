@@ -41,7 +41,7 @@ PRESETS: dict[PresetId, Preset] = {
         "Long context and a persistent SSD cache so agents reuse their prompts across restarts.",
         {
             "serve.max_context": "128K",
-            "serve.max_cache_disk": "32G",
+            "serve.max_cache_disk": "auto",
             "serve.persistent_cache": True,
             "serve.default_reasoning_effort": None,
             "routing.auto_load": True,
@@ -50,10 +50,10 @@ PRESETS: dict[PresetId, Preset] = {
     "chat": Preset(
         "chat",
         "Chat & general",
-        "Automatic context, vision on, no disk tier.",
+        "Automatic context, vision on, a session-only SSD cache.",
         {
             "serve.max_context": "auto",
-            "serve.max_cache_disk": "0",
+            "serve.max_cache_disk": "auto",
             "serve.persistent_cache": False,
         },
     ),
@@ -65,7 +65,7 @@ PRESETS: dict[PresetId, Preset] = {
             "serve.max_context": "auto",
             "serve.kv_format": "int8",
             "serve.decode_share": 0.5,
-            "serve.max_cache_disk": "16G",
+            "serve.max_cache_disk": "auto",
             "serve.persistent_cache": False,
         },
     ),
@@ -97,7 +97,7 @@ def recommend(preset: PresetId, memory_bytes: int) -> Recommendation:
         return Recommendation(
             ModelPick(
                 _GGUF_27B_IQ3,
-                "Language-only reaches the ~100K agents need on 24 GB",
+                "Language-only reaches about 80K context on 24 GB",
                 {"language_only": True},
             ),
             (ModelPick(_GGUF_35B_Q2, "MoE, 256K context"),),

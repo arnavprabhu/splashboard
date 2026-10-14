@@ -134,6 +134,14 @@ public extension AdminAPI {
         EngineView(json: try await post("/api/admin/engine/restart" + (force ? "?force=true" : "")))
     }
 
+    /// `POST /api/admin/engine/release-memory`: the engine gives its weights' memory back now and
+    /// the next request restores them. A 409 says why it can't (busy, or no model loaded) in
+    /// words fit to show as they are.
+    @discardableResult
+    func releaseMemory() async throws -> Bool {
+        try await post("/api/admin/engine/release-memory")["released"]?.bool ?? false
+    }
+
     @discardableResult
     func restoreAllIntegrations() async throws -> JSONValue {
         try await post("/api/admin/integrations/restore-all")

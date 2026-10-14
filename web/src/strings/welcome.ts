@@ -236,6 +236,7 @@ export const welcomeStrings = {
   "welcome.storage.sheet.path": "Directory path",
   "welcome.storage.sheet.use": "Use this directory",
   "welcome.unknown_chip": "Apple silicon",
+  "welcome.value.disk_auto": "SSD cache auto",
   "welcome.value.disk_off": "SSD cache off",
   "welcome.value.model_default": "Model default",
   "welcome.value.off": "Off",

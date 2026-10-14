@@ -61,7 +61,7 @@ export const integrationsStrings = {
   'integrations.backup_view': 'View backup',
   'integrations.backup_none': 'No backup yet.',
   'integrations.backup_failed': 'Couldn’t reveal the backup.',
-  'integrations.cli.source': 'Source: Splash install/clients.py. Splashboard only sets SPLASH_PORT, the model argument with a profile, and for Codex -c features.apps=false.',
+  'integrations.cli.source': 'Source: Splash install/clients.py. Splashboard only sets SPLASH_PORT and the model argument with a profile.',
   'integrations.cli.profile_note': 'Profiles through {name} are passed as --model; if this version ignores it, the session uses the base model and the CLI prints a notice.',
   'integrations.cli.entry_hermes': 'Profile {entry} present',
   'integrations.cli.entry_pi': 'Provider {entry} present',

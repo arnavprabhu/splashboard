@@ -175,7 +175,7 @@ describe('SizeInput', () => {
     fireEvent.input(input, { target: { value: '0' } });
     expect(screen.getByText('Disabled')).toBeTruthy();
     fireEvent.input(input, { target: { value: '1.5G' } });
-    expect(screen.getByText('use 0 to disable, or a size such as 5G')).toBeTruthy();
+    expect(screen.getByText('use auto, 0 to disable, or a size such as 16G')).toBeTruthy();
     expect(input.getAttribute('aria-invalid')).toBe('true');
   });
 });

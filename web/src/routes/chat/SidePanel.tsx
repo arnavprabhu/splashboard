@@ -50,6 +50,7 @@ const STEP: Partial<Record<NumField, string>> = {
 };
 
 const LABEL: Record<NumField, string> = {
+  thinking_token_budget: 'chat.sampling.thinking_token_budget',
   temperature: 'chat.sampling.temperature',
   top_p: 'chat.sampling.top_p',
   top_k: 'chat.sampling.top_k',
@@ -63,6 +64,7 @@ const LABEL: Record<NumField, string> = {
 };
 
 const HELP: Partial<Record<NumField, string>> = {
+  thinking_token_budget: 'chat.help.thinking_token_budget',
   temperature: 'chat.help.temperature',
   top_p: 'chat.help.top_p',
   top_k: 'chat.help.top_k',
@@ -226,6 +228,7 @@ function SamplingTab(p: SidePanelProps) {
               )}
             </div>
             {HELP[k] && <p class="field-help">{t(HELP[k] as 'chat.help.seed')}</p>}
+            {!err && p.errors.hints[k] && <p class="meta">{p.errors.hints[k]}</p>}
             {err && (
               <p class="field-error" id={`chat-${k}-err`} role="alert">
                 {err}
@@ -240,7 +243,7 @@ function SamplingTab(p: SidePanelProps) {
           <span class="meta flag mono">stop</span>
           <SourceTag source={f.stop.length ? 'set_here' : 'model_default'} />
         </div>
-        {p.constrained && f.stop.length > 0 && <p class="meta">{t('chat.sampling.ignore_eos_disabled')}</p>}
+        {p.constrained && f.stop.length > 0 && <p class="meta">{t('chat.sampling.stop_with_tools')}</p>}
         <TagList
           label={t('chat.sampling.stop')}
           values={f.stop}

@@ -76,7 +76,7 @@ class ModelError(RuntimeError):
     pass
 
 
-# --- From splash/install/models.py (1.3.1) ----------------------------------
+# --- From splash/install/models.py (1.3.2) ----------------------------------
 # Splash packages, the prebuilt format that predated upstream loading, are no
 # longer loaded: each package format names the MLX model of its family.
 PACKAGE_REPLACEMENTS = {
@@ -124,7 +124,9 @@ def is_safe_path(name: str) -> bool:
     return bool(name) and not name.startswith("/") and ".." not in name.split("/")
 
 
-MAX_JSON_BYTES = 8 << 20
+# install/models.py MAX_JSON_BYTES (1.3.2): a Model Optimizer shard index names
+# every routed expert's tensors, 14 MB.
+MAX_JSON_BYTES = 64 << 20
 
 
 def read_json(path: Path):

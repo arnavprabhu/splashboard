@@ -15,10 +15,17 @@ from typing import Any
 from pydantic import ValidationError
 
 from ..paths import FILE_MODE, Paths, expand, tmp_dir_for, write_atomic
+from . import parsers as p
 from .effective import effective_values
 from .metadata import FIELDS_BY_KEY, Applies
 from .model import SETTINGS_VERSION, SettingsDocument
-from .validation import Issue, ValidationContext, ValidationResult, validate_document
+from .validation import (
+    Issue,
+    ValidationContext,
+    ValidationResult,
+    managed_flag_for,
+    validate_document,
+)
 
 log = logging.getLogger(__name__)
 
@@ -47,7 +54,91 @@ def _v1_to_v2(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-MIGRATIONS: dict[int, Migration] = {0: _v0_to_v1, 1: _v1_to_v2}
+def _messages_thinking(overlay: Any) -> None:
+    """Splash now refuses Messages `thinking: {"type": "enabled"}` without a
+    `budget_tokens` of at least 1024, which it used to ignore. A stored overlay
+    keeps working: enabled thinking with no budget becomes adaptive (thinking on,
+    the server's budget, as before), and a smaller budget is raised to 1024."""
+    thinking = overlay.get("thinking") if isinstance(overlay, dict) else None
+    if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
+        return
+    budget = thinking.get("budget_tokens")
+    if budget is None:
+        thinking["type"] = "adaptive"
+        thinking.pop("budget_tokens", None)
+    elif isinstance(budget, int) and not isinstance(budget, bool) and budget < 1024:
+        thinking["budget_tokens"] = 1024
+    else:
+        return
+    log.info("settings.json v3: Messages thinking made valid for Splash 1.3.2")
+
+
+# Engine options that earlier versions could pass only through `engine.extra_flags`
+# and that now have settings of their own: the setting key and its parser.
+_ADOPTED_FLAGS: dict[str, tuple[str, Callable[[str], Any]]] = {
+    "--state-format": ("state_format", p.parse_state_format),
+    "--max-cache-disk-writes": ("max_cache_disk_writes", p.parse_max_cache_disk_writes),
+    "--thinking-token-budget": ("thinking_token_budget", p.parse_thinking_token_budget),
+    "--thinking-end-text": ("thinking_end_text", p.check_thinking_end_text),
+}
+
+
+def _adopt_extra_flags(glob: dict[str, Any]) -> None:
+    """Move an extra flag that is now a setting into that setting, so the upgrade
+    doesn't refuse it as a managed flag. A value the setting would refuse stays
+    where it was, and validation then names it."""
+    engine = glob.get("engine")
+    if not isinstance(engine, dict) or not isinstance(extras := engine.get("extra_flags"), list):
+        return
+    serve = glob.setdefault("serve", {})
+    if not isinstance(serve, dict):
+        return
+    kept: list[Any] = []
+    for extra in extras:
+        flag = extra.get("flag") if isinstance(extra, dict) else None
+        value = extra.get("value") if isinstance(extra, dict) else None
+        if isinstance(flag, str) and "=" in flag and value is None:
+            flag, value = flag.split("=", 1)
+        name = managed_flag_for(flag) if isinstance(flag, str) else None
+        if name not in _ADOPTED_FLAGS or not isinstance(value, str):
+            kept.append(extra)
+            continue
+        key, parse = _ADOPTED_FLAGS[name]
+        try:
+            parsed = parse(value)
+        except (ValueError, TypeError):
+            kept.append(extra)
+            continue
+        serve[key] = parsed if key == "thinking_token_budget" else value
+        log.info("settings.json v3: %s moved from engine.extra_flags to serve.%s", name, key)
+    engine["extra_flags"] = kept
+
+
+def _v2_to_v3(data: dict[str, Any]) -> dict[str, Any]:
+    """The SSD cache is on by default (auto), as it is in Splash. Earlier versions
+    wrote the whole global section with the old default, "0", which cannot be told
+    apart from a choice; it moves to auto once, and a later choice of 0 is kept.
+    Stored Messages `thinking` overlays are made valid (`_messages_thinking`)."""
+    glob = data.get("global")
+    serve = glob.get("serve") if isinstance(glob, dict) else None
+    if isinstance(serve, dict) and str(serve.get("max_cache_disk", "")).strip() == "0":
+        serve["max_cache_disk"] = "auto"
+        log.info("settings.json v3: SSD cache set to auto")
+    if isinstance(glob, dict):
+        _adopt_extra_flags(glob)
+    models = data.get("models")
+    for entry in models.values() if isinstance(models, dict) else ():
+        if not isinstance(entry, dict):
+            continue
+        _messages_thinking(entry.get("sampling_defaults"))
+        profiles = entry.get("profiles")
+        for overlay in profiles.values() if isinstance(profiles, dict) else ():
+            _messages_thinking(overlay)
+    data["version"] = 3
+    return data
+
+
+MIGRATIONS: dict[int, Migration] = {0: _v0_to_v1, 1: _v1_to_v2, 2: _v2_to_v3}
 
 
 class SettingsError(RuntimeError):

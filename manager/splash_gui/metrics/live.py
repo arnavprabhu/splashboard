@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 from ..engine import status as st
 from ..events.alerts import RESTART_ACTION
 from ..schemas import (
+    ActiveRequest,
     CacheMetrics,
     DiskMetrics,
     DraftMetrics,
@@ -48,6 +49,7 @@ _TOTAL_KEYS = (
     "decode_tokens",
     "total_tokens",
     "reused_tokens",
+    "deduplicated_kv_tokens",
     "requests_submitted",
     "requests_completed",
     "requests_failed",
@@ -72,7 +74,15 @@ def flatten(sample: LiveMetrics) -> dict[str, float | None]:
                 continue
             out[f"{group}.{key}"] = _number(value)
     disk = data.get("disk") or {}
-    for key in ("read_bps", "written_bps", "used_bytes", "capacity_bytes"):
+    for key in (
+        "read_bps",
+        "written_bps",
+        "used_bytes",
+        "capacity_bytes",
+        "limit_bytes",
+        "volume_available_bytes",
+        "write_budget_bytes",
+    ):
         out[f"disk.{key}"] = _number(disk.get(key))
     for stage, values in (data.get("stages") or {}).items():
         out[f"stages.{stage}.p50_ms"] = _number(values.get("p50_ms"))
@@ -84,6 +94,34 @@ def _number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
     return float(value) if math.isfinite(value) else None
+
+
+_WRITE_GATES = ("no", "budget", "closed")
+
+
+def active_requests(status: dict[str, Any]) -> list[ActiveRequest]:
+    """`/status.active_requests`: each request the engine holds, ordered by id
+    (Status.cpp). Entries without an integer id are skipped."""
+    raw = status.get("active_requests")
+    if not isinstance(raw, list):
+        return []
+    out: list[ActiveRequest] = []
+    for entry in raw:
+        if not isinstance(entry, dict) or st.integer(entry, "id") is None:
+            continue
+        out.append(
+            ActiveRequest(
+                id=st.integer(entry, "id") or 0,
+                phase=st.text(entry, "phase") or "unknown",
+                priority=st.text(entry, "priority"),
+                prompt_tokens=st.integer(entry, "prompt_tokens") or 0,
+                prompt_processed=st.integer(entry, "prompt_processed") or 0,
+                generated_tokens=st.integer(entry, "generated_tokens") or 0,
+                max_new_tokens=st.integer(entry, "max_new_tokens"),
+                age_ms=st.num(entry, "age_ms"),
+            )
+        )
+    return out
 
 
 class MetricsHub:
@@ -100,6 +138,7 @@ class MetricsHub:
         self._failure_counts: dict[str, float] = {}
         self._refused: float | None = None
         self._pressure: str | None = None
+        self._gate: str | None = None
 
     async def start(self) -> None:
         sup = self.state.supervisor
@@ -138,11 +177,13 @@ class MetricsHub:
             self._prev, self._prev_t = None, None
             self._failure_counts.clear()
             self._refused = None
+            self._gate = None
             for condition in (
                 "engine_recovering",
                 "engine_failed",
                 "memory_critical",
                 "memory_warning",
+                "disk_write_budget",
             ):
                 self.state.alerts.clear_condition(condition)
         if current == "starting":
@@ -179,6 +220,7 @@ class MetricsHub:
             if prompt is not None or decode is not None
             else None,
             "reused_tokens": reused,
+            "deduplicated_kv_tokens": st.integer(status, "cache.deduplicated_kv_tokens"),
             "requests_submitted": st.integer(status, "requests.submitted"),
             "requests_completed": st.integer(status, "requests.completed"),
             "requests_failed": st.integer(status, "requests.failed"),
@@ -206,6 +248,9 @@ class MetricsHub:
                     count=int(count) if isinstance(count, int | float) else 0,
                 )
         pressure = st.text(status, "memory_governor.system_pressure")
+        capacity = st.integer(status, "disk.capacity_bytes")
+        limit = st.integer(status, "disk.limit_bytes")
+        gate = st.text(status, "disk.writes_gated")
         return LiveMetrics(
             t=now,
             engine_state=state,  # type: ignore[arg-type]
@@ -252,6 +297,11 @@ class MetricsHub:
                 headroom_bytes=st.integer(status, "memory_governor.headroom_bytes"),
                 host_available_bytes=st.integer(status, "memory_governor.host_available_bytes"),
                 host_reserve_bytes=st.integer(status, "memory_governor.host_reserve_bytes"),
+                host_spare_bytes=st.integer(status, "memory_governor.host_spare_bytes"),
+                host_spare_reserve_bytes=st.integer(
+                    status, "memory_governor.host_spare_reserve_bytes"
+                ),
+                host_headroom_bytes=st.integer(status, "memory_governor.host_headroom_bytes"),
                 system_pressure=pressure if pressure in ("normal", "warning", "critical") else None,  # type: ignore[arg-type]
                 growth_allowed=st.boolean(status, "memory_governor.growth_allowed"),
             ),
@@ -262,13 +312,20 @@ class MetricsHub:
                 pages_allocated=st.integer(status, "kv.pages_allocated"),
             ),
             disk=DiskMetrics(
-                enabled=(st.num(status, "disk.capacity_bytes") or 0) > 0,
+                # The tier is on whenever it has a quota; `--max-cache-disk 0` (or a
+                # start that turned it off) leaves both at 0.
+                enabled=(capacity or 0) > 0 or (limit or 0) > 0,
                 persistent=bool(st.boolean(status, "disk.persistent")),
                 read_bps=delta("disk.read_bytes"),
                 written_bps=delta("disk.written_bytes"),
                 used_bytes=st.integer(status, "disk.used_bytes"),
-                capacity_bytes=st.integer(status, "disk.capacity_bytes"),
+                capacity_bytes=capacity,
+                limit_bytes=limit,
+                volume_available_bytes=st.integer(status, "disk.volume_available_bytes"),
+                writes_gated=gate if gate in _WRITE_GATES else None,  # type: ignore[arg-type]
+                write_budget_bytes=st.integer(status, "disk.write_budget_bytes"),
             ),
+            active_requests=active_requests(status),
             stages=stages,
         )
 
@@ -433,6 +490,7 @@ class MetricsHub:
         if restarted:
             self._failure_counts.clear()
             self._refused = None
+            self._gate = None
         failures = {path: st.num(status, path) for path in _DISK_FAILURES}
         grew = any(
             value is not None
@@ -451,12 +509,42 @@ class MetricsHub:
                 "offload_failures increased).",
                 source="status",
             )
+        # `disk.writes_gated` turns "closed" once a cache file stopped taking writes:
+        # the SSD cache keeps what it holds and writes nothing more this session. A session
+        # whose first poll already reports it closed alerts too; the reset on restart and stop
+        # keeps it to once per session.
+        gate = st.text(status, "disk.writes_gated")
+        if gate == "closed" and self._gate != "closed":
+            alerts.raise_alert(
+                "disk_tier_failures",
+                "SSD cache stopped taking writes for this session",
+                "A cache file refused a write; Splash keeps what the SSD cache holds and "
+                "writes nothing more until the engine restarts.",
+                source="status",
+            )
+        # "budget": the daily write budget (`--max-cache-disk-writes`) is spent until it
+        # refills; "no" again clears the banner, and so does "closed", since a closed cache
+        # writes nothing even after the budget refills.
+        if gate == "budget" and self._gate != "budget":
+            alerts.raise_alert(
+                "disk_write_budget",
+                "Daily SSD write budget reached",
+                "Until it refills, states a later request could reuse and suspended requests' "
+                "progress checkpoints are dropped instead of written; the state a conversation "
+                "resumes from is still written.",
+                source="status",
+            )
+        elif gate in ("no", "closed"):
+            alerts.clear_condition("disk_write_budget")
+        if gate is not None:
+            self._gate = gate
         refused = st.num(status, "disk.write_behind.refused")
         if refused is not None and self._refused is not None and refused > self._refused:
             alerts.raise_alert(
                 "write_behind_refused",
-                "Persistent cache paused: hourly write cap (128 GiB/h) reached",
-                "",
+                "Persistent cache skipped a restore point",
+                "It was larger than the SSD cache may hold now, or the cache had stopped "
+                "taking writes.",
                 source="status",
             )
         if refused is not None:

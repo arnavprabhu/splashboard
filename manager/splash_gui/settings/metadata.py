@@ -310,6 +310,20 @@ FIELDS: tuple[FieldMeta, ...] = (
         warnings=("bf16: ≈2× KV memory, can be slower at long context.",),
     ),
     _serve(
+        "serve.state_format",
+        "State format",
+        "FP32, or BF16: half the memory for each recurrent state, so memory and the SSD "
+        "cache hold about twice as many cached conversations; results differ in the last "
+        "bits.",
+        "memory_context",
+        "select",
+        "--state-format",
+        scope="GM",
+        advanced=True,
+        choices=("fp32", "bf16"),
+        warnings=("bf16: results differ from fp32 in the last bits.",),
+    ),
+    _serve(
         "serve.max_memory",
         "Memory ceiling",
         "Ceiling on Metal allocations (not total process memory). Auto or a size such as 28G.",
@@ -335,7 +349,8 @@ FIELDS: tuple[FieldMeta, ...] = (
         # The two idle timers, told apart wherever metadata is shown.
         "After this long without a request, Splash frees the model's weights but keeps "
         "its process running; the next request restores them. 10 minutes by default. "
-        "Seconds or 90s, 30m, 2h; off keeps them. Lifecycle → Idle unload is the other "
+        "Seconds or 90s, 30m, 2h; off keeps them (Release memory on the Status page still "
+        "frees them). Lifecycle → Idle unload is the other "
         "timer: it stops the process.",
         "memory_context",
         "text",
@@ -345,18 +360,30 @@ FIELDS: tuple[FieldMeta, ...] = (
     _serve(
         "serve.max_cache_disk",
         "SSD cache",
-        "SSD cache for KV and states. 0 turns it off.",
+        "SSD cache for KV pages and states. Auto follows the disk's free space up to "
+        "32 GiB; 0 turns it off.",
         "cache",
         "size",
         "--max-cache-disk",
         warnings=(
-            "Below about one state (64 MiB for 35B, 153 MiB for 27B) Splash disables the tier.",
+            "Below about one state (64 MiB for 35B, 153 MiB for 27B) Splash leaves the cache off.",
         ),
+    ),
+    _serve(
+        "serve.max_cache_disk_writes",
+        "Daily write budget",
+        "The most the SSD cache writes a day, such as 200G, to spare the drive; while it "
+        "is spent, states a later request could reuse are dropped instead of written. "
+        "0 = no limit; a budget needs the SSD cache on.",
+        "cache",
+        "size",
+        "--max-cache-disk-writes",
+        advanced=True,
     ),
     _serve(
         "serve.persistent_cache",
         "Persistent cache",
-        "Keep cache across restarts, upgrades and crashes (requires SSD cache).",
+        "Keep the SSD cache across restarts, upgrades and crashes (needs the SSD cache on, not 0).",
         "cache",
         "toggle",
         "--persistent-cache",
@@ -443,6 +470,32 @@ FIELDS: tuple[FieldMeta, ...] = (
         scope="GM",
         choices=_EFFORTS,
         env="SPLASH_DEFAULT_REASONING_EFFORT",
+    ),
+    _serve(
+        "serve.thinking_token_budget",
+        "Thinking budget",
+        "The most tokens a request thinks for when it doesn't set its own budget; then "
+        "its thinking closes and it answers. Empty = no cap.",
+        "reasoning_sampling",
+        "number",
+        "--thinking-token-budget",
+        scope="GM",
+        min=0,
+        unit="tokens",
+        env="SPLASH_THINKING_TOKEN_BUDGET",
+    ),
+    _serve(
+        "serve.thinking_end_text",
+        "Thinking end text",
+        "What ends thinking where a budget runs out, such as a sentence that turns to the "
+        "answer; it must end with </think>, and Splash refuses more than 64 tokens when "
+        "the model loads. Empty = </think> alone.",
+        "reasoning_sampling",
+        "text",
+        "--thinking-end-text",
+        scope="GM",
+        advanced=True,
+        env="SPLASH_THINKING_END_TEXT",
     ),
     # Routing
     FieldMeta(
@@ -619,7 +672,8 @@ FIELDS: tuple[FieldMeta, ...] = (
     FieldMeta(
         "notifications.disk_cache_errors",
         "Disk cache errors",
-        "Notify when SSD cache writes fail or the persistent cache pauses at its hourly write cap.",
+        "Notify when SSD cache writes fail or stop, or the persistent cache can't keep a "
+        "restore point.",
         "notifications",
         "toggle",
     ),

@@ -5,7 +5,7 @@
  * table; Splash's are verbatim here because they are engine text.
  */
 
-import { parseMaxContext, parseMaxCacheDisk, parseMaxMemory, parseRequestSize } from '../../lib/size';
+import { parseMaxContext, parseMaxCacheDisk, parseMaxCacheDiskWrites, parseMaxMemory, parseRequestSize } from '../../lib/size';
 import { t } from '../../strings/settings';
 
 /** The bits of a schema field the validators need. */
@@ -17,7 +17,7 @@ export interface FieldRule {
   label?: string;
 }
 
-// Splash's own messages (splash/server/serve_options.py, 1.3.0), shown verbatim.
+// Splash's own messages (splash/server/serve_options.py, 1.3.2), shown verbatim.
 export const SPLASH_MESSAGES = {
   decodeShare: 'must be a nonnegative number such as 0.5',
   imagePixels: (min: number, max: number) => `must be between ${min} and ${max} pixels`,
@@ -30,6 +30,12 @@ export const SPLASH_MESSAGES = {
   originShape: (v: string) =>
     `${v} is not an origin: expected a scheme and a host, as in tauri://localhost or http://localhost:3000, or '*' for every origin`,
   apiKey: 'API key must contain only visible ASCII characters',
+  // server/backend.py thinking_end_tokens; the manager checks only the ending, the engine the tokens.
+  thinkingEndText: '--thinking-end-text must end with </think> and hold no other special token',
+  thinkingEndTextNul: 'must not contain a NUL character',
+  thinkingTokenBudget: 'must be a nonnegative integer',
+  // server/api_shapes.py `_anthropic_thinking_budget`.
+  messagesThinkingBudget: 'thinking.budget_tokens must be an integer of at least 1024',
 } as const;
 
 const isBlank = (v: unknown) => v === null || v === undefined || (typeof v === 'string' && v.trim() === '');
@@ -100,6 +106,18 @@ export function fieldError(rule: FieldRule, value: unknown): string | null {
       const r = parseMaxCacheDisk(s);
       return r.ok ? null : r.error;
     }
+    case 'serve.max_cache_disk_writes': {
+      const r = parseMaxCacheDiskWrites(s);
+      return r.ok ? null : r.error;
+    }
+    case 'serve.thinking_token_budget':
+      // Unset leaves Splash's default, no cap.
+      return value === null || value === undefined || (typeof value === 'number' && Number.isInteger(value) && value >= 0) ? null : SPLASH_MESSAGES.thinkingTokenBudget;
+    case 'serve.thinking_end_text':
+      // The text goes on argv, which cannot hold a NUL; the engine checks its tokens when it starts.
+      if (isBlank(value)) return null;
+      if (s.includes('\u0000')) return SPLASH_MESSAGES.thinkingEndTextNul;
+      return s.endsWith('</think>') ? null : SPLASH_MESSAGES.thinkingEndText;
     case 'serve.max_request_size': {
       const r = parseRequestSize(s);
       return r.ok ? null : r.error;
@@ -185,15 +203,24 @@ export function overlayFieldError(key: string, label: string, value: unknown): s
     case 'max_tokens':
       return num !== null && Number.isInteger(num) && num >= 1 ? null : t('settings.overlay.whole_min', { label, min: 1 });
     case 'seed':
-      return num !== null && Number.isInteger(num) && num >= 0 ? null : t('settings.overlay.whole_min', { label, min: 0 });
+      // A 64-bit integer: -1 asks for a random seed.
+      return num !== null && Number.isInteger(num) && num >= -(2 ** 63) && num < 2 ** 64 ? null : t('settings.overlay.seed', { label });
+    case 'thinking_token_budget':
+      return num !== null && Number.isInteger(num) && num >= -1 ? null : t('settings.overlay.thinking_budget', { label });
     case 'stop': {
       const list = Array.isArray(value) ? value : typeof value === 'string' ? [value] : null;
       if (!list || list.some((s) => typeof s !== 'string' || s === '')) return t('settings.overlay.stop_empty');
       return list.length <= 4 ? null : t('settings.overlay.stop_max');
     }
     case 'chat_template_kwargs':
-    case 'thinking':
       return value !== null && typeof value === 'object' && !Array.isArray(value) ? null : t('settings.overlay.json_object', { label });
+    case 'thinking': {
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) return t('settings.overlay.json_object', { label });
+      // Enabled thinking needs a budget of at least 1024, or every Messages request would fail.
+      const { type, budget_tokens: budget } = value as Record<string, unknown>;
+      if (type === 'enabled' && !(typeof budget === 'number' && Number.isInteger(budget) && budget >= 1024)) return SPLASH_MESSAGES.messagesThinkingBudget;
+      return null;
+    }
     default:
       return null;
   }

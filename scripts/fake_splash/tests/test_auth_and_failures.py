@@ -214,8 +214,12 @@ def test_request_log_lines(make_engine):
         )[0]
         == 200
     )
+    started = fake.wait_for_line(r"Started · input \d", stream="stdout")
+    assert re.search(r"Started · input \d+ · cached \d+ · effort absent · thinking on$", started)
     done = fake.wait_for_line(r"Done · input \d", stream="stdout")
-    assert re.search(r" · cached \d+ · output \d+ · tools 1·[0-9a-f]{8} · TTFT \d+\.\ds · \d+\.\d tok/s$", done)
+    assert re.search(
+        r" · cached \d+ · output \d+ · tools 1·[0-9a-f]{8} · TTFT \d+\.\ds · \d+\.\d tok/s · \d+\.\d tok/cycle$", done
+    )
     connection = http.client.HTTPConnection("127.0.0.1", fake.port, timeout=10)
     connection.request(
         "POST",
@@ -227,7 +231,7 @@ def test_request_log_lines(make_engine):
     response.read1(64)
     response.close()
     connection.close()
-    fake.wait_for_line(r"Cancelled · input \d+ · cached \d+ · output \d+$", stream="stdout")
+    fake.wait_for_line(r"Cancelled · input \d+ · cached \d+ · output \d+", stream="stdout")
     fake.set_mode("capacity_exhausted")
     assert fake.json("POST", "/v1/chat/completions", chat_body())[0] == 400
     fake.wait_for_line(r"^\d\d:\d\d:\d\d Error · capacity_exhausted$", stream="stderr")

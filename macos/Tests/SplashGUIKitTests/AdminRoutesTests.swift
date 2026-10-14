@@ -28,7 +28,8 @@ struct AdminRoutesTests {
         let kinds = [
             "download_done", "download_failed", "engine_failed", "crash_loop", "update_available",
             "unclean_integration_shutdown", "capacity_exhausted", "resource_timeout", "queue_full",
-            "memory_critical", "engine_recovering", "disk_tier_failures", "write_behind_refused", "benchmark_done",
+            "memory_critical", "engine_recovering", "disk_tier_failures", "write_behind_refused", "disk_write_budget",
+            "benchmark_done",
         ]
         for kind in kinds {
             let path = NotificationMapper.defaultPath(for: kind)

@@ -53,8 +53,14 @@ const START = /^=+ (?:Splashboard|Splash GUI): engine session started(?: · (.*)
 const STOP = /^=+ (?:Splashboard|Splash GUI): engine session ended(?: · (.*))?$/;
 /** First match wins, applied to engine lines only. */
 const ENGINE_ERROR = /engine_failed|Traceback|fatal|metal_failure|crash trace/i;
-const ENGINE_REQ = /^(Done|Cancelled) · /;
-const ENGINE_WARN = /recovering|may not hold|Hub unreachable|cannot be installed|exceeds the|warning|refused|disabled/i;
+/** Splash's request log: `Started · …` when the engine admits a request, then `Done · …` or
+ * `Cancelled · …` (server/diagnostics.py print_request). */
+const ENGINE_REQ = /^(Started|Done|Cancelled) · /;
+/** "SSD cache off: <reason>; …" and "Persistent cache off: …" say why a cache the settings
+ * asked for is not there this start (runtime/engine/RuntimeResources.mm). A cache file that
+ * "takes no more writes" and freed slots that "cannot return their blocks" are the SSD cache's
+ * write failures (runtime/model/SlotFile.cpp). */
+const ENGINE_WARN = /recovering|Hub unreachable|cannot be installed|exceeds the|warning|refused|disabled|takes no more writes|cannot return their blocks|^(SSD|Persistent) cache off: /i;
 
 export function stripAnsi(text: string): string {
   return text.replace(ANSI, '');
@@ -89,12 +95,13 @@ export function parseDivider(text: string, command?: string | null): Divider | n
 }
 
 export function tagFor(text: string): EventTag | null {
-  if (/^Weights (loaded|restored) in /.test(text)) return 'load';
+  if (/^Weights (loaded|restored) in /.test(text) || /^Weights released (after|on request)/.test(text)) return 'load';
   if (/^Ready · /.test(text)) return 'ready';
   if (/^Chat template · /.test(text)) return 'template';
   if (/^(physical memory|KV capacity of one request):/i.test(text)) return 'budget';
   if (/crash trace/i.test(text)) return 'trace';
-  if (/--max-cache-disk/.test(text)) return 'ssd';
+  if (/^(SSD cache( off| KV storage)?|Persistent cache (off|disabled))\b/.test(text) || /--max-cache-disk/.test(text)) return 'ssd';
+  if (/^(An SSD cache file takes no more writes|Freed cache slots cannot return their blocks)/.test(text)) return 'ssd';
   return null;
 }
 

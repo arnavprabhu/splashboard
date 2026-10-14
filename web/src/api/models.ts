@@ -5,6 +5,7 @@
 import type { components } from './schema';
 
 export type Schemas = components['schemas'];
+export type ActiveRequest = Schemas['ActiveRequest'];
 export type AdvancedSettings = Schemas['AdvancedSettings'];
 export type Alert = Schemas['Alert'];
 export type AlertCleared = Schemas['AlertCleared'];
@@ -124,6 +125,7 @@ export type McpTool = Schemas['McpTool'];
 export type McpToolList = Schemas['McpToolList'];
 export type MemoryBudgetRow = Schemas['MemoryBudgetRow'];
 export type MemoryMetrics = Schemas['MemoryMetrics'];
+export type MemoryReleased = Schemas['MemoryReleased'];
 export type MenubarSettings = Schemas['MenubarSettings'];
 export type MetricsSeries = Schemas['MetricsSeries'];
 export type ModelCard = Schemas['ModelCard'];

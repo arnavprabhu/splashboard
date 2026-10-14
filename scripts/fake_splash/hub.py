@@ -68,6 +68,12 @@ LEGACY = "incoai/Qwen3.6-35B-A3B-Splash"
 # The two repositories the acceptance checklist searches for.
 ACCEPT_8BIT = "mlx-community/Qwen3.8-27B-8bit"
 ACCEPT_GGUF = "unsloth/Qwen3.8-27B-GGUF"
+# NVFP4 safetensors checkpoints Splash 1.3.2 loads: NVIDIA's Model Optimizer one
+# (in the curated catalog) and unsloth's compressed-tensors one. The real Hub tags
+# them `modelopt` and `compressed-tensors`, not `mlx`.
+MODELOPT_27B = "nvidia/Qwen3.8-27B-NVFP4"
+COMPRESSED_35B = "unsloth/Qwen3.6-35B-A3B-NVFP4"
+CHECKPOINT_TAGS = {MODELOPT_27B: "modelopt", COMPRESSED_35B: "compressed-tensors"}
 
 _ROUTE_LOCK = threading.Lock()
 
@@ -106,13 +112,36 @@ def repository(repo_id: str, revision: str | None = None) -> tuple[models.Remote
     if bits := re.search(r"(\d)bit", repo_id):
         # 8-bit loads; 7-bit is one Splash's model-check refuses.
         config["quantization"]["bits"] = int(bits.group(1))
+    if repo_id == MODELOPT_27B:
+        del config["quantization"]
+        config["quantization_config"] = {
+            "quant_method": "modelopt",
+            "quant_algo": "MIXED_PRECISION",
+            "quantized_layers": {
+                "model.language_model.layers.0.linear_attn.in_proj_qkv": {"quant_algo": "FP8"},
+                "model.language_model.layers.0.mlp.down_proj": {"quant_algo": "NVFP4", "group_size": 16},
+            },
+        }
+    elif repo_id == COMPRESSED_35B:
+        del config["quantization"]
+        config["quantization_config"] = {
+            "quant_method": "compressed-tensors",
+            "format": "nvfp4-pack-quantized",
+            "config_groups": {
+                "group_0": {
+                    "targets": ["Linear"],
+                    "weights": {"type": "float", "num_bits": 4, "strategy": "tensor_group", "group_size": 16},
+                }
+            },
+        }
     return repo, files, config
 
 
 # The real unsloth/Qwen3.8-27B-GGUF lists 25 root GGUFs (2026-10-07). Its fixture
 # lists some of them, sized in proportion to UD-Q4_K_M (the installer's own file),
-# so the recommended pick, the refusals (UD-Q8_K_XL, the imatrix file) and the order the
-# compatibility check reports them in can be tested. Only UD-Q4_K_M downloads.
+# so the recommended pick, the refusals (the whole-BF16 model and the imatrix file;
+# UD-Q8_K_XL loads since Splash 1.3.2) and the order the compatibility check reports
+# them in can be tested. Only UD-Q4_K_M downloads.
 MORE_VARIANTS = {
     "UD-IQ2_XXS": 7_266_070_528,
     "UD-Q2_K_XL": 9_828_981_664,
@@ -120,6 +149,7 @@ MORE_VARIANTS = {
     "UD-Q4_K_XL": 17_559_178_144,
     "Q8_0": 29_047_086_048,
     "UD-Q8_K_XL": 31_457_991_680,
+    "BF16": 53_800_000_000,
 }
 Q4_K_M_BYTES = 16_464_440_224
 
@@ -236,10 +266,11 @@ class Handler(BaseHTTPRequestHandler):
     @staticmethod
     def _search_entry(repo_id: str) -> dict:
         kind = "gguf" if "GGUF" in repo_id or repo_id.endswith("-gguf") else "mlx"
+        kinds = ["safetensors", CHECKPOINT_TAGS[repo_id]] if repo_id in CHECKPOINT_TAGS else [kind]
         return {
             "id": repo_id,
             "modelId": repo_id,
-            "tags": [kind, "license:apache-2.0"],
+            "tags": [*kinds, "license:apache-2.0"],
             "downloads": 1000,
             "likes": 10,
             "lastModified": "2026-10-01T00:00:00.000Z",
@@ -433,6 +464,8 @@ def _catalog() -> list[str]:
         LEGACY,
         ACCEPT_8BIT,
         ACCEPT_GGUF,
+        MODELOPT_27B,
+        COMPRESSED_35B,
     ]
 
 

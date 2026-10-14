@@ -70,6 +70,7 @@ export const downloaderStrings = {
   "downloader.format": "Format",
   "downloader.format.all": "All",
   "downloader.format.mlx": "MLX",
+  "downloader.format.checkpoint": "NVFP4 / FP8",
   "downloader.format.gguf": "GGUF",
   "downloader.results.one": "{n} result",
   "downloader.results.other": "{n} results",

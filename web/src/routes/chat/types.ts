@@ -35,6 +35,17 @@ export interface Timings {
   predicted_ms?: number;
   predicted_per_second?: number;
   cache_n?: number;
+  /** Present when the request drafted: the tokens its draft proposed and those accepted. */
+  draft_n?: number;
+  draft_n_accepted?: number;
+}
+
+/** `metrics.speculation` on the usage chunk (splash/server/metrics.py metrics_dict). */
+export interface Speculation {
+  drafted_tokens?: number;
+  accepted_draft_tokens?: number;
+  /** Decode cycles in which the draft proposed tokens. */
+  cycles?: number;
 }
 
 /** `prompt_progress` on empty-delta chunks (splash/server/backend.py). */
@@ -53,6 +64,7 @@ export type ToolSource = 'manual' | 'mcp' | 'skipped' | 'unknown';
 export interface MessageMeta {
   usage?: Usage | null;
   timings?: Timings | null;
+  speculation?: Speculation | null;
   ttft_ms?: number | null;
   finish_reason?: FinishReason | null;
   profile?: string | null;

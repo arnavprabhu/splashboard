@@ -44,6 +44,8 @@ export function sessionStats(s: LiveMetrics | null, raw: unknown, narrow = false
   const tt = s?.totals;
   const kvHit = rawNum(raw, 'cache.kv_hit_tokens');
   const diskHit = rawNum(raw, 'cache.kv_disk_hit_tokens');
+  // Tokens whose KV a request read from blocks another request computed (Splash 1.3.2+).
+  const dedup = tt?.deduplicated_kv_tokens ?? null;
   const wall = rawNum(raw, 'metrics.prefill_wall_ms');
   const unit = t('status.numbers.unit_tps');
   // Splash reports 0 for TTFT and acceptance before anything ran: that is "no data" (—), not 0 ms / 0%.
@@ -62,7 +64,15 @@ export function sessionStats(s: LiveMetrics | null, raw: unknown, narrow = false
       label: t('status.numbers.cached'),
       value: formatCompact(tt?.reused_tokens),
       title: formatCount(tt?.reused_tokens),
-      sub: kvHit !== null || diskHit !== null ? t('status.numbers.kv_disk', { kv: formatCompact(kvHit), disk: formatCompact(diskHit) }) : undefined,
+      sub:
+        kvHit !== null || diskHit !== null
+          ? [
+              t('status.numbers.kv_disk', { kv: formatCompact(kvHit), disk: formatCompact(diskHit) }),
+              dedup !== null ? t('status.numbers.dedup', { v: formatCompact(dedup) }) : null,
+            ]
+              .filter(Boolean)
+              .join(' · ')
+          : undefined,
     },
     {
       key: 'efficiency',

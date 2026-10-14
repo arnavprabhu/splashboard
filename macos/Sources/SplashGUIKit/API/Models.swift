@@ -107,12 +107,14 @@ public struct EngineView: Sendable, Equatable {
     public var engineSource: String?
     /// Set while `starting.installing` downloads files.
     public var install: EngineInstall?
+    /// A request found the weights released and the engine is bringing them back.
+    public var weightsRestoring: Bool
 
     public init(
         state: EngineState, phase: EnginePhase? = nil, model: String? = nil, uptimeS: Double? = nil,
         requestsInFlight: Int = 0, queued: Int = 0, transportError: String? = nil, restartAttempt: Int = 0,
         error: EngineErrorInfo? = nil, engineVersion: String? = nil, engineFound: Bool? = nil,
-        engineSource: String? = nil, install: EngineInstall? = nil
+        engineSource: String? = nil, install: EngineInstall? = nil, weightsRestoring: Bool = false
     ) {
         self.state = state
         self.phase = phase
@@ -127,6 +129,7 @@ public struct EngineView: Sendable, Equatable {
         self.engineFound = engineFound
         self.engineSource = engineSource
         self.install = install
+        self.weightsRestoring = weightsRestoring
     }
 
     public init(json: JSONValue) {
@@ -143,6 +146,7 @@ public struct EngineView: Sendable, Equatable {
         engineFound = json["engine"]?["found"]?.bool
         engineSource = json["engine"]?["source"]?.string
         install = phase == .installing ? EngineInstall(json: json["install"]) : nil
+        weightsRestoring = json["weights_restoring"]?.bool ?? false
     }
 
     /// Splash is downloading files for the model it is starting (a Load or Restart interrupts it).
@@ -206,13 +210,20 @@ public struct LiveMetrics: Sendable, Equatable {
 public struct InstalledModel: Sendable, Equatable, Identifiable {
     public var id: String
     public var format: String?
+    /// A Model Optimizer or compressed-tensors checkpoint that Splash loads as an MLX
+    /// (safetensors) target, labelled such as "NVFP4 · Model Optimizer"; nil otherwise.
+    public var checkpoint: String?
     public var sizeBytes: Int?
     public var status: String?
     public var progress: Double?
 
-    public init(id: String, format: String? = nil, sizeBytes: Int? = nil, status: String? = "ready") {
+    public init(
+        id: String, format: String? = nil, checkpoint: String? = nil, sizeBytes: Int? = nil,
+        status: String? = "ready"
+    ) {
         self.id = id
         self.format = format
+        self.checkpoint = checkpoint
         self.sizeBytes = sizeBytes
         self.status = status
     }
@@ -221,6 +232,7 @@ public struct InstalledModel: Sendable, Equatable, Identifiable {
         guard let id = json["id"]?.string, !id.isEmpty else { return nil }
         self.id = id
         format = json["format"]?.string
+        checkpoint = json["checkpoint"]?.string
         sizeBytes = json["size_bytes"]?.int
         status = json["status"]?.string
         progress = json["progress"]?.double
@@ -235,9 +247,12 @@ public struct InstalledModel: Sendable, Equatable, Identifiable {
         }
     }
 
+    /// The format's short name; a quantized checkpoint shows its kind ("NVFP4", "FP8") instead of MLX.
     public var formatLabel: String {
         switch format {
-        case "mlx": return "MLX"
+        case "mlx":
+            if let kind = checkpoint?.components(separatedBy: " · ").first, !kind.isEmpty { return kind }
+            return "MLX"
         case "gguf": return "GGUF"
         case "legacy": return "Splash package"
         case let other?: return other.uppercased()

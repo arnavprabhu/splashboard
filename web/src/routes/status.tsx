@@ -122,7 +122,7 @@ export default function StatusPage() {
     <>
       <SubNav items={STATUS_TABS} label={t("status.tabs")} exact />
       <StatusHeader engine={e} models={models} modelsFailed={!!installed.error} persistentCache={persistent} />
-      <StateBanners engine={e} persistentCache={persistent} />
+      <StateBanners engine={e} />
       {e && group === "starting" && <StartupBand engine={e} />}
       {e && failed ? (
         <FailureBand engine={e} error={fullError} family={family} onDetails={() => setFitOpen(true)} />

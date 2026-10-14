@@ -145,7 +145,7 @@ test.describe('shell', () => {
   test('alerts: most severe first, Dismiss only when allowed, actions call the manager', async ({ page }) => {
     const calls = await mockManager(page, {
       alerts: [
-        { id: 'write_behind_refused', severity: 'info', message: 'Persistent cache paused', actions: [] },
+        { id: 'write_behind_refused', severity: 'info', message: 'Persistent cache skipped a restore point', actions: [] },
         {
           id: 'engine_failed',
           severity: 'critical',

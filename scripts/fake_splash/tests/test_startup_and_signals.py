@@ -29,7 +29,7 @@ def run_cli(tmp_path, *args, env=None, timeout=30):
 
 def test_version_matches_real_wording(tmp_path):
     result = run_cli(tmp_path, "--version")
-    assert result.returncode == 0 and result.stdout == "Splash 1.3.1\n"
+    assert result.returncode == 0 and result.stdout == "Splash 1.3.2\n"
     if REAL_CLI.exists():
         real = subprocess.run([str(REAL_CLI), "--version"], capture_output=True, text=True, timeout=30)
         assert real.stdout == result.stdout
@@ -51,8 +51,12 @@ def test_serve_help_lists_every_real_flag(tmp_path):
         "--kv-format",
         "--max-memory",
         "--max-cache-disk",
+        "--max-cache-disk-writes",
         "--persistent-cache",
         "--cache-dir",
+        "--state-format",
+        "--thinking-token-budget",
+        "--thinking-end-text",
         "--max-context",
         "--decode-share",
         "--allowed-host",
@@ -73,7 +77,17 @@ def test_serve_help_lists_every_real_flag(tmp_path):
 @pytest.mark.parametrize(
     "args, message",
     [
-        (["--persistent-cache"], "--persistent-cache needs --max-cache-disk"),
+        (
+            ["--persistent-cache", "--max-cache-disk", "0"],
+            "--persistent-cache needs the SSD cache --max-cache-disk 0 turns off",
+        ),
+        (
+            ["--max-cache-disk-writes", "100G", "--max-cache-disk", "0"],
+            "--max-cache-disk-writes needs the SSD cache --max-cache-disk 0 turns off",
+        ),
+        (["--max-cache-disk", "lots"], "use auto, 0 to disable, or a size such as 16G"),
+        (["--state-format", "fp16"], "invalid choice: 'fp16'"),
+        (["--thinking-token-budget", "-1"], "must be a nonnegative integer"),
         (["--max-cache-disk", "5G", "--cache-dir", "/tmp/x"], "--cache-dir needs --persistent-cache"),
         (["--announce-served-name"], "--announce-served-name needs --served-model-name"),
         (["--max-context", "300K"], "must be 'auto' or a token count up to 256K, such as 100K"),
@@ -92,8 +106,8 @@ def test_bad_model_id(tmp_path):
 
 
 def test_startup_lines_in_order(make_engine):
-    fake = make_engine(env={"FAKE_SPLASH_DISK_SUGGESTION": "1"})
-    fake.wait_for_line("may not hold a", stream="stderr")
+    fake = make_engine()
+    fake.wait_for_line("SSD cache: up to ", stream="stderr")
     out = fake.stdout
     assert out[0].startswith("Selected Qwen3.6-35B-A3B-UD-Q4_K_M.gguf from unsloth/Qwen3.6-35B-A3B-GGUF.")
     assert any(
@@ -109,12 +123,14 @@ def test_startup_lines_in_order(make_engine):
     err = fake.stderr
     assert re.match(TS + r"Weights loaded in \d+\.\d\d s\.$", err[0])
     assert re.match(TS + r"Kernel policy for GPU family \d+ with \d+ cores\.$", err[1])
+    # RuntimeResources.mm reportDiskTier (1.3.2): the automatic SSD cache, on by default.
     assert re.match(
-        TS + r"The \d+ MiB this Mac had available at startup may not hold a 262144-token request; one "
-        r"that runs out of memory is suspended and replays its prompt\. --max-cache-disk SIZE keeps "
-        r"its progress and cached prefixes on SSD\.$",
+        TS + r"SSD cache: up to 32\.0 GiB of temporary files in \S+ \(its automatic quota, while its volume has "
+        r"room beyond the 10\.0 GiB it keeps free\); KV pages of 324 KiB and states of 96 MiB, a state's write "
+        r"staging through 96 MiB of the memory plan; --max-cache-disk 0 turns it off\.$",
         err[2],
     )
+    assert not any("may not hold" in line for line in err)
 
 
 def test_second_start_reports_installed_and_language_only(tmp_path, make_engine):
@@ -288,7 +304,9 @@ def test_persistent_cache_flush_and_take_back(tmp_path, make_engine):
     cache = tmp_path / "cache"
     args = ["--no-webui", "--max-cache-disk", "1G", "--persistent-cache", "--cache-dir", str(cache)]
     first = make_engine(base=tmp_path, args=args, env={"FAKE_SPLASH_FLUSH_SECONDS": "0.3"})
-    first.wait_for_line(r"Persistent cache tier: 1024 MiB for KV pages of ", stream="stderr")
+    first.wait_for_line(
+        r"SSD cache: up to 1\.0 GiB of persistent files in .*cache/[0-9a-f]{32} \(its quota", stream="stderr"
+    )
     first.wait_for_line(
         r"Persistent cache .*: took back 0 restore points over 0 KV blocks \(0 MiB\); left 0 copies behind\.$"
     )
@@ -323,7 +341,7 @@ def test_cache_dir_in_use_by_another_process(tmp_path, make_engine):
     make_engine(base=tmp_path / "a", args=args)
     second = make_engine(base=tmp_path / "b", args=args)
     second.wait_for_line(r"is in use by another process; this one keeps a temporary cache\.$")
-    second.wait_for_line(r"Cache disk tier: 1024 MiB")
+    second.wait_for_line(r"SSD cache: up to 1\.0 GiB of temporary files in ")
     assert second.json("GET", "/status")[1]["disk"]["persistent"] is False
 
 
@@ -400,6 +418,7 @@ def test_copied_engine_modules_are_verbatim():
         "json_codec",
         "lru",
         "diagnostics",
+        "protocol",
     ):
         assert (pkg / "server" / f"{name}.py").read_text() == (REAL_SPLASH / "server" / f"{name}.py").read_text(), name
     for name in ("families", "clients"):

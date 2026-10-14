@@ -132,7 +132,8 @@ export function pythonOpenAiSnippet(input: SnippetInput): string {
         out.push(`body = ${toPython(body ?? {})}`, '');
         out.push(`result = client.post(${pyStr(rel)}, body=body, cast_to=object)`);
       } else {
-        out.push(`result = client.${endpoint.method === 'DELETE' ? 'delete' : 'get'}(${pyStr(rel)}, cast_to=object)`);
+        const verb = endpoint.method === 'DELETE' ? 'delete' : endpoint.method === 'POST' ? 'post' : 'get';
+        out.push(`result = client.${verb}(${pyStr(rel)}, cast_to=object)`);
       }
       out.push('print(result)');
     }

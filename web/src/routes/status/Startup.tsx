@@ -2,26 +2,12 @@ import { useEffect, useState } from 'preact/hooks';
 import { Link } from 'wouter-preact';
 import type { EngineSummary } from '../../api/types';
 import { Banner } from '../../components/Banner';
-import { Button } from '../../components/Button';
 import { Install } from '../../components/Install';
 import { LogPane } from '../../components/LogPane';
 import { installOf } from '../../lib/engine-install';
 import { Section } from '../../components/Section';
-import { toast, toastError } from '../../components/Toast';
-import { formatBytes, formatCount } from '../../lib/format';
 import { t } from '../../strings/status';
-import { runEngineCall } from './actions';
-import { savePatch } from './api';
-import { sessionKey } from './Header';
-import { diskNotice, parseDiskSuggestion, ssdCacheSize, viewOf } from './logic';
-
-function readDismissed(key: string): boolean {
-  try {
-    return sessionStorage.getItem(`splash-gui-ssd-dismissed:${key}`) === '1';
-  } catch {
-    return false;
-  }
-}
+import { viewOf } from './logic';
 
 function useCountdown(until: string | null | undefined): number | null {
   const [now, setNow] = useState(() => Date.now());
@@ -35,18 +21,11 @@ function useCountdown(until: string | null | undefined): number | null {
   return Number.isFinite(at) ? Math.max(0, Math.ceil((at - now) / 1000)) : null;
 }
 
-/** Banners under the header: recovering, engine failed, crashed, SSD suggestion. */
-export function StateBanners({ engine: e, persistentCache }: { engine: EngineSummary | null; persistentCache: boolean }) {
+/** Banners under the header: recovering, engine failed, crashed. */
+export function StateBanners({ engine: e }: { engine: EngineSummary | null }) {
   const view = viewOf(e?.view);
   const state = e?.state ?? null;
-  const key = sessionKey(e);
-  const [dismissed, setDismissed] = useState(() => readDismissed(key));
-  const [enabling, setEnabling] = useState(false);
-  useEffect(() => setDismissed(readDismissed(key)), [key]);
   const countdown = useCountdown(state === 'crashed' ? view.restart?.next_retry_at : null);
-  const notice = diskNotice(view.notices);
-  const showDisk = notice && !dismissed && (state === 'ready' || state === 'busy' || state === 'idle_released');
-  const size = ssdCacheSize(persistentCache);
   const out = [];
 
   if (state === 'recovering') {
@@ -87,60 +66,6 @@ export function StateBanners({ engine: e, persistentCache }: { engine: EngineSum
         }
       >
         {countdown !== null ? t('status.banner.crashed_msg', { s: countdown, n }) : t('status.banner.crashed_msg_now', { n })}
-      </Banner>,
-    );
-  }
-  if (showDisk && notice) {
-    const parsed = parseDiskSuggestion(notice.raw ?? notice.message);
-    const enable = async () => {
-      setEnabling(true);
-      try {
-        await savePatch({ 'serve.max_cache_disk': size }, null);
-      } catch (err) {
-        toastError(t('status.banner.ssd_failed'), err);
-        setEnabling(false);
-        return;
-      }
-      toast(t('status.banner.ssd_done', { size }));
-      // runEngineCall reports its own failure.
-      await runEngineCall({ kind: 'restart' }).catch(() => undefined);
-      setEnabling(false);
-    };
-    out.push(
-      <Banner
-        key="ssd"
-        tone="info"
-        title={t('status.banner.ssd_title')}
-        actions={
-          <span class="cluster" style={{ gap: '8px 16px' }}>
-            <Button size="s" loading={enabling} onClick={() => void enable()} data-testid="ssd-enable">
-              {t('status.banner.ssd_action', { size })}
-            </Button>
-            <Link href="/settings/cache#serve.max_cache_disk" class="btn" data-variant="text" data-size="s">
-              {t('status.banner.ssd_settings')}
-            </Link>
-            <Button
-              size="s"
-              variant="text"
-              onClick={() => {
-                try {
-                  sessionStorage.setItem(`splash-gui-ssd-dismissed:${key}`, '1');
-                } catch {
-                  /* per-tab only */
-                }
-                setDismissed(true);
-              }}
-            >
-              {t('status.banner.ssd_dismiss')}
-            </Button>
-          </span>
-        }
-      >
-        {parsed.availableBytes !== null && parsed.tokens !== null ? (
-          t('status.banner.ssd_msg', { avail: formatBytes(parsed.availableBytes), tokens: formatCount(parsed.tokens) })
-        ) : (
-          <code class="mono">{notice.message}</code>
-        )}
       </Banner>,
     );
   }

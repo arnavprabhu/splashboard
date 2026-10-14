@@ -15,6 +15,7 @@ from splash_gui.engine.startup import (
     parse_context,
     strip_stamp,
 )
+from splash_gui.models import catalog, compat
 
 BUDGET = """error: runtime bootstrap failed [resource_assembly]: \
 hard budget cannot fit one lane's state and the KV runway
@@ -149,15 +150,58 @@ def test_errors_are_classified() -> None:
     assert isinstance(refused, ErrorEvent)
     # The plain line leads; the engine's words stay in `raw`.
     assert refused.error.kind == "incompatible"
-    assert refused.error.message == (
-        "Splash runs MLX models quantized as affine 2, 3, 4, 5, 6 or 8 bits "
-        "(groups of 32, 64 or 128) or as mxfp4."
-    )
+    assert refused.error.message == compat.MLX_QUANTIZATION
     assert refused.error.raw == [seven_bit]
     gated_error = StartupParser().feed(gated)[0]
     assert isinstance(gated_error, ErrorEvent)
     assert gated_error.error.message == "This model requires a Hugging Face token"
     assert gated_error.error.suggestions[0].action == "add_hf_token"
+
+
+def test_splash_1_3_2_refusals_are_incompatible() -> None:
+    whole_bf16 = (
+        "error: cannot install a/b-GGUF: this GGUF stores every projection and expert "
+        "unquantized (BF16, F16 or F32): Splash loads quantized GGUFs, not whole-BF16 or F16 "
+        "models; choose a quantized variant of the repository"
+    )
+    model_optimizer = (
+        "error: cannot install nvidia/x: quantization_config is INT4_AWQ; Model Optimizer "
+        "weights load as NVFP4, W4A16_NVFP4 or FP8"
+    )
+    unquantized_head = (
+        "error: cannot install nvidia/x: quantization_config leaves lm_head unquantized; "
+        "Splash loads quantized projections"
+    )
+    for line, message in (
+        (whole_bf16, catalog.WHOLE_UNQUANTIZED),
+        (model_optimizer, compat.CHECKPOINT_QUANTIZATION),
+        (unquantized_head, compat.CHECKPOINT_UNQUANTIZED),
+    ):
+        event = StartupParser().feed(line)[0]
+        assert isinstance(event, ErrorEvent), line
+        assert event.error.kind == "incompatible" and event.error.message == message, line
+        assert event.error.raw == [line]
+    gguf = StartupParser().feed(whole_bf16)[0]
+    assert isinstance(gguf, ErrorEvent)
+    assert [s.action for s in gguf.error.suggestions] == ["smaller_variant"]
+
+
+def test_a_thinking_end_text_the_tokenizer_refuses_points_at_the_setting() -> None:
+    for line in (
+        "12:00:00 Error · --thinking-end-text must end with </think> and hold no other "
+        "special token",
+        "12:00:00 Error · --thinking-end-text takes 80 tokens; the most is 64",
+    ):
+        event = StartupParser().feed(line)[0]
+        assert isinstance(event, ErrorEvent), line
+        assert event.error.code == "invalid_setting"
+        assert "serve.thinking_end_text" in event.error.message
+
+
+def test_weights_released_on_request_is_a_release() -> None:
+    assert StartupParser().feed("Weights released on request; the next request restores them") == [
+        WeightsEvent("released")
+    ]
 
 
 def test_request_error_lines_are_not_startup_errors() -> None:
@@ -166,16 +210,18 @@ def test_request_error_lines_are_not_startup_errors() -> None:
 
 def test_notices_transport_and_weights() -> None:
     parser = StartupParser()
-    assert parser.feed(
-        "22:52:58 The 40960 MiB this Mac had available at startup may not hold a 262144-token "
-        "request; one that runs out of memory is suspended and replays its prompt. "
-        "--max-cache-disk SIZE keeps its progress and cached prefixes on SSD."
-    )[0] == NoticeEvent(
-        "disk_tier_suggestion",
-        "The 40960 MiB this Mac had available at startup may not hold a 262144-token request; "
-        "one that runs out of memory is suspended and replays its prompt. --max-cache-disk SIZE "
-        "keeps its progress and cached prefixes on SSD.",
+    off = (
+        "SSD cache off: the memory plan holds the context only without it; "
+        "no state staging is set aside."
     )
+    assert parser.feed(f"22:52:58 {off}") == [NoticeEvent("disk_cache_off", off)]
+    temporary = (
+        "Persistent cache off: its root is not on a local volume; "
+        "the SSD cache keeps temporary files."
+    )
+    assert parser.feed(temporary) == [NoticeEvent("persistent_cache_off", temporary)]
+    # The SSD cache's own startup line is not a notice.
+    assert parser.feed("SSD cache: up to 32 GiB of temporary files") == []
     hub = parser.feed("Could not reach the Hub (timeout); using the installed a/b@123456789012.")
     assert isinstance(hub[0], NoticeEvent) and hub[0].kind == "hub_unreachable"
     kept = parser.feed("Warning: keeping the installed a/b@123; cannot install a/b@456: boom")

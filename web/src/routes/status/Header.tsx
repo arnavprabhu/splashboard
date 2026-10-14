@@ -82,11 +82,14 @@ export function StatusHeader({ engine: e, models, modelsFailed, persistentCache 
   const tokps = state === 'busy' ? sample?.throughput?.decode_tps : null;
   const inFlight = e?.requests_in_flight ?? 0;
   const hasModels = models ? models.length > 0 : modelsFailed ? false : null;
+  const view = viewOf(e?.view);
+  const restoring = view.weights_restoring === true && group === 'live';
 
   const meta = {
     format: formatLabel(installed),
     context: e?.maximum_context_tokens ?? null,
     kv: e?.kv_format ?? null,
+    states: view.state_format ?? null,
     vision: e?.vision ?? null,
     draft: showModel ? (e?.draft ?? (installed?.draft?.repo_id ? installed.draft.repo_id : null)) : undefined,
     uptime: group === 'live' && uptime !== null ? formatDuration(uptime) : null,
@@ -97,6 +100,7 @@ export function StatusHeader({ engine: e, models, modelsFailed, persistentCache 
     format: meta.format ?? '',
     context: t('status.meta.context', { v: meta.context != null ? formatTokens(meta.context) : DASH }),
     kv: t('status.meta.kv', { v: meta.kv ?? '' }),
+    states: t('status.meta.states', { v: meta.states ?? '' }),
     vision: t(meta.vision ? 'status.meta.vision_on' : 'status.meta.vision_off'),
     draft: meta.draft ? t('status.meta.draft', { v: meta.draft }) : t('status.meta.draft_none'),
     uptime: t('status.meta.uptime', { v: meta.uptime ?? '' }),
@@ -148,9 +152,13 @@ export function StatusHeader({ engine: e, models, modelsFailed, persistentCache 
         <StatusChip state={state} announce={false} />
         {tokps != null && <span class="label tnum">{t('status.tokps', { v: formatTokPerSec(tokps, { unit: false }) })}</span>}
       </div>
-      {(items.length > 0 || state === 'idle_released' || (state === 'stopping' && persistentCache)) && (
+      {(items.length > 0 || state === 'idle_released' || restoring || (state === 'stopping' && persistentCache)) && (
         <p class="meta tnum status-meta" aria-label={t('status.meta.label')}>
-          {[...items.map((k) => metaText[k]), state === 'idle_released' ? t('status.meta.released') : null, state === 'stopping' && persistentCache ? t('status.meta.flushing') : null]
+          {[
+            ...items.map((k) => metaText[k]),
+            restoring ? t('status.meta.restoring') : state === 'idle_released' ? t('status.meta.released') : null,
+            state === 'stopping' && persistentCache ? t('status.meta.flushing') : null,
+          ]
             .filter(Boolean)
             .join(' · ')}
         </p>

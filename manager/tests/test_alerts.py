@@ -7,7 +7,13 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from splash_gui.events.alerts import NOTIFY_INTERVAL_S, AlertCenter
+from splash_gui.events.alerts import (
+    BANNER_ONLY,
+    NOTIFICATION_SETTING,
+    NOTIFY_INTERVAL_S,
+    SEVERITY,
+    AlertCenter,
+)
 
 
 def center(app: FastAPI) -> tuple[AlertCenter, list[tuple[str, Any]], list[tuple[str, str]]]:
@@ -95,3 +101,11 @@ def test_alerts_are_ordered_and_dismissed(app: FastAPI, client: TestClient) -> N
     assert refused.status_code == 409 and refused.json()["error"]["code"] == "not_dismissible"
     alerts.clear_condition("memory_critical")
     assert not alerts.active("memory_critical")
+
+
+def test_spent_write_budget_is_an_info_banner() -> None:
+    """The SSD cache's daily write budget refills through the day: worth a banner,
+    never a notification."""
+    assert SEVERITY["disk_write_budget"] == "info"
+    assert "disk_write_budget" in BANNER_ONLY
+    assert "disk_write_budget" not in NOTIFICATION_SETTING

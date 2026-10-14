@@ -12,7 +12,7 @@ import { toast } from '../../components/Toast';
 import { formatCount, formatMs, formatTokPerSec } from '../../lib/format';
 import { t } from '../../strings/chat';
 import { estimateTokens } from './accumulator';
-import { checkResult, shortModel } from './logic';
+import { checkResult, draftStats, shortModel } from './logic';
 import { Markdown } from './Markdown';
 import { metaOf, textOf, toolCallsOf, type ChatMessage, type ToolCall } from './types';
 
@@ -251,6 +251,15 @@ function MetaLine({ m, streaming }: { m: ChatMessage; streaming: boolean }) {
   }
   const tps = meta.timings?.predicted_per_second;
   if (tps != null) items.push({ key: 'tps', text: formatTokPerSec(tps), tip: t('chat.meta.tip.tokps', { v: tps }) });
+  const draft = streaming ? null : draftStats(meta);
+  if (draft) {
+    const pct = Math.round(draft.acceptance * 100);
+    items.push({
+      key: 'draft',
+      text: draft.perCycle === null ? t('chat.meta.draft', { pct }) : t('chat.meta.draft_cycle', { pct, v: draft.perCycle.toFixed(1) }),
+      tip: t('chat.meta.tip.draft', { a: draft.accepted, d: draft.drafted }),
+    });
+  }
   if (!streaming && meta.finish_reason) {
     const key = `chat.meta.finish.${meta.finish_reason}` as 'chat.meta.finish.stop';
     const label = t(key);

@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { modelIdError } from '../src/lib/model-id';
-import { parseMaxCacheDisk, parseMaxContext, parseMaxMemory, parseRequestSize } from '../src/lib/size';
+import { parseMaxCacheDisk, parseMaxCacheDiskWrites, parseMaxContext, parseMaxMemory, parseRequestSize } from '../src/lib/size';
 import { SPLASH_MESSAGES, durationSeconds, fieldError, idleReleaseError } from '../src/routes/settings/validate';
 
 type SpawnSync = (
@@ -58,6 +58,7 @@ const SIZES = ['auto', ' AUTO ', '32G', '32g', '32GB', '32GiB', '32 G', '512M', 
 const CASES: Record<string, string[]> = {
   parse_max_memory: SIZES,
   parse_max_cache_disk: [...SIZES, ' 0 '],
+  parse_max_cache_disk_writes: [...SIZES, ' 0 ', '200G'],
   parse_request_size: SIZES,
   // Durations (1.2.1+): --request-timeout and --idle-release.
   parse_request_timeout: ['3600', '2.5', '30m', '2h', '90s', '1.5h', ' 30M ', '1_0m', '1e3', '0', '-1', '0m', 'm', '', 'off', 'inf', 'nan', '1e400', '10 m', '30d', '5mm'],
@@ -106,7 +107,12 @@ function ts(name: string, value: string): PyResult {
     const r = parseMaxContext(value);
     return r.ok ? { ok: r.tokens } : { error: r.error };
   }
-  const parser = { parse_max_memory: parseMaxMemory, parse_max_cache_disk: parseMaxCacheDisk, parse_request_size: parseRequestSize }[
+  const parser = {
+    parse_max_memory: parseMaxMemory,
+    parse_max_cache_disk: parseMaxCacheDisk,
+    parse_max_cache_disk_writes: parseMaxCacheDiskWrites,
+    parse_request_size: parseRequestSize,
+  }[
     name as 'parse_max_memory'
   ];
   const r = parser(value);

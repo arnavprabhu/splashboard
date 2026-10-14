@@ -258,6 +258,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/engine/release-memory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Release Memory
+         * @description Release memory now: the engine gives its weights' memory back at once, as
+         *     after its idle release (with the idle release off too), and the next request
+         *     restores them.
+         *
+         *     - 200 `{"released": true}`: the weights are released (already released counts).
+         *     - 409 `engine_busy`: the engine is serving a request, restoring its weights or
+         *       loading; try again when requests finish.
+         *     - 409 `engine_not_loaded`: no model is loaded (also while the engine stops).
+         *     - 502: any other engine refusal (its own code and message).
+         *     - 503: the engine is shutting down, recovering, failed or did not answer (its own
+         *       code and message, or `engine_unavailable`).
+         */
+        post: operations["release_memory_api_admin_engine_release_memory_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/engine/status": {
         parameters: {
             query?: never;
@@ -2052,6 +2082,37 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * ActiveRequest
+         * @description One entry of `/status.active_requests` (Splash 1.3.2+).
+         */
+        ActiveRequest: {
+            /** Id */
+            id: number;
+            /** Phase */
+            phase: string;
+            /** Priority */
+            priority?: string | null;
+            /**
+             * Prompt Tokens
+             * @default 0
+             */
+            prompt_tokens: number;
+            /**
+             * Prompt Processed
+             * @default 0
+             */
+            prompt_processed: number;
+            /**
+             * Generated Tokens
+             * @default 0
+             */
+            generated_tokens: number;
+            /** Max New Tokens */
+            max_new_tokens?: number | null;
+            /** Age Ms */
+            age_ms?: number | null;
+        };
         /** AdvancedSettings */
         AdvancedSettings: {
             /**
@@ -2068,7 +2129,7 @@ export interface components {
              * Condition
              * @enum {string}
              */
-            condition: "engine_recovering" | "engine_failed" | "crash_loop" | "memory_critical" | "memory_warning" | "capacity_exhausted" | "resource_timeout" | "disk_tier_failures" | "write_behind_refused" | "queue_full" | "mask_timeout" | "download_failed" | "download_done" | "update_available" | "schema_unrecognized" | "unclean_integration_shutdown";
+            condition: "engine_recovering" | "engine_failed" | "crash_loop" | "memory_critical" | "memory_warning" | "capacity_exhausted" | "resource_timeout" | "disk_tier_failures" | "write_behind_refused" | "disk_write_budget" | "queue_full" | "mask_timeout" | "download_failed" | "download_done" | "update_available" | "schema_unrecognized" | "unclean_integration_shutdown";
             /**
              * Severity
              * @enum {string}
@@ -2313,6 +2374,8 @@ export interface components {
              * @enum {string}
              */
             format: "mlx" | "gguf" | "legacy";
+            /** Checkpoint */
+            checkpoint?: string | null;
             /** Notes */
             notes?: string | null;
             /** Size Bytes */
@@ -2730,6 +2793,14 @@ export interface components {
             used_bytes?: number | null;
             /** Capacity Bytes */
             capacity_bytes?: number | null;
+            /** Limit Bytes */
+            limit_bytes?: number | null;
+            /** Volume Available Bytes */
+            volume_available_bytes?: number | null;
+            /** Writes Gated */
+            writes_gated?: ("no" | "budget" | "closed") | null;
+            /** Write Budget Bytes */
+            write_budget_bytes?: number | null;
         };
         /** DiskUsage */
         DiskUsage: {
@@ -3014,7 +3085,7 @@ export interface components {
             support: "supported" | "untested" | "too_old" | "unknown";
             /**
              * Supported Range
-             * @default >=1.3.0 <1.4.0
+             * @default >=1.3.2 <1.4.0
              */
             supported_range: string;
             /** Banner */
@@ -3080,7 +3151,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "disk_tier_suggestion" | "hub_unreachable" | "new_commit_not_installed" | "weights_restored" | "schema_unrecognized" | "other";
+            kind: "disk_cache_off" | "persistent_cache_off" | "hub_unreachable" | "new_commit_not_installed" | "weights_restored" | "schema_unrecognized" | "other";
             /** Message */
             message: string;
             /** Raw */
@@ -3197,6 +3268,8 @@ export interface components {
             chat_template_mode?: ("native" | "patched" | "unsupported") | null;
             /** Kv Format */
             kv_format?: string | null;
+            /** State Format */
+            state_format?: string | null;
             /** Vision */
             vision?: boolean | null;
             /** Draft */
@@ -3223,6 +3296,11 @@ export interface components {
             } | null;
             /** Persistent Cache */
             persistent_cache?: boolean | null;
+            /**
+             * Weights Restoring
+             * @default false
+             */
+            weights_restoring: boolean;
             install?: components["schemas"]["EngineInstall"] | null;
             engine: components["schemas"]["EngineDiscoveryInfo"];
         };
@@ -3289,10 +3367,21 @@ export interface components {
              */
             kv_format: "int8" | "bf16";
             /**
+             * State Format
+             * @default fp32
+             * @enum {string}
+             */
+            state_format: "fp32" | "bf16";
+            /**
              * Max Cache Disk
-             * @default 0
+             * @default auto
              */
             max_cache_disk: string;
+            /**
+             * Max Cache Disk Writes
+             * @default 0
+             */
+            max_cache_disk_writes: string;
             /**
              * Persistent Cache
              * @default false
@@ -3322,6 +3411,10 @@ export interface components {
             queue_size: number;
             /** Default Reasoning Effort */
             default_reasoning_effort?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") | null;
+            /** Thinking Token Budget */
+            thinking_token_budget?: number | null;
+            /** Thinking End Text */
+            thinking_end_text?: string | null;
             /**
              * Idle Release
              * @default 10m
@@ -3472,6 +3565,8 @@ export interface components {
             family?: ("Qwen3.8-27B" | "Qwen3.6-35B-A3B") | null;
             /** Format */
             format?: ("mlx" | "gguf" | "legacy") | null;
+            /** Checkpoint */
+            checkpoint?: string | null;
             /** Variants */
             variants?: components["schemas"]["VariantOut"][];
             /** Recommended Variant */
@@ -3516,6 +3611,8 @@ export interface components {
              * @enum {string}
              */
             format: "mlx" | "gguf" | "legacy";
+            /** Checkpoint */
+            checkpoint?: string | null;
             /**
              * Language Only
              * @default false
@@ -3775,6 +3872,8 @@ export interface components {
             memory?: components["schemas"]["MemoryMetrics"];
             kv?: components["schemas"]["KvMetrics"];
             disk?: components["schemas"]["DiskMetrics"];
+            /** Active Requests */
+            active_requests?: components["schemas"]["ActiveRequest"][];
             /** Stages */
             stages?: {
                 [key: string]: components["schemas"]["StageLatency"];
@@ -3975,10 +4074,21 @@ export interface components {
             host_available_bytes?: number | null;
             /** Host Reserve Bytes */
             host_reserve_bytes?: number | null;
+            /** Host Spare Bytes */
+            host_spare_bytes?: number | null;
+            /** Host Spare Reserve Bytes */
+            host_spare_reserve_bytes?: number | null;
+            /** Host Headroom Bytes */
+            host_headroom_bytes?: number | null;
             /** System Pressure */
             system_pressure?: ("normal" | "warning" | "critical") | null;
             /** Growth Allowed */
             growth_allowed?: boolean | null;
+        };
+        /** MemoryReleased */
+        MemoryReleased: {
+            /** Released */
+            released: boolean;
         };
         /** MenubarSettings */
         MenubarSettings: {
@@ -4055,6 +4165,8 @@ export interface components {
              * @enum {string}
              */
             format: "mlx" | "gguf" | "legacy";
+            /** Checkpoint */
+            checkpoint?: string | null;
             /**
              * Language Only
              * @default false
@@ -4159,7 +4271,8 @@ export interface components {
          * ModelServeOverrides
          * @description Per-model engine overrides (scope M or G/M). Only keys present are overrides;
          *     an absent key inherits the global value. `default_reasoning_effort: null` is an
-         *     explicit override back to the model template's default.
+         *     explicit override back to the model template's default, as `thinking_token_budget:
+         *     null` (no cap) and `thinking_end_text: null` (`</think>` alone) are to Splash's.
          */
         ModelServeOverrides: {
             /** Revision */
@@ -4174,11 +4287,20 @@ export interface components {
             announce_served_name?: boolean;
             /** Default Reasoning Effort */
             default_reasoning_effort?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") | null;
+            /** Thinking Token Budget */
+            thinking_token_budget?: number | null;
+            /** Thinking End Text */
+            thinking_end_text?: string | null;
             /**
              * Kv Format
              * @enum {string}
              */
             kv_format?: "int8" | "bf16";
+            /**
+             * State Format
+             * @enum {string}
+             */
+            state_format?: "fp32" | "bf16";
             /** Max Context */
             max_context?: string;
             /** Decode Share */
@@ -4511,6 +4633,8 @@ export interface components {
             max_tokens?: number | null;
             /** Reasoning Effort */
             reasoning_effort?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") | null;
+            /** Thinking Token Budget */
+            thinking_token_budget?: number | null;
             /** Chat Template Kwargs */
             chat_template_kwargs?: {
                 [key: string]: unknown;
@@ -4615,6 +4739,8 @@ export interface components {
              * @enum {string}
              */
             format_guess: "mlx" | "gguf" | "unknown";
+            /** Checkpoint */
+            checkpoint?: string | null;
         };
         /** SearchResults */
         SearchResults: {
@@ -4704,7 +4830,7 @@ export interface components {
         SettingsDocument: {
             /**
              * Version
-             * @default 2
+             * @default 3
              */
             version: number;
             global?: components["schemas"]["GlobalSettings"];
@@ -4909,7 +5035,9 @@ export interface components {
         };
         /**
          * ThinkingConfig
-         * @description Anthropic Messages `thinking` (server/api_shapes.py `_anthropic_thinking`).
+         * @description Anthropic Messages `thinking` (server/api_shapes.py `_anthropic_thinking` and
+         *     `_anthropic_thinking_budget`). Enabled thinking needs `budget_tokens` of at least
+         *     1024, which caps it; one at or above the request's max_tokens caps nothing.
          */
         ThinkingConfig: {
             /**
@@ -4966,6 +5094,8 @@ export interface components {
             total_tokens?: number | null;
             /** Reused Tokens */
             reused_tokens?: number | null;
+            /** Deduplicated Kv Tokens */
+            deduplicated_kv_tokens?: number | null;
             /** Requests Submitted */
             requests_submitted?: number | null;
             /** Requests Completed */
@@ -5554,7 +5684,7 @@ export interface components {
             /** Id */
             id: string;
             /** Kind */
-            kind: ("engine_recovering" | "engine_failed" | "crash_loop" | "memory_critical" | "memory_warning" | "capacity_exhausted" | "resource_timeout" | "disk_tier_failures" | "write_behind_refused" | "queue_full" | "mask_timeout" | "download_failed" | "download_done" | "update_available" | "schema_unrecognized" | "unclean_integration_shutdown") | "info";
+            kind: ("engine_recovering" | "engine_failed" | "crash_loop" | "memory_critical" | "memory_warning" | "capacity_exhausted" | "resource_timeout" | "disk_tier_failures" | "write_behind_refused" | "disk_write_budget" | "queue_full" | "mask_timeout" | "download_failed" | "download_done" | "update_available" | "schema_unrecognized" | "unclean_integration_shutdown") | "info";
             /** Title */
             title: string;
             /** Body */
@@ -6042,6 +6172,53 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    release_memory_api_admin_engine_release_memory_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryReleased"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };

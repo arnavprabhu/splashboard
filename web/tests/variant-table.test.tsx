@@ -21,25 +21,25 @@ const Q4: VariantOut = {
   files: ['Qwen3.8-27B-UD-Q4_K_M.gguf'],
 };
 
-const Q8: VariantOut = {
-  name: 'UD-Q8_K_XL',
-  size_bytes: 29_400_000_000,
-  bits_per_weight: 8,
+const BF16: VariantOut = {
+  name: 'BF16',
+  size_bytes: 53_800_000_000,
+  bits_per_weight: 16,
   quality: null,
   loadable: false,
-  reason: 'Splash has no kernels for this variant (UD-Q8_K_XL)',
+  reason: 'this GGUF stores every projection and expert unquantized (BF16, F16 or F32)',
   fit: null,
   recommended: false,
-  files: ['Qwen3.8-27B-UD-Q8_K_XL.gguf'],
+  files: ['Qwen3.8-27B-BF16.gguf'],
 };
 
 describe('GGUF variant table', () => {
   it('shows the quality tier, and a dash for a variant Splash cannot load', () => {
-    render(<VariantTable variants={[Q4, Q8]} caption="Variants" />);
+    render(<VariantTable variants={[Q4, BF16]} caption="Variants" />);
     expect(screen.getByText('Balanced')).toBeTruthy();
-    const q8 = screen.getByText('UD-Q8_K_XL').closest('tr');
-    expect(q8?.textContent).toContain(DASH);
-    expect(q8?.textContent).not.toContain('Balanced');
+    const bf16 = screen.getByText('BF16').closest('tr');
+    expect(bf16?.textContent).toContain(DASH);
+    expect(bf16?.textContent).not.toContain('Balanced');
   });
 
   it('lists the vision projector last, labelled, with no radio button and no download', () => {

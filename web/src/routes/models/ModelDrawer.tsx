@@ -22,7 +22,7 @@ import * as flows from './actions';
 import { getCard, getModel } from './api';
 import { streamInspect } from './inspect';
 import { CompatTag } from './bits';
-import { formatLabel, hfUrl, inspectProgress, installedVariants, isClefId, isProjector, pickVariant, projectorRow, repoOf, sha7, shortName, variantModelId } from './logic';
+import { checkpointOf, formatLabel, hfUrl, inspectProgress, installedVariants, isClefId, isProjector, pickVariant, projectorRow, repoOf, sha7, shortName, variantModelId } from './logic';
 import { isLocalId } from './local';
 import { Markdown } from './markdown';
 import { VariantTable } from './VariantTable';
@@ -59,6 +59,7 @@ export function ModelDrawer({ id, installed, activeId, onClose, onDelete, onVeri
   const det = detail.data;
   const model: InstalledModel | undefined = exact;
   const format = det?.format ?? model?.format ?? ins?.format ?? null;
+  const checkpoint = checkpointOf(det) ?? checkpointOf(model) ?? checkpointOf(ins);
   const isGguf = format === 'gguf' || (ins?.variants?.length ?? 0) > 0;
   const variants: VariantOut[] = (ins?.variants ?? []).filter((v) => !isProjector(v.name));
   const installedSet = installedVariants(repo, installed, variants);
@@ -89,7 +90,7 @@ export function ModelDrawer({ id, installed, activeId, onClose, onDelete, onVeri
 
   const facts: KeyValueItem[] = [
     { key: 'family', label: t('models.drawer.family'), value: det?.family ?? model?.family ?? ins?.family ?? null },
-    { key: 'format', label: t('models.drawer.format'), value: format ? formatLabel(format, id) : null },
+    { key: 'format', label: t('models.drawer.format'), value: format ? formatLabel(format, id, checkpoint) : null },
     {
       key: 'vision',
       label: t('models.drawer.vision'),
@@ -268,7 +269,8 @@ export function ModelDrawer({ id, installed, activeId, onClose, onDelete, onVeri
             <p class="body tnum">
               {format === 'legacy'
                 ? t('models.drawer.legacy_line')
-                : t('models.drawer.mlx_line', {
+                : t('models.drawer.safetensors_line', {
+                    format: formatLabel(format, id, checkpoint, true),
                     n: files.filter((f) => f.role === 'weights').length || files.filter((f) => /\.safetensors$/.test(f.path)).length,
                     size: formatBytes(det?.size_bytes ?? model?.size_bytes ?? null),
                   })}

@@ -26,7 +26,7 @@ import { CompatTag, FitTag, type CompatState } from "./models/bits";
 import { DownloadsPanel } from "./models/DownloadsPanel";
 import { useDownloadsPoll, useDrawerParam, useInstalled, useModelsTitle } from "./models/hooks";
 import { ModelDrawer } from "./models/ModelDrawer";
-import { checkModelId, diskCheck, formatLabel, hfUrl, isClefId, isProjector, inspectProgress, MAX_LAZY_CHECKS, pickVariant, projectorRow, shortName, variantModelId } from "./models/logic";
+import { checkModelId, checkpointOf, diskCheck, formatLabel, hfUrl, isClefId, isProjector, inspectProgress, MAX_LAZY_CHECKS, pickVariant, projectorRow, shortName, variantModelId } from "./models/logic";
 import { VariantTable } from "./models/VariantTable";
 import { MODELS_TABS } from "./tabs";
 
@@ -167,7 +167,7 @@ function EntryRow({ e, index, installedIds, memory, onDetails }: { e: CatalogEnt
             ? installedVariants.map((name) => <Tag key={name}>{t("downloader.variant_installed", { name })}</Tag>)
             : loadId && <Tag>{t("downloader.installed")}</Tag>}
           <span class="label">
-            {String(index).padStart(2, "0")} — {formatLabel(e.format, e.id)}
+            {String(index).padStart(2, "0")} — {formatLabel(e.format, e.id, checkpointOf(e), true)}
             {dlSize ? ` · ${dlSize}` : weights ? ` · ${t("downloader.weights", { size: formatBytes(weights, HUB) })}` : ""}
           </span>
           {/* The entry's memory need is for its default variant; another pick has only its own `fit` (no need figure). */}
@@ -372,7 +372,7 @@ function ById({ initial, free, memory, installedIds }: { initial: string; free: 
             <div class="cluster">
               <CompatTag state={result.badge as CompatState} />
               <span class="meta">
-                {[result.family, result.format && formatLabel(result.format, result.id), result.vision.available ? t("downloader.vision_line", { v: result.vision.projector ?? "on" }) : null, result.draft ? t("downloader.draft_line", { v: result.draft }) : null]
+                {[result.family, result.format && formatLabel(result.format, result.id, checkpointOf(result)), result.vision.available ? t("downloader.vision_line", { v: result.vision.projector ?? "on" }) : null, result.draft ? t("downloader.draft_line", { v: result.draft }) : null]
                   .filter(Boolean)
                   .join(" · ")}
               </span>
@@ -475,9 +475,20 @@ function ById({ initial, free, memory, installedIds }: { initial: string; free: 
 
 // ---------- Search ----------
 
-/** A search hit's format is a guess from its name and tags (`format_guess`). */
-export function searchFormat(guess: SearchResult["format_guess"], id: string): string {
-  return guess === "unknown" ? DASH : formatLabel(guess, id);
+/** A search hit's format is a guess from its name and tags (`format_guess`); an NVFP4 or FP8
+ * checkpoint shows its kind (`checkpoint`). */
+export function searchFormat(guess: SearchResult["format_guess"], id: string, checkpoint: string | null = null): string {
+  return guess === "unknown" ? DASH : formatLabel(guess, id, checkpoint, true);
+}
+
+export type SearchFilter = "all" | "mlx" | "checkpoint" | "gguf";
+
+/** The Format filter: MLX keeps MLX's own checkpoints, `checkpoint` the NVFP4 and FP8 ones. */
+export function matchesFilter(r: SearchResult, filter: SearchFilter): boolean {
+  const checkpoint = checkpointOf(r) !== null;
+  if (filter === "checkpoint") return checkpoint;
+  if (filter === "mlx") return r.format_guess === "mlx" && !checkpoint;
+  return filter === "all" || r.format_guess === filter;
 }
 
 function SearchRow({ r, index, state, onVisible, onOpen }: { r: SearchResult; index: number; state: CompatState; onVisible: () => void; onOpen: () => void }) {
@@ -504,7 +515,7 @@ function SearchRow({ r, index, state, onVisible, onOpen }: { r: SearchResult; in
         <span class="cluster dlr-entry-tags">
           <CompatTag state={state} />
           <span class="label">
-            {String(index).padStart(2, "0")} — {searchFormat(r.format_guess, r.id)}
+            {String(index).padStart(2, "0")} — {searchFormat(r.format_guess, r.id, checkpointOf(r))}
             {r.downloads != null ? ` · ${t("downloader.downloads_n", { n: formatCompact(r.downloads) })}` : ""}
           </span>
         </span>
@@ -527,7 +538,7 @@ function Search({ onOpen }: { onOpen: (id: string) => void }) {
   const [query, setQuery] = useState("");
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<SearchSort>("downloads");
-  const [format, setFormat] = useState<"all" | "mlx" | "gguf">("all");
+  const [format, setFormat] = useState<SearchFilter>("all");
   const [states, setStates] = useState<Record<string, CompatState>>({});
   const queue = useRef<string[]>([]);
   const inFlight = useRef(0);
@@ -560,7 +571,7 @@ function Search({ onOpen }: { onOpen: (id: string) => void }) {
         });
     }
   };
-  const list = (results.data?.results ?? []).filter((r) => format === "all" || r.format_guess === format);
+  const list = (results.data?.results ?? []).filter((r) => matchesFilter(r, format));
   return (
     <Section label={t("downloader.search")}>
       <div class="stack">
@@ -572,7 +583,7 @@ function Search({ onOpen }: { onOpen: (id: string) => void }) {
           </label>
           <label class="cluster">
             <span class="label">{t("downloader.format")}</span>
-            <Select value={format} options={(["all", "mlx", "gguf"] as const).map((x) => ({ value: x, label: t(`downloader.format.${x}`) }))} onChange={(v) => setFormat(v as typeof format)} />
+            <Select value={format} options={(["all", "mlx", "checkpoint", "gguf"] as const).map((x) => ({ value: x, label: t(`downloader.format.${x}`) }))} onChange={(v) => setFormat(v as SearchFilter)} />
           </label>
         </div>
         {!q ? null : results.error ? (

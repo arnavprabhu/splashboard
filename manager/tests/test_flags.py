@@ -121,9 +121,57 @@ ROWS: list[tuple[str, dict[str, Any], dict[str, Any] | None, list[str]]] = [
     ("--kv-format", {"serve": {"kv_format": "bf16"}}, None, ["--kv-format", "bf16"]),
     ("--kv-format model", {}, {"kv_format": "bf16"}, ["--kv-format", "bf16"]),
     ("--kv-format default", {"serve": {"kv_format": "int8"}}, None, []),
+    ("--state-format", {"serve": {"state_format": "bf16"}}, None, ["--state-format", "bf16"]),
+    ("--state-format model", {}, {"state_format": "bf16"}, ["--state-format", "bf16"]),
+    ("--state-format default", {"serve": {"state_format": "fp32"}}, None, []),
+    (
+        "--thinking-token-budget global",
+        {"serve": {"thinking_token_budget": 12000}},
+        None,
+        ["--thinking-token-budget", "12000"],
+    ),
+    (
+        "--thinking-token-budget zero",
+        {},
+        {"thinking_token_budget": 0},
+        ["--thinking-token-budget", "0"],
+    ),
+    (
+        "--thinking-token-budget model no cap",
+        {"serve": {"thinking_token_budget": 12000}},
+        {"thinking_token_budget": None},
+        [],
+    ),
+    (
+        "--thinking-end-text",
+        {
+            "serve": {
+                "thinking_end_text": "\n\nConsidering the limited time, I answer now.\n</think>"
+            }
+        },
+        None,
+        ["--thinking-end-text", "\n\nConsidering the limited time, I answer now.\n</think>"],
+    ),
+    (
+        "--thinking-end-text model",
+        {},
+        {"thinking_end_text": "Answer now.</think>"},
+        ["--thinking-end-text", "Answer now.</think>"],
+    ),
+    ("--thinking-end-text empty", {"serve": {"thinking_end_text": ""}}, None, []),
     ("--max-memory", {"serve": {"max_memory": "28G"}}, None, ["--max-memory", "28G"]),
     ("--max-memory auto", {"serve": {"max_memory": "AUTO"}}, None, []),
     ("--max-cache-disk", {"serve": {"max_cache_disk": "16G"}}, None, ["--max-cache-disk", "16G"]),
+    # Splash's SSD cache is on (auto) unless --max-cache-disk 0 turns it off.
+    ("--max-cache-disk off", {"serve": {"max_cache_disk": "0"}}, None, ["--max-cache-disk", "0"]),
+    ("--max-cache-disk auto", {"serve": {"max_cache_disk": "auto"}}, None, []),
+    (
+        "--max-cache-disk-writes",
+        {"serve": {"max_cache_disk_writes": "200G"}},
+        None,
+        ["--max-cache-disk-writes", "200G"],
+    ),
+    ("--max-cache-disk-writes no limit", {"serve": {"max_cache_disk_writes": "0"}}, None, []),
     ("--max-context global", {"serve": {"max_context": "100K"}}, None, ["--max-context", "100K"]),
     (
         "--max-context model",
@@ -303,9 +351,13 @@ def test_full_command_order_matches_spec(paths: Paths) -> None:
             "hf": {"offline": True},
             "serve": {
                 "default_reasoning_effort": "low",
+                "thinking_token_budget": 8000,
+                "thinking_end_text": "Done.</think>",
                 "kv_format": "bf16",
+                "state_format": "bf16",
                 "max_memory": "40G",
                 "max_cache_disk": "32G",
+                "max_cache_disk_writes": "200G",
                 "persistent_cache": True,
                 "max_context": "128K",
                 "decode_share": 1,
@@ -335,9 +387,13 @@ def test_full_command_order_matches_spec(paths: Paths) -> None:
         "--served-model-name",
         "--announce-served-name",
         "--default-reasoning-effort",
+        "--thinking-token-budget",
+        "--thinking-end-text",
         "--kv-format",
+        "--state-format",
         "--max-memory",
         "--max-cache-disk",
+        "--max-cache-disk-writes",
         "--persistent-cache",
         "--cache-dir",
         "--max-context",
@@ -373,10 +429,34 @@ def test_persistent_without_disk_refused() -> None:
     from splash_gui.settings.effective import effective_serve
 
     raw = SettingsDocument().to_json_dict()
-    raw["global"]["serve"]["persistent_cache"] = True
+    raw["global"]["serve"].update(max_cache_disk="0", persistent_cache=True)
     doc = SettingsDocument.model_validate(raw)
-    with pytest.raises(LaunchError, match="--persistent-cache needs --max-cache-disk"):
+    with pytest.raises(
+        LaunchError, match="--persistent-cache needs the SSD cache --max-cache-disk 0 turns off"
+    ):
         serve_flags(effective_serve(doc, MLX), cache_dir=Path("/c"))
+
+
+def test_write_budget_without_disk_refused() -> None:
+    raw = SettingsDocument().to_json_dict()
+    raw["global"]["serve"].update(max_cache_disk="0", max_cache_disk_writes="200G")
+    doc = SettingsDocument.model_validate(raw)
+    with pytest.raises(
+        LaunchError,
+        match="--max-cache-disk-writes needs the SSD cache --max-cache-disk 0 turns off",
+    ):
+        serve_flags(effective_serve(doc, MLX), cache_dir=Path("/c"))
+
+
+def test_persistent_cache_with_auto_passes_no_quota() -> None:
+    from splash_gui.engine.flags import serve_flags
+    from splash_gui.settings.effective import effective_serve
+
+    raw = SettingsDocument().to_json_dict()
+    raw["global"]["serve"].update(max_cache_disk="auto", persistent_cache=True)
+    doc = SettingsDocument.model_validate(raw)
+    argv = serve_flags(effective_serve(doc, MLX), cache_dir=Path("/c"))
+    assert argv == ["--persistent-cache", "--cache-dir", "/c"]
 
 
 def test_display_is_shell_quoted(paths: Paths) -> None:
@@ -395,9 +475,13 @@ def test_splash_launcher_accepts_our_argv(paths: Paths, tmp_path: Path) -> None:
             "hf": {"offline": True},
             "serve": {
                 "default_reasoning_effort": "low",
+                "thinking_token_budget": 12000,
+                "thinking_end_text": "\n\nConsidering the limited time, I answer now.\n</think>",
                 "kv_format": "bf16",
+                "state_format": "bf16",
                 "max_memory": "40G",
                 "max_cache_disk": "32G",
+                "max_cache_disk_writes": "200G",
                 "persistent_cache": True,
                 "max_context": "100K",
                 "decode_share": 0,
@@ -440,6 +524,11 @@ def test_splash_launcher_accepts_our_argv(paths: Paths, tmp_path: Path) -> None:
     assert parsed["served_model_name"] == ["q", "-x"] and parsed["announce_served_name"]
     assert parsed["default_reasoning_effort"] == "low" and parsed["kv_format"] == "bf16"
     assert parsed["max_memory"] == 40 * 1024**3 and parsed["max_cache_disk"] == 32 * 1024**3
+    assert parsed["state_format"] == "bf16" and parsed["max_cache_disk_writes"] == 200 * 1024**3
+    assert parsed["thinking_token_budget"] == 12000
+    assert (
+        parsed["thinking_end_text"] == "\n\nConsidering the limited time, I answer now.\n</think>"
+    )
     assert parsed["persistent_cache"] and parsed["cache_dir"] == str(paths.cache_dir)
     assert parsed["max_context"] == 102400 and parsed["decode_share"] == 0.0
     assert parsed["max_request_size"] == 256 * 1024**2 and parsed["max_image_pixels"] == 65536

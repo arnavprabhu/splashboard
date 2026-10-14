@@ -116,7 +116,7 @@ def test_global_options_before_the_command_are_ours_not_the_engines(
     code, out, _ = run(capsys, "ls", "--json", "--port=8124")
     assert code == 0 and ports[-1] == 8124 and json.loads(out)[0]["id"] == MODEL
     code, out, _ = run(capsys, "--color", "never", "-q", "version", "--json")
-    assert code == 0 and json.loads(out)["engine"] == "1.3.1"
+    assert code == 0 and json.loads(out)["engine"] == "1.3.2"
     assert execs == []
 
 
@@ -305,6 +305,73 @@ def test_ls_names_an_installed_splash_package_and_never_picks_it() -> None:
     assert cli_module.most_recent([newest, {"id": "a/b", "status": "ready"}]) == "a/b"
 
 
+def test_a_model_optimizer_checkpoint_shows_its_kind_not_mlx() -> None:
+    row = {
+        "id": "nvidia/Qwen3.8-27B-NVFP4",
+        "format": "mlx",
+        "checkpoint": "NVFP4 · Model Optimizer",
+    }
+    assert cli_module.format_label(row) == "NVFP4"
+    assert cli_module.format_label({"format": "mlx", "checkpoint": "FP8 · compressed-tensors"}) == (
+        "FP8"
+    )
+    assert cli_module.format_label({"format": "mlx", "checkpoint": None}) == "MLX"
+
+
+def _status(engine: dict[str, Any], cache: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "manager": {"url": "http://127.0.0.1:8000"},
+        "engine": {"state": "ready", "model": "nvidia/Qwen3.8-27B-NVFP4", **engine},
+        "memory": {},
+        "speed": {},
+        "requests": {},
+        "cache": cache,
+        "endpoints": {
+            "openai": "http://127.0.0.1:8000/v1",
+            "anthropic": "http://127.0.0.1:8000",
+            "api_key_required": False,
+            "host": "127.0.0.1",
+        },
+    }
+
+
+def test_status_shows_the_checkpoint_kind_and_the_ssd_limit() -> None:
+    gib = 1024**3
+    data = _status(
+        {"format": "mlx", "checkpoint": "NVFP4 · Model Optimizer"},
+        {
+            "disk_used_bytes": gib,
+            "disk_capacity_bytes": 32 * gib,
+            "disk_limit_bytes": 8 * gib,
+            "disk_writes_gated": "budget",
+        },
+    )
+    text = "\n".join(cli_module.status_lines(data, output.Style()))
+    assert "NVFP4" in text and "MLX" not in text
+    assert "SSD 1 GB of 8 GB (quota 32 GB), write budget spent" in text
+    closed = _status(
+        {"format": "gguf"},
+        {
+            "disk_used_bytes": 0,
+            "disk_capacity_bytes": 0,
+            "disk_limit_bytes": 4 * gib,
+            "disk_writes_gated": "closed",
+        },
+    )
+    text = "\n".join(cli_module.status_lines(closed, output.Style()))
+    assert "SSD 0 B of 4 GB, stopped taking writes" in text
+    # A full volume leaves none of the quota: a limit of 0 is real, not missing.
+    full = _status(
+        {"format": "gguf"},
+        {"disk_used_bytes": 0, "disk_capacity_bytes": 32 * gib, "disk_limit_bytes": 0},
+    )
+    assert "SSD 0 B of 0 B (quota 32 GB)" in "\n".join(
+        cli_module.status_lines(full, output.Style())
+    )
+    off = _status({"format": "gguf"}, {"disk_capacity_bytes": 0, "disk_limit_bytes": 0})
+    assert "SSD —" in "\n".join(cli_module.status_lines(off, output.Style()))
+
+
 # 4. doctor ---------------------------------------------------------------------------------
 
 
@@ -427,7 +494,7 @@ def test_doctor_works_without_the_manager(
         cli_module,
         "discover",
         lambda *a, **k: EngineInfo(
-            found=True, cli=Path("/x/bin/splash"), version="1.3.1", support="supported"
+            found=True, cli=Path("/x/bin/splash"), version="1.3.2", support="supported"
         ),
     )
     real = cli_module.Client
@@ -440,7 +507,7 @@ def test_doctor_works_without_the_manager(
     code, out, _ = run(capsys, "doctor")
     assert code == 0
     assert "! Not running" in out and "Fix: splash start" in out
-    assert "✓ Splash 1.3.1 · /x/bin/splash" in out
+    assert "✓ Splash 1.3.2 · /x/bin/splash" in out
 
 
 # 5. config get with no key --------------------------------------------------------------
@@ -493,7 +560,7 @@ def test_version_is_human_readable_unless_json(
     make()
     code, out, _ = run(capsys, "version")
     assert code == 0 and not out.lstrip().startswith("{")
-    assert out.startswith(f"Splashboard {__version__} · manager {__version__} · Splash 1.3.1")
+    assert out.startswith(f"Splashboard {__version__} · manager {__version__} · Splash 1.3.2")
     code, out, _ = run(capsys, "version", "--json")
     assert set(json.loads(out)) == {"gui", "manager", "engine", "engine_path", "status_schema"}
 
@@ -522,7 +589,7 @@ def test_launch_print_never_loads_a_model(
         code, out, err = run(capsys, *argv)
         assert code == 0, err
         assert json.loads(calls[-1]["SPLASH_GUI_CLIENT_SPEC"])["model"] == MODEL
-        assert out.startswith("# splash launch claude --print  (Splash 1.3.1 launcher")
+        assert out.startswith("# splash launch claude --print  (Splash 1.3.2 launcher")
         assert "not loaded now" in out
     assert not [s for s in seen if s[0] != "GET"], seen
     assert h.engine()["state"] == "stopped"
@@ -749,7 +816,15 @@ def test_read_only_commands_never_start_the_manager(
             return "down"
 
     monkeypatch.setattr(cli_module, "Client", Down)
-    for argv in (["ps"], ["ls"], ["logs"], ["config", "get"], ["unload"], ["rm", "a/b", "--yes"]):
+    for argv in (
+        ["ps"],
+        ["ls"],
+        ["logs"],
+        ["config", "get"],
+        ["unload"],
+        ["release-memory"],
+        ["rm", "a/b", "--yes"],
+    ):
         code, out, err = run(capsys, *argv)
         assert code == 3, argv
         assert err.startswith("✗ Splashboard is not running") and "splash start" in err

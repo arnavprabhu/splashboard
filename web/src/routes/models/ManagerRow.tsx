@@ -14,7 +14,7 @@ import { engine, engineState } from '../../store';
 import { t } from '../../strings/models';
 import * as flows from './actions';
 import { downloadMeta } from './DownloadsPanel';
-import { hfUrl, itemProgress, percent, rowLabel, sha7, shortName } from './logic';
+import { checkpointOf, hfUrl, itemProgress, percent, rowLabel, sha7, shortName } from './logic';
 import { isLocalId } from './local';
 import { Row } from './Row';
 
@@ -212,7 +212,7 @@ export function ManagerRow(props: ManagerRowProps) {
         ) : undefined
       }
       status={active ? <StatusChip state={engineState.value} announce={false} /> : <StatusTags model={model} download={download} verifying={verifying} accentUpdate={props.accentUpdate} />}
-      label={rowLabel(index, model?.format ?? null, id, size, model ? 1024 : 1000)}
+      label={rowLabel(index, model?.format ?? null, id, size, model ? 1024 : 1000, checkpointOf(model))}
       detail={detail}
       body={dlActive || verifyError || install || model?.notice ? body : undefined}
       actions={actions}

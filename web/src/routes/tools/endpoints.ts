@@ -26,7 +26,8 @@ export type EndpointId =
   | 'status'
   | 'metrics'
   | 'health'
-  | 'ready';
+  | 'ready'
+  | 'memory_release';
 
 export interface Endpoint {
   id: EndpointId;
@@ -58,6 +59,8 @@ export const ENDPOINTS: readonly Endpoint[] = [
   { id: 'metrics', method: 'GET', path: '/metrics', group: 'health', body: false, shape: 'other' },
   { id: 'health', method: 'GET', path: '/health', group: 'health', body: false, shape: 'other' },
   { id: 'ready', method: 'GET', path: '/ready', group: 'health', body: false, shape: 'other' },
+  // Releases the loaded model's weights and caches now; the next request restores them. No body.
+  { id: 'memory_release', method: 'POST', path: '/v1/memory/release', group: 'health', body: false, shape: 'other' },
 ];
 
 export const GROUP_ORDER: readonly EndpointGroup[] = ['openai', 'anthropic', 'tokenizer', 'scoring', 'health'];
@@ -251,7 +254,7 @@ const TEMPLATES: Partial<Record<EndpointId, readonly Template[]>> = {
     {
       id: 'thinking',
       label: 'tools.template.messages_thinking',
-      build: (model) => ({ model, max_tokens: 1024, thinking: { type: 'enabled', budget_tokens: 512 }, messages: [user('Is 1,001 prime?')], stream: true }),
+      build: (model) => ({ model, max_tokens: 2048, thinking: { type: 'enabled', budget_tokens: 1024 }, messages: [user('Is 1,001 prime?')], stream: true }),
     },
     {
       id: 'document',

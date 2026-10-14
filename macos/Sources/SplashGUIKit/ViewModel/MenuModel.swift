@@ -9,6 +9,7 @@ public enum MenuCommand: Sendable, Equatable, Hashable {
     case loadModel(String)
     case unloadModel
     case restartEngine
+    case releaseMemory
     case openAdmin(String)  // path under the manager, e.g. "/admin/status"
     case connectIntegration(String)
     case disconnectIntegration(String)
@@ -178,6 +179,7 @@ public enum MenuModel {
             if input.settings.showSwitcher {
                 entries.append(.submenu(title: "Load Model", enabled: true, entries: switcher(input, running: true)))
             }
+            entries.append(.button(releaseMemory(engine.state)))
             entries.append(stats)
 
         case .starting:
@@ -214,6 +216,14 @@ public enum MenuModel {
 
         entries += tail(input, managerUp: true)
         return entries
+    }
+
+    /// Release Memory: enabled only while a model is loaded with its weights in memory (not once
+    /// they are released, nor while the engine recovers).
+    static func releaseMemory(_ state: EngineState) -> MenuItem {
+        let loaded = state == .ready || state == .busy
+        return MenuItem("Release Memory", .releaseMemory, enabled: loaded,
+                        help: loaded ? "Free the model's memory now; the next request restores it" : nil)
     }
 
     static func liveTps(_ input: MenuInput) -> Double? {

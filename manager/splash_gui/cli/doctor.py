@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ..engine.discovery import SUPPORTED_RANGE
 from ..paths import Paths
 from .output import Style, fmt_bytes, home_relative, plural
 
@@ -302,7 +303,7 @@ def engine_check(info: Any) -> Check:
             detail=[str(info.error)] if info.error else [],
             fix=["brew install incoai/tap/splash"],
         )
-    title = f"Splash {info.version} · {info.cli}   (Splashboard supports ≥ 1.3.1, < 1.4.0)"
+    title = f"Splash {info.version} · {info.cli}   (Splashboard supports {SUPPORTED_RANGE})"
     if info.support == "supported":
         return Check("engine", "ok", title)
     status = "fail" if info.support == "too_old" else "warn"

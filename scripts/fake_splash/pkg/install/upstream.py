@@ -1,10 +1,11 @@
 # Derived from Splash (github.com/incoai/splash, Apache-2.0), modified by the Splashboard authors.
 # See LICENSE.splash and NOTICE in scripts/fake_splash.
-"""Small compatibility stand-in for splash/install/upstream.py (1.3.1).
+"""Small compatibility stand-in for splash/install/upstream.py (1.3.2).
 
 Mirrors its `Target`, `check_model` and the screening order of
 `inspect_target(repo, variant, language_only, scratch)`: a GGUF's variant must be
-selected and loadable, an MLX checkpoint must be quantized in a format the kernels hold, and vision
+selected and loadable, a safetensors checkpoint must be quantized in a format the
+kernels hold (MLX's, or NVFP4 or FP8 from Model Optimizer or compressed-tensors), and vision
 needs a usable projector. The real `check_model` runs the engine's `model-check`;
 the fake has no engine, so `signatures.check` stands in for it, and an unsupported
 config fails here rather than in the manager.
@@ -47,7 +48,7 @@ def inspect_target(repo, variant, language_only, scratch):
 def select_vision(repo):
     """The one vision projector Splash can use, chosen by precision.
 
-    `splash/install/upstream.py select_vision` (1.3.1) keeps only a `clip` projector
+    `splash/install/upstream.py select_vision` (1.3.1 on) keeps only a `clip` projector
     whose tensors are BF16, F32 or F16, preferred in that order.
     """
     usable: dict[str, list[str]] = {"BF16": [], "F32": [], "F16": []}
@@ -124,8 +125,14 @@ def _gguf_target(repo, variant, language_only, scratch):
         # An importance matrix has no model metadata (real Splash, install/gguf.py).
         raise models.ModelError("missing or invalid GGUF metadata: general.architecture")
     family = check_model("gguf", "none", config, gguf_metadata=metadata)
-    if any(part in name for part in ("BF16", "UD-Q8_K_XL")):
-        raise models.ModelError("this GGUF stores tensors Splash cannot load")
+    # install/gguf.py require_loadable (1.3.2, lines 574-596) reads the tensor
+    # types; the fake's GGUFs have none, so the name stands in. Since 1.3.2 only a
+    # whole unquantized model is refused (UD-Q8_K_XL, with BF16 parts, loads).
+    if Path(name).stem.upper().endswith(("-BF16", "-F16", "-F32")):
+        raise models.ModelError(
+            "this GGUF stores every projection and expert unquantized (BF16, F16 or F32): Splash loads quantized "
+            "GGUFs, not whole-BF16 or F16 models; choose a quantized variant of the repository"
+        )
     files = {"target/" + name: name}
     vision_format = "none"
     if not language_only:
@@ -156,13 +163,13 @@ PROCESSOR_FILES = ("preprocessor_config.json", "processor_config.json")
 
 
 def _require_quantization(entry, label, module):
-    """ModelDescriptor.mm `requireQuantization` (1.3.1) for one entry: an affine format
-    the kernels hold, or mxfp4 4-bit in groups of 32. A module's entry that omits bits or
-    group size takes its mode's default."""
+    """ModelDescriptor.mm `requireMlxQuantization` (1.3.2) for one entry: an affine
+    format the kernels hold, mxfp4 4-bit in groups of 32 or nvfp4 4-bit in groups of
+    16. A module's entry that omits bits or group size takes its mode's default."""
     mode = entry.get("mode", "affine")
     if not isinstance(mode, str):
         raise models.ModelError(f"{label} mode must be a string")
-    affine = mode == "affine"
+    affine, nvfp4 = mode == "affine", mode == "nvfp4"
 
     def number(key, default):
         value = entry.get(key)
@@ -172,34 +179,105 @@ def _require_quantization(entry, label, module):
             raise models.ModelError(f"{label} {key} must be a whole number")
         return int(value)
 
-    bits, group = number("bits", 4), number("group_size", 64 if affine else 32)
-    ok = bits in AFFINE_BITS and group in AFFINE_GROUPS if affine else (mode == "mxfp4" and bits == 4 and group == 32)
+    bits, group = number("bits", 4), number("group_size", 64 if affine else 16 if nvfp4 else 32)
+    if affine:
+        ok = bits in AFFINE_BITS and group in AFFINE_GROUPS
+    elif nvfp4:
+        ok = bits == 4 and group == 16
+    else:
+        ok = mode == "mxfp4" and bits == 4 and group == 32
     if not ok:
         raise models.ModelError(
             f"{label} is {mode} {bits}-bit in groups of {group}; MLX weights load as affine 2, 3, 4, 5, 6 "
-            "or 8 bits in groups of 32, 64 or 128, or as mxfp4"
+            "or 8 bits in groups of 32, 64 or 128, or as mxfp4 or nvfp4"
         )
+
+
+def _require_quantization_config(quantization):
+    """ModelDescriptor.mm `requireModelOptimizerQuantization` and
+    `requireCompressedTensorsQuantization` (1.3.2): a quantization_config of
+    quant_method modelopt holding NVFP4 (in groups of 16) or FP8, or of
+    compressed-tensors whose groups hold NVFP4 or FP8. The fake checks the formats,
+    not which modules each covers."""
+    method = quantization.get("quant_method")
+    if method == "modelopt":
+        layers = quantization.get("quantized_layers")
+        if isinstance(layers, dict):
+            # Each quantized layer names its own algorithm; the top-level one plays no part.
+            for module, entry in layers.items():
+                label = f"quantization_config quantized_layers {module}"
+                if not isinstance(entry, dict):
+                    raise models.ModelError(f"{label} must be an object")
+                _require_modelopt_algorithm(entry, label)
+            return
+        _require_modelopt_algorithm(quantization, "quantization_config")
+        return
+    groups = quantization.get("config_groups")
+    if not isinstance(groups, dict) or not groups:
+        raise models.ModelError("quantization_config config_groups must be a non-empty object")
+    for name, group in groups.items():
+        label = f"quantization_config config_groups {name}"
+        weights = group.get("weights") if isinstance(group, dict) else None
+        if not isinstance(weights, dict):
+            raise models.ModelError(f"{label} weights must be an object")
+        form = group.get("format", quantization.get("format", ""))
+        kind, bits, strategy = weights.get("type"), weights.get("num_bits"), weights.get("strategy")
+        group_size = weights.get("group_size") or 0
+        nvfp4 = form == "nvfp4-pack-quantized" and kind == "float" and bits == 4 and strategy == "tensor_group"
+        fp8 = form == "float-quantized" and kind == "float" and bits == 8 and strategy in ("channel", "tensor")
+        if not ((nvfp4 and group_size == 16) or fp8):
+            raise models.ModelError(
+                f"{label} is {form}: {kind} {bits}-bit by {strategy}"
+                + (f" in groups of {group_size}" if group_size else "")
+                + "; compressed-tensors weights load as NVFP4 (nvfp4-pack-quantized: float 4-bit by tensor_group "
+                "in groups of 16) or FP8 (float-quantized: float 8-bit by channel or tensor)"
+            )
+        if weights.get("symmetric") is False or weights.get("actorder") in ("group", True):
+            raise models.ModelError(
+                f"{label} is asymmetric or ordered by activation groups; Splash loads symmetric "
+                "compressed-tensors weights in their stored column order"
+            )
+
+
+def _require_modelopt_algorithm(entry, label):
+    """ModelDescriptor.mm `requireModelOptimizerQuantization`'s requireAlgorithm (1.3.2)."""
+    algorithm = entry.get("quant_algo")
+    if algorithm == "FP8":
+        return
+    if algorithm not in ("NVFP4", "W4A16_NVFP4"):
+        raise models.ModelError(f"{label} is {algorithm}; Model Optimizer weights load as NVFP4, W4A16_NVFP4 or FP8")
+    group = entry.get("group_size")
+    if group is not None and group != 16:
+        raise models.ModelError(f"{label} is NVFP4 in groups of {group}; Model Optimizer NVFP4 loads in groups of 16")
 
 
 def _mlx_target(repo, language_only, scratch):
     config = scratch / "config.json"
     config.write_bytes(models.json_bytes(repo.json("config.json")))
     family = check_model("mlx-affine", "none", config)
-    # The engine model-check's wording (ModelDescriptor.mm requireQuantization, 1.3.1).
-    quant = repo.json("config.json").get("quantization")
-    if not isinstance(quant, dict):
+    # The engine model-check's wording (ModelDescriptor.mm requireQuantization, 1.3.2).
+    config_json = repo.json("config.json")
+    quant, quantization_config = config_json.get("quantization"), config_json.get("quantization_config")
+    if isinstance(quant, dict):
+        _require_quantization(quant, "quantization", False)
+        for module, entry in quant.items():
+            if isinstance(entry, dict):
+                _require_quantization(entry, f"quantization {module}", True)
+    elif isinstance(quantization_config, dict) and quantization_config.get("quant_method") in (
+        "modelopt",
+        "compressed-tensors",
+    ):
+        _require_quantization_config(quantization_config)
+    else:
         raise models.ModelError(
             "this model requires an MLX checkpoint (affine 2, 3, 4, 5, 6 or 8 bits in groups of 32, 64 or 128, "
-            "or mxfp4) or a supported GGUF"
+            "mxfp4 or nvfp4), an NVFP4 or FP8 checkpoint of Model Optimizer or compressed-tensors, or a "
+            "supported GGUF"
         )
-    _require_quantization(quant, "quantization", False)
-    for module, entry in quant.items():
-        if isinstance(entry, dict):
-            _require_quantization(entry, f"quantization {module}", True)
     files = {name: name for name in sorted(repo.files)}
     files.setdefault("config.json", "config.json")
     if language_only:
-        # upstream.py `_mlx_target` (1.3.1): the processor config is read only when
+        # upstream.py `_mlx_target` (1.3.1 on): the processor config is read only when
         # vision is on.
         for name in PROCESSOR_FILES:
             files.pop(name, None)

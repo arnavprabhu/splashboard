@@ -1,14 +1,15 @@
 /**
- * The plain MLX refusal with Splash's words as the detail (Splash 1.3.1 wording).
+ * The plain MLX refusal with Splash's words as the detail (Splash 1.3.2 wording).
  */
 import { expect, test } from '@playwright/test';
 
 import { mockManager } from './fixtures';
 
 const SEVEN_BIT = 'mlx-community/Qwen3.8-27B-7bit';
-const PLAIN = 'Splash runs MLX models quantized as affine 2, 3, 4, 5, 6 or 8 bits (groups of 32, 64 or 128) or as mxfp4.';
+const PLAIN =
+  'Splash runs MLX models quantized as affine 2, 3, 4, 5, 6 or 8 bits (groups of 32, 64 or 128), mxfp4 or nvfp4, and NVFP4 or FP8 checkpoints from Model Optimizer or compressed-tensors.';
 const DETAIL =
-  'quantization language_model.model.embed_tokens is affine 7-bit in groups of 64; MLX weights load as affine 2, 3, 4, 5, 6 or 8 bits in groups of 32, 64 or 128, or as mxfp4';
+  'quantization language_model.model.embed_tokens is affine 7-bit in groups of 64; MLX weights load as affine 2, 3, 4, 5, 6 or 8 bits in groups of 32, 64 or 128, or as mxfp4 or nvfp4';
 
 test('A 7-bit MLX checkpoint leads with the plain line and keeps Splash’s reason as detail', async ({ page }) => {
   await mockManager(page, {

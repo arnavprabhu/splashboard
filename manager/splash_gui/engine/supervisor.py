@@ -182,6 +182,7 @@ class Supervisor:
         self.schema_version: int | None = None
         self.engine_models: list[dict[str, Any]] = []
         self.taken_back: dict[str, int] | None = None
+        self._restoring_seen = False
         self.restarts_detected = 0
         self._run: _Run | None = None
         self._crashes: deque[float] = deque()
@@ -291,6 +292,7 @@ class Supervisor:
         if kv_format is None and self.model:
             with contextlib.suppress(Exception):
                 kv_format = effective_serve(self.app.settings.current, self.model).kv_format
+        state_format = st.text(status, "memory_plan.model.state_format") if status else None
         settings = self.app.settings.current
         tracker = self._install_tracker()
         uptime = None
@@ -311,6 +313,7 @@ class Supervisor:
             maximum_context_tokens=self.max_context,
             chat_template_mode=self.chat_template_mode,  # type: ignore[arg-type]
             kv_format=kv_format,
+            state_format=state_format,
             vision=self.vision,
             draft=self._draft(),
             status_schema_version=self.schema_version,
@@ -329,6 +332,7 @@ class Supervisor:
             command=self._run.spec.display() if self._run else None,
             taken_back=dict(self.taken_back) if self.taken_back is not None else None,
             persistent_cache=st.boolean(status, "disk.persistent") if status else None,
+            weights_restoring=self._restoring(),
             install=tracker.view() if tracker is not None else None,
             engine=EngineDiscoveryInfo.model_validate(engine.as_dict()),
         )
@@ -1208,14 +1212,32 @@ class Supervisor:
         elif self.state == "busy" and not st.busy(data) and self.in_flight == 0:
             self._set("ready")
 
+    def _restoring(self) -> bool:
+        """`weights.restoring` (Status.cpp appendWeights): a request found the weights
+        released and the engine is bringing them back. They stay `released` until
+        the restore ends."""
+        return (
+            self.status is not None
+            and self.state in SERVING_STATES
+            and st.boolean(self.status, "weights.restoring") is True
+        )
+
     def _apply_weights(self, data: dict[str, Any]) -> None:
         """`weights.released` (Status.cpp appendWeights): the engine freed its weights
-        after --idle-release without requests; the next request restores them."""
+        after --idle-release without requests, or on request; the next request
+        restores them. A restore under way is a request at work, not idle."""
         released = st.boolean(data, "weights.released")
-        if released and self.state == "ready" and self.in_flight == 0:
+        restoring = st.boolean(data, "weights.restoring") is True
+        before = self._restoring_seen
+        self._restoring_seen = restoring
+        if released and not restoring and self.state == "ready" and self.in_flight == 0:
             self._set("idle_released")
+        elif self.state == "idle_released" and restoring:
+            self._set("busy")
         elif released is False and self.state == "idle_released":
             self._set("ready")
+        elif restoring != before:
+            self._publish()
 
     # Requests from the proxy (busy, idle) ----------------------------------------------------
 

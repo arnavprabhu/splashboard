@@ -2,7 +2,7 @@
 
 These check the assumptions the rest of the suite takes on faith:
 
-  * the engine is 1.3.1 or a later 1.3.x, inside the supported range;
+  * the engine is 1.3.2 or a later 1.3.x, inside the supported range;
   * `install/serve_options.py` still matches the settings' option map, including that no
     option has appeared that we do not map;
   * `helpers/inspect_model.py` really runs under Splash's own bundled Python and
@@ -227,7 +227,9 @@ def test_a_real_gguf_repo_lists_its_variants_and_a_loadable_one(engine_python: P
 @needs_engine
 @needs_network
 def test_a_bf16_gguf_variant_is_reported_unloadable(engine_python: Path) -> None:
-    """Splash has no BF16 kernels; such a row must be disabled."""
+    """The BF16 variant is refused. Splash loads quantized GGUFs only (a whole-BF16
+    model is refused by install/gguf.py require_loadable), and this repository keeps
+    its BF16 split in a folder, which select_gguf never takes from the root."""
     repo = "unsloth/Qwen3.8-27B-GGUF"
     result = inspect(repo, engine_python, variant="BF16")
     assert not any(r["compatible"] for r in result["results"]), result
@@ -235,10 +237,10 @@ def test_a_bf16_gguf_variant_is_reported_unloadable(engine_python: Path) -> None
 
 @needs_engine
 @needs_network
-def test_ud_q8_k_xl_is_reported_unloadable(engine_python: Path) -> None:
-    """`UD-Q8_K_XL` is explicitly not supported."""
+def test_ud_q8_k_xl_is_reported_loadable(engine_python: Path) -> None:
+    """Splash 1.3.2 loads `UD-Q8_K_XL`, whose BF16 parts its loader accepts."""
     result = inspect(GGUF_REPO, engine_python, variant="UD-Q8_K_XL")
-    assert not any(r["compatible"] for r in result["results"]), result
+    assert any(r["compatible"] for r in result["results"]), result
 
 
 @needs_engine
@@ -346,7 +348,7 @@ def test_acceptance_search_verdicts_on_the_live_hub(
         assert gguf["compatible"] is True and gguf["family"] == "Qwen3.8-27B", gguf
         assert gguf["recommended_variant"], [v["name"] for v in gguf["variants"]]
         for variant in gguf["variants"]:
-            if variant["name"] in ("UD-Q8_K_XL", "BF16"):
+            if variant["name"] == "BF16":
                 assert variant["loadable"] is False, variant
 
 

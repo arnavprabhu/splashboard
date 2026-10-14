@@ -7,6 +7,7 @@
 | GET /v1/models, /v1/models/{id} | built by the manager |
 | GET /ready | the engine's /ready (503 while stopped/starting) |
 | GET /status, /metrics | the engine's; /metrics adds splash_gui_* gauges |
+| POST /v1/memory/release | the engine's, API key required; not a request in flight |
 
 `/health`, `/` and `/admin` belong to app.py; the admin guard covers `/api/admin`.
 """
@@ -72,6 +73,16 @@ async def get_response(request: Request, response_id: str) -> Response:
 @router.delete("/v1/responses/{response_id}")
 async def delete_response(request: Request, response_id: str) -> Response:
     return await pipeline(request).passthrough(request, "DELETE", f"/v1/responses/{response_id}")
+
+
+@router.post("/v1/memory/release")
+async def memory_release(request: Request) -> Response:
+    return await pipeline(request).memory_release(request)
+
+
+@router.options("/v1/memory/release")
+async def memory_release_options(request: Request) -> Response:
+    return pipeline(request).preflight(request, "POST, OPTIONS")
 
 
 @router.get("/ready")

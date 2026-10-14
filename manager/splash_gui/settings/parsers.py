@@ -2,7 +2,7 @@
 
 Each function reproduces the logic and error message of its counterpart in
 splash/server/serve_options.py, server/origins.py, server/frontend.py and
-install/models.py at tag 1.3.1, so the GUI refuses exactly what Splash refuses.
+install/models.py at tag 1.3.2, so the GUI refuses exactly what Splash refuses.
 The parity test runs both under Splash's bundled Python when it is installed.
 Functions raise `ValueError` where Splash raises `argparse.ArgumentTypeError`.
 """
@@ -25,6 +25,10 @@ DEFAULT_DECODE_SHARE = 0.5  # the engine's default when --decode-share is absent
 DEFAULT_IDLE_RELEASE = "10m"
 DEFAULT_IDLE_RELEASE_S = 600.0
 KV_FORMATS: tuple[str, ...] = ("int8", "bf16")
+STATE_FORMATS: tuple[str, ...] = ("fp32", "bf16")
+# server/backend.py THINK_END and protocol.py MAX_THINKING_END_TOKENS.
+THINK_END = "</think>"
+MAX_THINKING_END_TOKENS = 64
 # images.py
 MIN_IMAGE_PIXELS = 65_536
 MAX_IMAGE_PIXELS = 4_194_304
@@ -84,7 +88,20 @@ def parse_max_memory(value: str) -> int | None:
     return size
 
 
-def parse_max_cache_disk(value: str) -> int:
+def parse_max_cache_disk(value: str) -> int | None:
+    """'auto' (None), 0 for no SSD cache, or a byte count with an optional K, M
+    or G suffix."""
+    if value.strip() == "0":
+        return 0
+    try:
+        return parse_max_memory(value)
+    except ValueError:
+        raise ValueError("use auto, 0 to disable, or a size such as 16G") from None
+
+
+def parse_max_cache_disk_writes(value: str) -> int:
+    """0 for no write budget, or a byte count a day with an optional K, M or G
+    suffix."""
     if value.strip() == "0":
         return 0
     try:
@@ -92,7 +109,7 @@ def parse_max_cache_disk(value: str) -> int:
     except ValueError:
         size = None
     if size is None:
-        raise ValueError("use 0 to disable, or a size such as 5G")
+        raise ValueError("use 0 for no limit, or a size such as 200G")
     return size
 
 
@@ -192,10 +209,42 @@ def parse_reasoning_effort(value: str) -> str:
     return value
 
 
+def parse_thinking_token_budget(value: str) -> int:
+    try:
+        tokens = int(value)
+    except ValueError:
+        raise ValueError("must be a nonnegative integer") from None
+    if tokens < 0:
+        raise ValueError("must be a nonnegative integer")
+    return tokens
+
+
+def check_thinking_end_text(value: str) -> str:
+    """--thinking-end-text as far as it can be checked without the model's
+    tokenizer: it must end with </think> (server/backend.py
+    `thinking_end_tokens`, which also refuses other special tokens and more than
+    MAX_THINKING_END_TOKENS tokens when the engine starts). The text is passed on
+    argv, which cannot hold a NUL, so that is the one character refused here."""
+    if "\x00" in value:
+        raise ValueError("must not contain a NUL character")
+    if not value.endswith(THINK_END):
+        raise ValueError(
+            f"--thinking-end-text must end with {THINK_END} and hold no other special token"
+        )
+    return value
+
+
 def parse_kv_format(value: str) -> str:
     # argparse choices=("int8", "bf16")
     if value not in KV_FORMATS:
         raise ValueError(f"invalid choice: {value!r} (choose from 'int8', 'bf16')")
+    return value
+
+
+def parse_state_format(value: str) -> str:
+    # argparse choices=("fp32", "bf16")
+    if value not in STATE_FORMATS:
+        raise ValueError(f"invalid choice: {value!r} (choose from 'fp32', 'bf16')")
     return value
 
 

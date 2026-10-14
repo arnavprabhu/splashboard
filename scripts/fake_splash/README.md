@@ -1,11 +1,11 @@
 # Fake Splash engine
 
-A stdlib-only stand-in for Homebrew's `splash` 1.3.1 package. The
+A stdlib-only stand-in for Homebrew's `splash` 1.3.2 package. The
 manager, the web app's Playwright tests and local development use it in place
 of the real engine, so nothing needs a model, Metal or the network. It runs
 under any Python 3.12+, including Splash's bundled interpreter.
 
-Every engine fact it reproduces was checked against `./splash` at tag `1.3.1`.
+Every engine fact it reproduces was checked against `./splash` at tag `1.3.2`.
 Comments in `pkg/server/fake_engine.py` and `fake_server.py` give the source
 file and line for each output string.
 
@@ -17,12 +17,12 @@ pkg/                     laid out like $(brew --prefix)/opt/splash (bin/) and it
 ├── libexec -> .         so pkg/ also works as an opt/splash prefix
 ├── python/bin/python3   runs $FAKE_SPLASH_PYTHON, else the first Python ≥ 3.12 on PATH
 ├── engine/splash        answers `device-check` only (FAKE_SPLASH_DEVICE_CHECK=fail refuses the Mac)
-├── release.json         {"version": "1.3.1", ...}
+├── release.json         {"version": "1.3.2", ...}
 ├── install/
 │   ├── launcher.py      `splash --version | serve | claude|opencode|codex|hermes|pi [--port PORT] [-- ARGS]`
 │   ├── models.py        fake installer, same CLI as the real install/models.py
 │   ├── paths.py         DATA from SPLASH_GUI_FAKE_DATA (never ~/Library/Application Support/Splash)
-│   ├── families.py      verbatim copy (1.3.1: names and draft repos only)
+│   ├── families.py      verbatim copy (names and draft repos only, since 1.3.1)
 │   ├── clients.py       verbatim copy: the coding-client configurator `splash launch` uses (Hermes needs PyYAML in the interpreter to write its profile; `--print` does not)
 │   ├── signatures.py    each family's config fields; stands in for the engine's model-check
 │   └── upstream.py      inspect_target/check_model stand-in for the compatibility helper
@@ -32,7 +32,7 @@ pkg/                     laid out like $(brew --prefix)/opt/splash (bin/) and it
     ├── fake_shapes.py   response builders copied from api_shapes.py
     ├── fake_text.py     deterministic tokenizer, ChatML template, reply text
     ├── crash_trace.py   `python -m server.crash_trace <trace>`: prints the trace's frames
-    └── serve_options.py origins.py http_security.py errors.py images.py
+    └── serve_options.py origins.py http_security.py errors.py images.py protocol.py
         metrics.py latency.py json_codec.py lru.py diagnostics.py   verbatim copies (a test checks this)
 harness.py               pytest helpers: FakeSplash, run_installer, fake_env, free_port
 tests/                   the fake's own tests
@@ -42,13 +42,16 @@ tests/                   the fake's own tests
 
 ```sh
 export SPLASH_GUI_FAKE_DATA=/tmp/fake-splash HF_HUB_CACHE=/tmp/fake-splash/models
-scripts/fake_splash/pkg/bin/splash --version          # Splash 1.3.1
+scripts/fake_splash/pkg/bin/splash --version          # Splash 1.3.2
 scripts/fake_splash/pkg/bin/splash serve --model unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_M --port 8001 --no-webui
 curl -s localhost:8001/v1/chat/completions -H 'content-type: application/json' \
   -d '{"messages":[{"role":"user","content":"hi"}],"stream":true}'
 ```
 
-`serve` accepts every real flag, validated by the copied `serve_options.py`. It
+`serve` accepts every real flag, validated by the copied `serve_options.py`
+(1.3.2: the automatic SSD cache is the default, `--max-cache-disk 0` turns it
+off, and `--max-cache-disk-writes`, `--state-format`, `--thinking-token-budget`
+and `--thinking-end-text` are honoured). It
 reads `SPLASH_API_KEY`, binds `--host`/`--port`, runs the fake installer for the
 selection (as the real launcher does), and then serves. Like the real server,
 it does not listen until Ready.
@@ -125,12 +128,13 @@ Engine (`serve`). Each `FakeConfig` field can also be changed live through `/_fa
 | `FAKE_SPLASH_LISTEN_EARLY` | 0 | Listen before Ready so `/ready` answers 503 (the real server refuses connections instead) |
 | `FAKE_SPLASH_MODE` | normal | Initial mode |
 | `FAKE_SPLASH_MEMORY_PRESSURE` | normal | `normal`, `warning` or `critical` (critical makes `/ready` 503) |
-| `FAKE_SPLASH_THERMAL_STATE` | nominal | `/status.thermal_state`: `nominal`, `fair`, `serious` or `critical` (readiness ignores it, as in 1.3.1) |
+| `FAKE_SPLASH_THERMAL_STATE` | nominal | `/status.thermal_state`: `nominal`, `fair`, `serious` or `critical` (readiness ignores it, as since 1.3.1) |
 | `FAKE_SPLASH_FAIL_STARTUP` | — | `budget` (memory budget refusal with the breakdown), `context` (`--max-context` beyond the plan) or `crash`. All exit 1 |
 | `FAKE_SPLASH_PHYSICAL_MEMORY` | 64G | Drives the memory plan. `--max-memory 8G` produces a real budget refusal |
 | `FAKE_SPLASH_AUTO_CONTEXT` | from the plan | Caps the automatic context |
-| `FAKE_SPLASH_HOST_AVAILABLE` | 40G | Used by the disk-tier suggestion |
-| `FAKE_SPLASH_DISK_SUGGESTION` | auto | `1` always prints the `--max-cache-disk` suggestion, `0` never does |
+| `FAKE_SPLASH_HOST_AVAILABLE` | 40G | `/status.memory_governor` host memory |
+| `FAKE_SPLASH_VOLUME_AVAILABLE` / `FAKE_SPLASH_VOLUME_SIZE` | 200G / 994G | The SSD cache's volume (DiskSpace.cpp, 1.3.2): the tier's limit is at most a quarter of the free space above the floor it keeps (10 GiB, or 5% of a small volume), and the automatic tier turns off (`SSD cache off: … is too little …`) where that holds less than two states and 1 GiB |
+| `FAKE_SPLASH_WRITES_GATED` | no | `/status.disk.writes_gated`: `no`, `budget` or `closed` (a used-up `--max-cache-disk-writes` budget reports `budget` on its own) |
 | `FAKE_SPLASH_TEMPLATE` | patched | Chat template outcome: `native`, `patched` or `unsupported` (unsupported rejects later system messages) |
 | `FAKE_SPLASH_TEXT` / `FAKE_SPLASH_REPLY_TOKENS` | — | Fixed reply text, or an exact number of reply tokens |
 | `FAKE_SPLASH_REASONING` | auto | `auto` (reasoning unless effort is `none`), `always` or `never` |
@@ -147,7 +151,7 @@ Installer (`install/models.py`, and the install step of `serve`):
 |---|---|---|
 | `HF_HUB_CACHE` | `$SPLASH_GUI_FAKE_DATA/hub` | Where `models--owner--repo/{blobs,snapshots,refs}` are written |
 | `FAKE_SPLASH_DL_BPS` | 64M | Download rate in bytes/s (`.incomplete` blobs grow at this rate) |
-| `FAKE_SPLASH_DL_HUB` | — | Unset: huggingface_hub 1.28 partials, as Splash 1.2.0 to 1.3.1 bundle (`blobs/<hash>.<uuid8>.incomplete`, a new file per run, deleted on a handled error, never resumed). `legacy`: older hubs (`blobs/<hash>.incomplete`, appended to by the next run) |
+| `FAKE_SPLASH_DL_HUB` | — | Unset: huggingface_hub 1.28 partials, as Splash 1.2.0 to 1.3.2 bundle (`blobs/<hash>.<uuid8>.incomplete`, a new file per run, deleted on a handled error, never resumed). `legacy`: older hubs (`blobs/<hash>.incomplete`, appended to by the next run) |
 | `FAKE_SPLASH_DL_SHARD_BYTES`, `_SHARDS`, `_DRAFT_BYTES`, `_VISION_BYTES` | 2M, 2, 1M, 512K | File sizes |
 | `FAKE_SPLASH_DL_COMMIT_SALT` | — | Changes every resolved commit, so `prepare` reports "moved from … to …" (simulates updates). The first weight file changes too, so an update fetches one file; if that fails, the old commit is kept with `Warning: keeping the installed …` and `prepare` still exits 0 (upstream.py `_keeping_installation`) |
 | `FAKE_SPLASH_DL_FAIL` | — | `gated` (401 unless `HF_TOKEN` is set), `network` (Hub unreachable), `network_mid`, `disk_full` (ENOSPC mid-download), `incompatible` |
@@ -186,5 +190,8 @@ blob stays.
 - `/status` values are invented but internally consistent. Every field name comes from Status.cpp, backend.py, frontend.py and server.py.
 - The Neural Engine FFN split (1.3.0) uses the share, least chunk (524 rows) and memory (219 MiB) the real engine set up for the 27B on an M5 Pro: a 27B target reports `ane_ffn.state` `split` and counts a split command per prefill chunk of 524 rows or more; the 35B MoE and `--disable-ane` report `off` with the engine's reasons. It never calibrates, stops or reruns.
 - The agent subcommands (`splash claude`, and the rest) read `/v1/models` and print the banner, then a JSON line describing what they would run. They exec nothing.
-- Splash packages (`incoai/*-Splash`) are refused by name, with Splash 1.3.1's message naming the MLX model to serve instead; the real installer reads the package's `manifest.json`.
-- Per-request log lines (`Done ·`, `Cancelled ·`, `Error · code`) cover generation requests; judgments and System One requests log none.
+- Splash packages (`incoai/*-Splash`) are refused by name, with Splash's message (1.3.1 on) naming the MLX model to serve instead; the real installer reads the package's `manifest.json`.
+- A GGUF is refused as unquantized by its name (`-BF16`, `-F16` or `-F32`), as 1.3.2's header check would; UD-Q8_K_XL loads. Safetensors checkpoints follow 1.3.2's quantization rules (MLX affine, mxfp4 and nvfp4; Model Optimizer and compressed-tensors NVFP4 or FP8) without checking which modules each covers.
+- Per-request log lines (`Started ·`, `Done ·`, `Cancelled ·`, `Error · code`) come from the copied `diagnostics.print_request` and cover generation requests; judgments and System One requests log none. Each request's speculative decoding is invented (about 2.4 tokens a cycle) and reported in its `timings`, `metrics.speculation` and `/status.metrics`.
+- `POST /v1/memory/release` releases the weights while no request is in service or restoring (200), and answers 409 `engine_busy` otherwise; the next request restores them, with `/status.weights.restoring` true meanwhile.
+- `cache_salt` keys the fake's prefix cache, so a salted request shares cached prompts only with requests of the same salt. Deduplicated KV tokens are always 0.

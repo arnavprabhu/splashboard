@@ -24,7 +24,7 @@ from splash_gui.engine.serve_options import (
 from .conftest import HAVE_SPLASH, LOOPBACK_CLIENT, SPLASH_PKG, write_script
 
 
-def fake_pkg(root: Path, version: str = "1.3.1", *, release: bool = True) -> Path:
+def fake_pkg(root: Path, version: str = "1.3.2", *, release: bool = True) -> Path:
     """A Homebrew-shaped keg: <root>/bin/splash wrapper + <root>/libexec package."""
     pkg = root / "libexec"
     (pkg / "server").mkdir(parents=True)
@@ -69,8 +69,9 @@ def test_parse_version(text: str, expected: tuple[int, int, int] | None) -> None
 @pytest.mark.parametrize(
     ("version", "support"),
     [
-        ((1, 3, 1), "supported"),
+        ((1, 3, 2), "supported"),
         ((1, 3, 9), "supported"),
+        ((1, 3, 1), "too_old"),
         ((1, 3, 0), "too_old"),
         ((1, 4, 0), "untested"),
         ((2, 0, 0), "untested"),
@@ -83,6 +84,19 @@ def test_supported_range(version: tuple[int, int, int] | None, support: str) -> 
     assert d.support_for(version) == support
 
 
+def test_too_old_banner_and_doctor_name_the_supported_range() -> None:
+    """The banner and `splash doctor` read the range from one constant."""
+    from splash_gui.cli.doctor import engine_check
+
+    old = d.EngineInfo(
+        found=True, cli=Path("/opt/splash/bin/splash"), version="1.3.1", support="too_old"
+    )
+    assert old.banner == "Splash 1.3.1 is older than 1.3.2; upgrade the engine"
+    assert d.SUPPORTED_RANGE == ">=1.3.2 <1.4.0"
+    check = engine_check(old)
+    assert check.status == "fail" and check.title.endswith("(Splashboard supports >=1.3.2 <1.4.0)")
+
+
 def test_brew_location_is_preferred(tmp_path: Path) -> None:
     prefix = tmp_path / "homebrew"
     keg = prefix / "opt" / "splash"
@@ -91,11 +105,11 @@ def test_brew_location_is_preferred(tmp_path: Path) -> None:
     cli = keg / "bin" / "splash"
     info = d.discover(
         env={"PATH": str(other.parent / "bin")},
-        runner=runner_for({str(cli): "Splash 1.3.1"}),
+        runner=runner_for({str(cli): "Splash 1.3.2"}),
         prefix=prefix,
     )
     assert info.found and info.source == "brew" and info.cli == cli
-    assert info.version == "1.3.1" and info.support == "supported" and info.banner is None
+    assert info.version == "1.3.2" and info.support == "supported" and info.banner is None
     assert info.pkg == pkg.resolve() or info.pkg == pkg
     assert info.python == info.pkg / "python" / "bin" / "python3"
     assert info.install_dir is not None and info.server_dir is not None
@@ -120,7 +134,7 @@ def test_env_override(tmp_path: Path) -> None:
     cli = custom.parent / "bin" / "splash"
     info = d.discover(
         env={"PATH": "", d.REAL_SPLASH_ENV: str(cli)},
-        runner=runner_for({str(cli): "Splash 1.3.1"}),
+        runner=runner_for({str(cli): "Splash 1.3.2"}),
         prefix=None,
     )
     assert info.source == "env"
@@ -136,7 +150,7 @@ def test_path_lookup_skips_our_shim(tmp_path: Path) -> None:
     info = d.discover(
         env={"PATH": f"{shim_dir}:{marked_dir}:{real_cli.parent}"},
         shim_paths=(shim,),
-        runner=runner_for({str(real_cli): "Splash 1.3.1"}),
+        runner=runner_for({str(real_cli): "Splash 1.3.2"}),
         prefix=None,
     )
     assert info.found and info.source == "path" and info.cli == real_cli
@@ -154,7 +168,7 @@ def test_path_lookup_skips_the_installed_cli_entry_point(tmp_path: Path) -> None
     real_cli = real.parent / "bin" / "splash"
     info = d.discover(
         env={"PATH": f"{venv_bin}:{real_cli.parent}"},
-        runner=runner_for({str(real_cli): "Splash 1.3.1"}),
+        runner=runner_for({str(real_cli): "Splash 1.3.2"}),
         prefix=None,
     )
     assert info.found and info.cli == real_cli
@@ -184,7 +198,7 @@ def test_bad_setting_is_reported_and_skipped(tmp_path: Path) -> None:
     info = d.discover(
         str(tmp_path / "missing"),
         env={"PATH": str(cli.parent)},
-        runner=runner_for({str(cli): "Splash 1.3.1"}),
+        runner=runner_for({str(cli): "Splash 1.3.2"}),
         prefix=None,
     )
     assert info.source == "path"
@@ -298,11 +312,11 @@ def test_concurrent_reads_run_the_helper_once(monkeypatch: pytest.MonkeyPatch) -
         calls.append(engine)
         started.set()
         release.wait(5)
-        return EngineOptions(available=True, version="1.3.1")
+        return EngineOptions(available=True, version="1.3.2")
 
     monkeypatch.setattr(serve_options, "run_helper", slow_helper)
     cache = EngineOptionsCache()
-    info = d.EngineInfo(found=True, cli=Path("/opt/splash/bin/splash"), version="1.3.1")
+    info = d.EngineInfo(found=True, cli=Path("/opt/splash/bin/splash"), version="1.3.2")
     results: list[EngineOptions] = []
     readers = [threading.Thread(target=lambda: results.append(cache.get(info))) for _ in range(3)]
     readers[0].start()
@@ -335,5 +349,5 @@ def test_the_serve_options_are_read_at_startup(
     with TestClient(app, client=LOOPBACK_CLIENT, headers=headers) as client:
         assert started.wait(10), "the helper did not run at startup"
         body = client.get("/api/admin/settings/schema").json()
-    assert [call.version for call in calls] == ["1.3.1"]  # read once; Settings reuses it
+    assert len(calls) == 1  # read once; Settings reuses it
     assert body["engine_options"]["errors"] == ["stub helper"]

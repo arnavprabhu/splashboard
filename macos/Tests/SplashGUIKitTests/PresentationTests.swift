@@ -75,6 +75,8 @@ struct PresentationTests {
             == "● Splash is running — Qwen3.8-27B-4bit (Ready)")
         #expect(Presentation.header(engine: engine("busy"), manager: .running, liveTps: 74.2)
             == "● Splash is running — Qwen3.8-27B-4bit (Generating · 74 tok/s)")
+        #expect(Presentation.header(engine: engine("busy", extra: ["weights_restoring": true]), manager: .running, liveTps: 3)
+            == "● Splash is running — Qwen3.8-27B-4bit (Restoring weights…)")
         #expect(Presentation.header(engine: engine("idle_released", model: gguf), manager: .running, liveTps: nil)
             == "● Splash is running — Qwen3.8-27B-GGUF:UD-Q4_K_M (Idle — weights released)")
         #expect(Presentation.header(engine: engine("stopped", model: nil), manager: .running, liveTps: nil)
@@ -204,5 +206,18 @@ struct StatusTitleTests {
         #expect(Format.percent(0.87) == "87 %")
         #expect(Format.shortModelName("unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M") == "Qwen3.8-27B-GGUF:UD-Q4_K_M")
         #expect(Format.truncate(String(repeating: "a", count: 70), to: 60).count == 60)
+    }
+
+    @Test func checkpointFormatLabel() throws {
+        let nvfp4 = try #require(InstalledModel(json: try JSONValue.parse(
+            #"{"id": "nvidia/Qwen3.8-27B-NVFP4", "format": "mlx", "checkpoint": "NVFP4 · Model Optimizer"}"#)))
+        #expect(nvfp4.checkpoint == "NVFP4 · Model Optimizer")
+        #expect(nvfp4.formatLabel == "NVFP4")
+        #expect(InstalledModel(id: "a/b", format: "mlx", checkpoint: "FP8 · compressed-tensors").formatLabel == "FP8")
+        let plain = try #require(InstalledModel(json: try JSONValue.parse(
+            #"{"id": "mlx-community/Qwen3.8-27B-4bit", "format": "mlx", "checkpoint": null}"#)))
+        #expect(plain.checkpoint == nil)
+        #expect(plain.formatLabel == "MLX")
+        #expect(InstalledModel(id: "a/b", format: "gguf", checkpoint: "NVFP4 · Model Optimizer").formatLabel == "GGUF")
     }
 }

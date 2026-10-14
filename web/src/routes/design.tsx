@@ -89,7 +89,7 @@ const SAMPLE_ALERTS: Alert[] = [
   {
     id: "write_behind_refused",
     severity: "info",
-    message: "Persistent cache paused: hourly write cap (128 GiB/h) reached",
+    message: "Persistent cache skipped a restore point",
     actions: [],
   },
 ];
@@ -306,7 +306,7 @@ function Gallery({ theme }: { theme: "light" | "dark" }) {
         <Field
           label="SSD cache size"
           flag="--max-cache-disk"
-          help="0 disables the disk tier."
+          help="Auto follows free space up to 32 GiB; 0 turns it off."
           restart
         >
           {({ id }) => (

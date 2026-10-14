@@ -12,11 +12,13 @@ import {
   Button,
   Field,
   NumberInput,
+  SegmentedControl,
   Select,
   SizeInput,
   Slider,
   Tag,
   TagList,
+  TextArea,
   TextInput,
   Toggle,
   type SettingSource,
@@ -56,6 +58,7 @@ export interface SettingFieldProps {
 const SIZE_KIND: Readonly<Record<string, SizeKind>> = {
   'serve.max_memory': 'max-memory',
   'serve.max_cache_disk': 'max-cache-disk',
+  'serve.max_cache_disk_writes': 'max-cache-disk-writes',
   'serve.max_request_size': 'request-size',
 };
 
@@ -230,23 +233,35 @@ function MemoryControl({ id, describedBy, label, value, set, disabled, memoryByt
   );
 }
 
-/** SSD cache: Toggle (0 ↔ a size, default 16G) + size input. */
+type CacheMode = 'off' | 'auto' | 'size';
+
+/** Which of Off / Auto / Size a `serve.max_cache_disk` value is. */
+export function cacheDiskMode(value: unknown): CacheMode {
+  const text = value === undefined || value === null ? 'auto' : String(value).trim();
+  if (text === '0') return 'off';
+  return text.toLowerCase() === 'auto' ? 'auto' : 'size';
+}
+
+/** SSD cache: Off (0) / Auto / Size (default 16G) + size input. */
 function CacheDiskControl({ id, describedBy, value, set, disabled }: { id: string; describedBy: string; value: unknown; set: (v: unknown) => void; disabled: boolean }) {
-  const text = value === undefined || value === null ? '0' : String(value);
-  const on = text.trim() !== '0';
-  const [last, setLast] = useState(on ? text : '16G');
+  const text = value === undefined || value === null ? 'auto' : String(value);
+  const mode = cacheDiskMode(value);
+  const [last, setLast] = useState(mode === 'size' ? text : '16G');
+  const options = (['off', 'auto', 'size'] as const).map((v) => ({ value: v, label: t(`settings.cache_disk.${v}`), disabled }));
   return (
     <div class="stack" style={{ gap: '10px' }}>
-      <Toggle
-        checked={on}
+      <SegmentedControl
+        id={mode === 'size' ? undefined : id}
         label={t('settings.field.serve.max_cache_disk.label')}
-        disabled={disabled}
+        value={mode}
+        options={options}
         onChange={(next) => {
-          if (on) setLast(text);
-          set(next ? last || '16G' : '0');
+          if (mode === 'size') setLast(text);
+          set(next === 'off' ? '0' : next === 'auto' ? 'auto' : last || '16G');
         }}
       />
-      {on && <SizeInput id={id} aria-describedby={describedBy} kind="max-cache-disk" class="mono settings-short" value={text} disabled={disabled} onChange={(v) => set(v)} />}
+      {mode === 'size' && <SizeInput id={id} aria-describedby={describedBy} kind="max-cache-disk" class="mono settings-short" value={text} disabled={disabled} onChange={(v) => set(v)} />}
+      {mode === 'auto' && <p class="meta">{t('settings.cache_disk.auto_note')}</p>}
     </div>
   );
 }
@@ -334,7 +349,8 @@ export function SettingField(props: SettingFieldProps) {
               value={typeof shown === 'number' ? shown : null}
               min={field.min ?? undefined}
               max={field.max ?? undefined}
-              step={field.key === 'serve.decode_share' ? 0.1 : 'any'}
+              step={field.key === 'serve.decode_share' ? 0.1 : field.key === 'serve.thinking_token_budget' ? 1 : 'any'}
+              placeholder={field.key === 'serve.thinking_token_budget' ? t('settings.thinking_budget.none') : undefined}
               invalid={errors.length > 0}
               onChange={(v) => set(v)}
             />
@@ -358,6 +374,8 @@ export function SettingField(props: SettingFieldProps) {
         if (field.key === 'serve.max_memory')
           return <MemoryControl id={ids.id} describedBy={ids.describedBy} label={label} value={shown} set={set} disabled={disabled} memoryBytes={memoryBytes} />;
         if (field.key === 'serve.max_cache_disk') return <CacheDiskControl id={ids.id} describedBy={ids.describedBy} value={shown} set={set} disabled={disabled} />;
+        if (field.key === 'serve.max_cache_disk_writes')
+          return <SizeInput {...common} kind={kind} class="mono settings-short" value={String(shown ?? '0')} zeroText={t('settings.cache_disk.no_limit')} onChange={(v) => set(v)} />;
         return <SizeInput {...common} kind={kind} class="mono settings-short" value={String(shown ?? '')} onChange={(v) => set(v)} />;
       }
       case 'context':
@@ -380,6 +398,23 @@ export function SettingField(props: SettingFieldProps) {
       case 'path':
       case 'text':
       case 'url':
+        if (field.key === 'serve.thinking_end_text') {
+          // The text the engine forces to close a thinking block at its budget: it may start
+          // with blank lines, so it takes a multi-line input and is kept exactly as typed.
+          return (
+            <TextArea
+              {...common}
+              class="mono"
+              rows={3}
+              value={typeof shown === 'string' ? shown : ''}
+              placeholder={placeholder ?? '</think>'}
+              spellcheck={false}
+              autocomplete="off"
+              invalid={errors.length > 0}
+              onChange={(v) => set(v.trim() === '' ? null : v)}
+            />
+          );
+        }
         return (
           <TextInput
             {...common}

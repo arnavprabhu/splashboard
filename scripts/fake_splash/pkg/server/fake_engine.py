@@ -18,6 +18,7 @@ import os
 import re
 import secrets
 import sys
+import tempfile
 import threading
 import time
 import zlib
@@ -28,9 +29,11 @@ from pathlib import Path
 from typing import IO, Any
 
 from . import fake_text
+from .diagnostics import print_request
 from .errors import APIError
 from .fake_shapes import CacheInfo, FakeJob, NativeResult
 from .latency import LatencyMetrics
+from .protocol import MAX_THINKING_END_TOKENS
 
 KIB, MIB, GIB = 1 << 10, 1 << 20, 1 << 30
 STATUS_SCHEMA_VERSION = 6  # runtime/engine/Protocol.hpp kStatusSchemaVersion
@@ -42,6 +45,11 @@ PIPELINE_RESERVE = 256 * MIB  # runtime/model/Model.hpp kPipelineReserveBytes
 RUNTIME_RESERVE = 512 * MIB  # kRuntimeOverheadReserveBytes
 SPECULATIVE_SCRATCH_TOKENS = 64
 MAX_CONTEXT_TOKENS = 262144
+# runtime/engine/DiskSpace.hpp kAutomaticCacheDiskBytes and DiskSpace.cpp kFloorBytes (1.3.2).
+AUTOMATIC_CACHE_DISK = 32 * (1 << 30)
+DISK_FLOOR = 10 * (1 << 30)
+# The mount point DiskVolume reports for the user's data volume.
+DATA_VOLUME = "/System/Volumes/Data"
 # The Neural Engine FFN split (1.3.0) as the real engine set it up for the 27B on
 # the user's M5 Pro (Evidence): its share,
 # least chunk and memory. The MoE has no dense FFN layers and never splits.
@@ -115,6 +123,11 @@ def parse_size(text: str | None, default: int) -> int:
     return int(float(match.group(1)) * 1024 ** " KMG".index(match.group(2).upper() or " "))
 
 
+def gibibytes(value: int) -> str:
+    """runtime/engine/DiskSpace.cpp gibibytes."""
+    return f"{value / GIB:.1f} GiB"
+
+
 def _env_float(name: str, default: float) -> float:
     try:
         return float(os.environ.get(name, default))
@@ -151,7 +164,12 @@ class FakeConfig:
     physical_memory: int = 64 * GIB
     host_available: int = 40 * GIB
     auto_context: int | None = None
-    disk_suggestion: str = "auto"  # auto | 1 | 0
+    # The volume the SSD cache's files are on (runtime/engine/DiskSpace.cpp,
+    # 1.3.2): its free space sizes the tier's limit and decides whether the
+    # automatic tier opens at all.
+    volume_available: int = 200 * GIB
+    volume_size: int = 994 * GIB
+    writes_gated: str = "no"  # no | budget | closed (Status.cpp writes_gated)
     startup_failure: str = ""  # "" | budget | context | crash
     crash_code: int = 1
     listen_early: bool = False
@@ -184,7 +202,9 @@ class FakeConfig:
         config.host_available = parse_size(env.get("FAKE_SPLASH_HOST_AVAILABLE"), config.host_available)
         if env.get("FAKE_SPLASH_AUTO_CONTEXT"):
             config.auto_context = int(env["FAKE_SPLASH_AUTO_CONTEXT"])
-        config.disk_suggestion = env.get("FAKE_SPLASH_DISK_SUGGESTION", config.disk_suggestion)
+        config.volume_available = parse_size(env.get("FAKE_SPLASH_VOLUME_AVAILABLE"), config.volume_available)
+        config.volume_size = parse_size(env.get("FAKE_SPLASH_VOLUME_SIZE"), config.volume_size)
+        config.writes_gated = env.get("FAKE_SPLASH_WRITES_GATED", config.writes_gated)
         config.startup_failure = env.get("FAKE_SPLASH_FAIL_STARTUP", "")
         config.crash_code = int(env.get("FAKE_SPLASH_CRASH_CODE", config.crash_code))
         config.listen_early = _env_bool("FAKE_SPLASH_LISTEN_EARLY", False)
@@ -212,7 +232,8 @@ class ServeSettings:
     port: int
     max_context: int | None
     max_memory: int | None
-    max_cache_disk: int
+    # --max-cache-disk: None for auto (1.3.2's default), 0 for off, else bytes.
+    max_cache_disk: int | None
     persistent_cache: bool
     cache_dir: Path | None
     kv_format: str
@@ -229,6 +250,18 @@ class ServeSettings:
     idle_release: float | None = None
     disable_ane: bool = False
     allow_idle_sleep: bool = False
+    # 1.3.2's --max-cache-disk-writes (bytes a day, 0 for no limit),
+    # --state-format, --thinking-token-budget and --thinking-end-text.
+    max_cache_disk_writes: int = 0
+    state_format: str = "fp32"
+    thinking_token_budget: int | None = None
+    thinking_end_text: str | None = None
+
+    @property
+    def cache_disk_quota(self) -> int:
+        """The tier's quota: 32 GiB for auto (DiskSpace.hpp
+        kAutomaticCacheDiskBytes), 0 for off."""
+        return AUTOMATIC_CACHE_DISK if self.max_cache_disk is None else self.max_cache_disk
 
     @property
     def ane_split(self) -> bool:
@@ -330,9 +363,12 @@ class MemoryPlan:
         target = (19_600 if moe else 15_200) * MIB
         draft = (980 if moe else 1_900) * MIB
         vision = 0 if settings.language_only else 860 * MIB
-        lane_state = (96 if moe else 160) * MIB
+        lane_state = self.lane_state_bytes(settings)
         prefill, decode = 1_536 * MIB, 512 * MIB
-        staging = lane_state if settings.max_cache_disk else 0
+        # RuntimeResources.mm (1.3.2): a quota that holds a state, the automatic
+        # one included, sets a state's staging aside.
+        staging = lane_state if settings.cache_disk_quota >= lane_state else 0
+        self.state_format = settings.state_format
         ane = ANE_FFN_BYTES if settings.ane_split else 0
         fixed = target + draft + vision + prefill + decode + PIPELINE_RESERVE + RUNTIME_RESERVE + staging + ane
         dynamic = max(0, hard - fixed)
@@ -385,6 +421,12 @@ class MemoryPlan:
         self.automatic_context = automatic
         self.page_bytes = page
 
+    @staticmethod
+    def lane_state_bytes(settings: ServeSettings) -> int:
+        """One lane's state; --state-format bf16 (1.3.2) halves each recurrent state."""
+        state = (96 if _family(settings.model) == "Qwen3.6-35B-A3B" else 160) * MIB
+        return state // 2 if settings.state_format == "bf16" else state
+
     def status_json(self, valid: bool = True) -> dict:
         b = self.breakdown
         budget = asdict(b)
@@ -415,6 +457,7 @@ class MemoryPlan:
                     "kv_format": self.kv_format,
                     "kv_elements_per_scale": HEAD_DIMENSION if self.kv_format == "int8" else 0,
                     "kv_page_bytes": self.page_bytes,
+                    "state_format": self.state_format,
                     "memory": {
                         "target_weights_bytes": b.target_weights_bytes,
                         "draft_weights_bytes": b.draft_weights_bytes,
@@ -608,9 +651,18 @@ class FakeEngine:
         self.response_store = ResponseStore()
         self.latencies = LatencyMetrics()
         self.persistent: PersistentCache | None = None
-        self.build_id = hashlib.sha256(b"splash-1.3.1-fake").hexdigest()[:16]
+        self.build_id = hashlib.sha256(b"splash-1.3.2-fake").hexdigest()[:16]
         self.weights_released = False
+        # Status.cpp appendWeights (1.3.2): a restore leaves the weights released
+        # until it is done.
+        self.weights_restoring = False
         self.weights_restores = 0
+        # Whether the SSD cache opened, and the limit its volume left it.
+        self.disk_open = False
+        self.disk_limit = 0
+        # Status.cpp active_requests (1.3.2): the engine's requests in service, by id.
+        self.request_ids = 0
+        self.active: dict[int, dict] = {}
         # Status.cpp appendAneFfn counters; the warmup runs one split command over
         # every layer, as the real engine's does.
         split = settings.ane_split
@@ -680,7 +732,9 @@ class FakeEngine:
         return ["text", "image", "pdf"] if self.vision else ["text"]
 
     def accepts_model(self, model: object) -> bool:
-        return isinstance(model, str) and model in self.model_names
+        """frontend.py accepts_model (1.3.2): a name the server answers to, or
+        none, absent or empty, which means the served model."""
+        return model in (None, "") or (isinstance(model, str) and model in self.model_names)
 
     # --- startup -----------------------------------------------------------
     def template_description(self) -> str:
@@ -691,9 +745,25 @@ class FakeEngine:
         """Print the startup lines in the engine's order and settle the plan;
         raises StartupFailed with the lines already printed."""
         s, cfg = self.settings, self.config
-        print_status(f"Loading · {s.model}")  # server/server.py:1962
-        print_status(f"Chat template · {self.template_description()}")  # server.py:1968
+        print_status(f"Loading · {s.model}")  # server/server.py:1747
+        # server/server.py:1752 thinking_end_tokens (backend.py:51-74), before
+        # the chat template line; it ends the start before any backend exists.
+        if s.thinking_end_text is not None:
+            tokens = fake_text.tokenize(s.thinking_end_text)
+            if not s.thinking_end_text.endswith("</think>"):
+                raise StartupFailed("--thinking-end-text must end with </think> and hold no other special token")
+            if len(tokens) > MAX_THINKING_END_TOKENS:
+                raise StartupFailed(
+                    f"--thinking-end-text takes {len(tokens)} tokens; the most is {MAX_THINKING_END_TOKENS}"
+                )
+        print_status(f"Chat template · {self.template_description()}")  # server.py:1754
         self.backend_created = True
+        quota, state_bytes = s.cache_disk_quota, MemoryPlan.lane_state_bytes(s)
+        if 0 < quota < state_bytes:
+            # runtime/engine/RuntimeResources.mm:398-400 (1.3.2)
+            log_startup(
+                f"SSD cache off: its quota holds no state of {state_bytes // MIB} MiB; no state staging is set aside."
+            )
         time.sleep(max(0.0, cfg.load_seconds))
         # runtime/engine/RuntimeResources.mm:385
         log_startup(f"Weights loaded in {cfg.load_seconds:.2f} s.")
@@ -722,7 +792,7 @@ class FakeEngine:
             log_startup(f"Neural Engine FFN split {ANE_SPLIT_REASON}.")
         elif _family(s.model) == "Qwen3.8-27B":
             log_startup(f"The GPU runs the prefill FFN alone, {ANE_OFF_GIVEN}.")
-        if s.max_cache_disk:
+        if plan.breakdown.state_staging_bytes:
             self._open_disk_tier(plan)
         automatic = plan.automatic_context
         if (s.max_context is not None and s.max_context > automatic) or cfg.startup_failure == "context":
@@ -739,17 +809,9 @@ class FakeEngine:
                 f"omit it or pass at most {automatic}\n" + budget.describe()
             )
             raise StartupFailed("native protocol reached EOF")
+        # 1.3.2 dropped Bootstrap.mm's "may not hold" suggestion: the SSD cache
+        # is on by default.
         self.max_context = s.max_context or automatic
-        suggest = cfg.disk_suggestion
-        weights = plan.breakdown.fixed_runtime_bytes
-        may_not_hold = cfg.host_available < weights + self.max_context * (plan.page_bytes // KV_PAGE_TOKENS)
-        if not s.max_cache_disk and (suggest == "1" or (suggest == "auto" and may_not_hold)):
-            # runtime/engine/Bootstrap.mm:288-293
-            log_startup(
-                f"The {cfg.host_available // MIB} MiB this Mac had available at startup may not hold a "
-                f"{self.max_context}-token request; one that runs out of memory is suspended and replays "
-                "its prompt. --max-cache-disk SIZE keeps its progress and cached prefixes on SSD."
-            )
         time.sleep(max(0.0, cfg.start_delay))
         if self.persistent is not None:
             self.persistent.begin_serving()
@@ -764,10 +826,35 @@ class FakeEngine:
         return f"Ready · {self.settings.model} · context {text}{mode} · {address}"
 
     def _open_disk_tier(self, plan: MemoryPlan) -> None:
-        s = self.settings
-        slot_kib = plan.page_bytes // KIB + 4
-        state_mib = plan.breakdown.lane_state_bytes // MIB
-        if s.persistent_cache:
+        """RuntimeResources.mm (1.3.2, lines 600-700) and DiskSpace.cpp: the
+        automatic tier opens only where its volume's limit holds two states and
+        1 GiB of KV; a persistent tier keeps its files in a cache directory of
+        its own, else temporary files; the volume's free space sizes the limit."""
+        s, cfg = self.settings, self.config
+        automatic = s.max_cache_disk is None
+        state_bytes = plan.breakdown.lane_state_bytes
+        floor = min(DISK_FLOOR, cfg.volume_size // 20)
+
+        def room(held: int) -> int:
+            # DiskSpace.cpp diskRoomBytes
+            total = cfg.volume_available + held
+            return total - floor if total > floor else 0
+
+        def automatic_refusal(held: int) -> str | None:
+            # DiskSpace.cpp automaticDiskRefusal
+            if min(AUTOMATIC_CACHE_DISK, room(held) // 4) < 2 * state_bytes + GIB:
+                return (
+                    f"{gibibytes(cfg.volume_available)} available on {DATA_VOLUME} is too little beyond "
+                    f"the {gibibytes(floor)} it keeps free"
+                )
+            return None
+
+        temporary_refusal = root_refusal = None
+        if automatic:
+            temporary_refusal = automatic_refusal(0)
+            if s.persistent_cache:
+                root_refusal = automatic_refusal(0)
+        if s.persistent_cache and root_refusal is None:
             root = s.cache_dir
             if root is None:
                 from install import paths  # the fake's own data dir
@@ -775,25 +862,59 @@ class FakeEngine:
                 root = paths.default_cache_dir()
             # RuntimeResources.mm persistentCacheNamespace: 32 lowercase hex digits
             # (128 bits), which is what the manager's Clear KV cache recognises.
-            namespace = hashlib.sha256(f"{s.model}|{s.kv_format}".encode()).hexdigest()[:32]
+            # fp32 states keep the identity they had before states had a format.
+            states = " bf16" if s.state_format == "bf16" else ""
+            namespace = hashlib.sha256(f"{s.model}|{s.kv_format}{states}".encode()).hexdigest()[:32]
             cache = PersistentCache(root, namespace)
             if cache.open():
                 self.persistent = cache
             else:
-                # RuntimeResources.mm:116
+                # RuntimeResources.mm:124-126
                 log_startup(
                     f"Persistent cache {cache.directory} is in use by another process; "
                     "this one keeps a temporary cache."
                 )
-        label = "Persistent cache tier: " if self.persistent else "Cache disk tier: "
-        # RuntimeResources.mm:488
+        off = None
+        if self.persistent is None and temporary_refusal is not None:
+            if root_refusal is not None:
+                off = f"for its root, {root_refusal}; for temporary files, {temporary_refusal}"
+            else:
+                off = f"for temporary files, {temporary_refusal}" if s.persistent_cache else temporary_refusal
+        elif self.persistent is None and root_refusal is not None:
+            log_startup(f"Persistent cache off: {root_refusal}; the SSD cache keeps temporary files.")
+        if off is not None:
+            # RuntimeResources.mm:655-657
+            log_startup(f"SSD cache off: {off}; the state staging the plan set aside stays unused.")
+            return
+        quota = s.cache_disk_quota
+        held = self.persistent.taken_back["bytes"] if self.persistent else 0
+        self.disk_open = True
+        self.disk_limit = min(quota, room(held) // 4)
+        if self.disk_limit < quota:
+            reason = f"a quarter of the {gibibytes(room(held))} its volume has"
+        else:
+            reason = f"{'its automatic quota' if automatic else 'its quota'}, while its volume has room"
+        if self.persistent:
+            files = f"persistent files in {self.persistent.directory}"
+        else:
+            files = f"temporary files in {tempfile.gettempdir()}"
+        budget = ""
+        if s.max_cache_disk_writes:
+            budget = (
+                f"; a write budget of {gibibytes(s.max_cache_disk_writes)} a day, which the states conversations "
+                "resume from and KV pages pass, starting with a quarter of a day's"
+            )
+        slot_kib = plan.page_bytes // KIB + 4
+        state_mib = state_bytes // MIB
+        # RuntimeResources.mm reportDiskTier (lines 149-184)
         log_startup(
-            f"{label}{s.max_cache_disk // MIB} MiB for KV pages of {slot_kib} KiB and states of "
-            f"{state_mib} MiB; a state's write stages through {state_mib} MiB of the memory plan."
+            f"SSD cache: up to {gibibytes(self.disk_limit)} of {files} ({reason} beyond the "
+            f"{gibibytes(floor)} it keeps free){budget}; KV pages of {slot_kib} KiB and states of {state_mib} MiB, "
+            f"a state's write staging through {state_mib} MiB of the memory plan; --max-cache-disk 0 turns it off."
         )
         if self.persistent:
             t = self.persistent.taken_back
-            # RuntimeResources.mm:564
+            # RuntimeResources.mm:768-773
             log_startup(
                 f"Persistent cache {self.persistent.directory}: took back {t['states']} restore points over "
                 f"{t['kv_blocks']} KV blocks ({t['bytes'] // MIB} MiB); left {t['left_behind']} copies behind."
@@ -857,9 +978,16 @@ class FakeEngine:
         return self.mode == "queue_full"
 
     # --- prefix cache ----------------------------------------------------------
-    def _lookup(self, tokens: list[int]) -> int:
+    @staticmethod
+    def _salted(tokens: list[int], salt: str | None) -> tuple[int, ...]:
+        """The cache key of a prompt: a request shares cached prompts only with
+        requests of the same cache_salt (frontend.py _cache_salt, 1.3.2). A
+        salt leads the key as a token no vocabulary has."""
+        return tuple(tokens) if salt is None else (-1 - zlib.crc32(salt.encode()), *tokens)
+
+    def _lookup(self, tokens: list[int], salt: str | None = None) -> int:
         best = 0
-        key = tuple(tokens)
+        key = self._salted(tokens, salt)
         with self.lock:
             for cached in self.prefix_cache:
                 limit = min(len(cached), len(key))
@@ -867,17 +995,17 @@ class FakeEngine:
                 while n < limit and cached[n] == key[n]:
                     n += 1
                 best = max(best, n)
-        best = min(best, len(tokens) - 1)
+        best = min(best - (salt is not None), len(tokens) - 1)
         return max(0, best // KV_PAGE_TOKENS * KV_PAGE_TOKENS)
 
-    def _publish(self, tokens: list[int]) -> None:
+    def _publish(self, tokens: list[int], salt: str | None = None) -> None:
         with self.lock:
-            self.prefix_cache[tuple(tokens)] = None
+            self.prefix_cache[self._salted(tokens, salt)] = None
             self.c["publications"] += 1
             while len(self.prefix_cache) > 32:
                 evicted, _ = self.prefix_cache.popitem(last=False)
                 self.c["evictions"] += 1
-                if self.settings.max_cache_disk:
+                if self.disk_open:
                     self.c["kv_demotions"] += 1
                     self.c["disk_written_bytes"] += len(evicted) * self._page_bytes() // KV_PAGE_TOKENS
                     self.c["durable"] += 1
@@ -892,33 +1020,69 @@ class FakeEngine:
         given = self.settings.idle_release
         return self.config.idle_release_seconds if given is None else given
 
+    def _release_weights(self) -> bool:
+        """NativeRuntime.cpp releaseWeights: only while no request is in
+        service and no restore is under way (caller holds the lock)."""
+        if not self.ready or self.weights_released or self.weights_restoring or self.active:
+            return False
+        self.weights_released = True
+        return True
+
+    def _log_release(self, message: str) -> None:
+        if self.settings.ane_split:
+            write_stderr_line("Neural Engine FFN program unloaded while idle")  # ops/AneFfn.cpp:631
+        write_stderr_line(message)
+
     def idle_tick(self) -> None:
         with self.lock:
-            busy = self.c["queued"] + self.c["prefilling"] + self.c["decoding"]
             idle = time.monotonic() - self.last_request
-            release = self.ready and not self.weights_released and not busy and idle >= self.idle_release_seconds
-            if release:
-                self.weights_released = True
+            release = idle >= self.idle_release_seconds and self._release_weights()
         if release:
             # runtime/engine/NativeRuntime.cpp:133
-            if self.settings.ane_split:
-                write_stderr_line("Neural Engine FFN program unloaded while idle")  # ops/AneFfn.cpp:631
-            write_stderr_line(
+            self._log_release(
                 f"Weights released after {self.idle_release_seconds:g} s without a request; "
                 "the next request restores them"
             )
 
+    def release_on_request(self) -> dict:
+        """POST /v1/memory/release (1.3.2, NativeRuntime.cpp handleRelease): the
+        weights go back now when the engine is idle, with --idle-release off
+        too; the answer is the weights section either way."""
+        with self.lock:
+            released = self._release_weights()
+        if released:
+            # NativeRuntime.cpp:373
+            self._log_release("Weights released on request; the next request restores them")
+        return self.weights_status()
+
+    def weights_status(self) -> dict:
+        """runtime/engine/Status.cpp appendWeights: null while --idle-release off."""
+        with self.lock:
+            return {
+                "idle_release_seconds": None if math.isinf(self.idle_release_seconds) else self.idle_release_seconds,
+                "released": self.weights_released,
+                "restoring": self.weights_restoring,
+                "restores": self.weights_restores,
+                "restore_failures": 0,
+            }
+
     def _restore_weights(self) -> Iterator[tuple]:
         with self.lock:
-            released = self.weights_released
-            self.weights_released = False
-        if not released:
+            restore = self.weights_released and not self.weights_restoring
+            if restore:
+                self.weights_restoring = True
+        if not restore:
             return
         started = time.monotonic()
-        yield from self._sleep(self.config.restore_seconds)
-        # runtime/engine/NativeRuntime.cpp:150
+        try:
+            yield from self._sleep(self.config.restore_seconds)
+        finally:
+            with self.lock:
+                self.weights_restoring = False
+        # runtime/engine/NativeRuntime.cpp:160
         write_stderr_line(f"Weights restored in {time.monotonic() - started:.2f} s")
         with self.lock:
+            self.weights_released = False
             self.weights_restores += 1
         if self.settings.ane_split:
             # ops/AneFfn.cpp:643
@@ -961,11 +1125,35 @@ class FakeEngine:
             with self.lock:
                 self.c["queued"] -= 1
 
+    def _admit(self, job: FakeJob) -> int:
+        """Track a request in service for /status active_requests (Status.cpp,
+        1.3.2): its phase, prompt progress and output so far."""
+        with self.lock:
+            self.request_ids += 1
+            self.active[self.request_ids] = {
+                "phase": "queued",
+                "priority": job.priority,
+                "prompt_tokens": len(job.prompt_tokens),
+                "prompt_processed": 0,
+                "generated_tokens": 0,
+                "max_new_tokens": job.max_new_tokens,
+                "received": time.monotonic(),
+            }
+            return self.request_ids
+
+    def _progress(self, request_id: int, **fields: object) -> None:
+        with self.lock:
+            if request_id in self.active:
+                self.active[request_id].update(fields)
+
     def _output_plan(self, job: FakeJob) -> tuple[list[str], list[str], list[tuple[str, str]]]:
         """The reasoning pieces, content pieces and tool calls (name, args)."""
         cfg = self.config
         thinking = (job.thinking and cfg.reasoning != "never") or cfg.reasoning == "always"
         reasoning = fake_text.reasoning_pieces(job.last_user) if thinking else []
+        if job.thinking_token_budget is not None:
+            # A thinking budget (1.3.2) closes the thinking after that many tokens.
+            reasoning = reasoning[: job.thinking_token_budget]
         tools = job.tools or []
         choice = job.tool_choice
         chosen: list[dict] = []
@@ -998,12 +1186,17 @@ class FakeEngine:
         with self.lock:
             self.c["submitted"] += 1
             self.last_request = received
+        request_id = self._admit(job)
         outcome = "failed"
         holding_lane = counted_tokens = False
         matched = 0
         produced: list[str] = []
         result: NativeResult | None = None
         error_code = "runtime_error"
+        started = received
+        first_token_at = None
+        reason = "stop"
+        stop_sequence = None
         try:
             yield from self._acquire_lane(job)
             holding_lane = True
@@ -1027,7 +1220,7 @@ class FakeEngine:
                     503, "memory did not become available within the resource wait limit", "resource_timeout"
                 )
             prompt = job.prompt_tokens
-            matched = self._lookup(prompt)
+            matched = self._lookup(prompt, job.cache_salt)
             uncached = len(prompt) - matched
             with self.lock:
                 self.c["prefilling"] += 1
@@ -1037,14 +1230,17 @@ class FakeEngine:
                 self.c["active_tokens"] += len(prompt)
             counted_tokens = True
             started = time.monotonic()
+            self._progress(request_id, phase="prefill", prompt_processed=matched)
+            self._print_started(job, matched)
             yield ("start", matched)
             prefill_seconds = uncached / max(1.0, self.config.prefill_tokens_per_second)
             steps = max(1, math.ceil(uncached / PREFILL_TOKEN_BUDGET)) if job.return_progress else 1
             try:
                 for step in range(1, steps + 1):
                     yield from self._sleep(prefill_seconds / steps, job)
+                    processed = matched + min(uncached, step * PREFILL_TOKEN_BUDGET)
+                    self._progress(request_id, prompt_processed=processed)
                     if job.return_progress:
-                        processed = matched + min(uncached, step * PREFILL_TOKEN_BUDGET)
                         yield (
                             "progress",
                             {
@@ -1064,9 +1260,7 @@ class FakeEngine:
                     self._count_ane(uncached, prefill_seconds)
             reasoning, content, calls = self._output_plan(job)
             content_text = ""
-            stop_sequence = None
-            reason = "stop"
-            first_token_at = None
+            self._progress(request_id, phase="decode")
             interval = 1.0 / max(1.0, self.config.tokens_per_second)
             with self.lock:
                 self.c["decoding"] += 1
@@ -1107,6 +1301,7 @@ class FakeEngine:
                             self.itl_samples.append(interval * cost * 1000.0)
                     produced.extend(["t"] * cost)
                     self._count_decode(cost)
+                    self._progress(request_id, generated_tokens=len(produced))
                     if item[0] == "tool":
                         yield item
                         continue
@@ -1127,23 +1322,9 @@ class FakeEngine:
                 with self.lock:
                     self.c["decoding"] -= 1
                     self.c["decode_wall_ms"] += (time.monotonic() - decode_started) * 1000.0
-            done = time.monotonic()
-            completion = len(produced)
-            output_ids = [zlib.crc32(f"{job.public_id}{i}".encode()) % fake_text.VOCAB_SIZE for i in range(completion)]
-            self._publish(prompt + output_ids)
-            first = first_token_at or done
-            result = NativeResult(
-                reason=reason,
-                prompt_tokens=len(prompt),
-                completion_tokens=completion,
-                start_to_first_token_ms=(first - started) * 1000.0,
-                first_token_to_done_ms=(done - first) * 1000.0,
-                request_wall_ms=(done - received) * 1000.0,
-                prefill_tokens=uncached,
-                cache=CacheInfo("hit" if matched else "miss", matched, 0),
-                stop_sequence=stop_sequence,
-                first_token_batch_tokens=1 if completion else 0,
-            )
+            self._publish(prompt + self._output_ids(job, len(produced)), job.cache_salt)
+            result = self._result(job, reason, matched, len(produced), received, started, first_token_at)
+            result.stop_sequence = stop_sequence
             outcome = "completed"
             yield ("done", result)
         except GeneratorExit:
@@ -1161,38 +1342,78 @@ class FakeEngine:
                 if counted_tokens:
                     self.c["active_tokens"] -= len(job.prompt_tokens)
                 self.last_request = time.monotonic()
+                self.active.pop(request_id, None)
             if holding_lane:
                 self.lanes.release()
-            self._print_request(job, outcome, result, matched, len(produced), error_code)
+            if outcome == "cancelled":
+                result = self._result(job, "cancelled", matched, len(produced), received, started, first_token_at)
+            self._print_request(job, result, error_code)
 
     @staticmethod
-    def _print_request(
-        job: FakeJob, outcome: str, result: NativeResult | None, matched: int, completion: int, error_code: str
-    ) -> None:
-        """server/diagnostics.py print_request, which backend._record calls
-        for every generation request."""
-        if outcome == "failed":
-            print_status(f"Error · {error_code}", error=True)
-            return
-        parts = [
-            "Cancelled" if outcome == "cancelled" else "Done",
-            f"input {len(job.prompt_tokens):,}",
-            f"cached {matched:,}",
-            f"output {completion:,}",
-        ]
+    def _output_ids(job: FakeJob, count: int) -> list[int]:
+        return [zlib.crc32(f"{job.public_id}{i}".encode()) % fake_text.VOCAB_SIZE for i in range(count)]
+
+    def _result(
+        self,
+        job: FakeJob,
+        reason: str,
+        matched: int,
+        completion: int,
+        received: float,
+        started: float,
+        first_token_at: float | None,
+    ) -> NativeResult:
+        """The request's NativeResult (server/backend.py). Its speculative
+        decoding is invented but consistent: each verified draft cycle yields
+        the tokens it accepted and one more, about 2.4 a cycle."""
+        done = time.monotonic()
+        first = first_token_at or done
+        cycles = math.ceil(completion / 2.4)
+        accepted = completion - cycles
+        with self.lock:
+            self.c["drafted_tokens"] += cycles * 4
+            self.c["accepted_draft_tokens"] += accepted
+        return NativeResult(
+            reason=reason,
+            prompt_tokens=len(job.prompt_tokens),
+            completion_tokens=completion,
+            start_to_first_token_ms=(first - started) * 1000.0,
+            first_token_to_done_ms=(done - first) * 1000.0,
+            request_wall_ms=(done - received) * 1000.0,
+            prefill_tokens=len(job.prompt_tokens) - matched,
+            cache=CacheInfo("hit" if matched else "miss", matched, 0),
+            first_token_batch_tokens=1 if completion else 0,
+            drafted_tokens=cycles * 4,
+            accepted_draft_tokens=accepted,
+            draft_cycles=cycles,
+        )
+
+    @staticmethod
+    def _print_started(job: FakeJob, matched: int) -> None:
+        """server/backend.py _on_event (1.3.2, lines 823-848): the record the
+        engine's admission logs, printed by the copied print_request."""
+        record: dict = {"outcome": "started", "prompt_tokens": len(job.prompt_tokens), "cached_tokens": matched}
+        if job.reasoning is not None:
+            record["reasoning"] = job.reasoning
+        print_request(record)
+
+    @staticmethod
+    def _print_request(job: FakeJob, result: NativeResult | None, error_code: str) -> None:
+        """server/backend.py _record, printed by the copied print_request for
+        every generation request."""
+        record: dict = {"outcome": result.reason if result else "error", "prompt_tokens": len(job.prompt_tokens)}
+        if result is not None:
+            record["completion_tokens"] = result.completion_tokens
+            record["metrics"] = result.metrics
         if job.tools:
             # frontend.py: sha1 of the sorted-key JSON of the tools, 8 hex digits.
             digest = hashlib.sha1(
                 json.dumps(job.tools, sort_keys=True, separators=(",", ":")).encode(), usedforsecurity=False
             ).hexdigest()[:8]
-            parts.append(f"tools {len(job.tools)}·{digest}")
-        if result is not None:
-            latency = result.metrics.get("request_latency", {})
-            if (ttft := latency.get("ttft_ms")) is not None:
-                parts.append(f"TTFT {ttft / 1000:.1f}s")
-            if (speed := latency.get("stream_tokens_per_second")) is not None:
-                parts.append(f"{speed:.1f} tok/s")
-        print_status(" · ".join(parts))
+            record["tools"] = {"count": len(job.tools), "signature": digest}
+        if result is None:
+            record["error_code"] = error_code
+        print_request(record)
 
     def _count_ane(self, rows: int, seconds: float) -> None:
         """A prefill runs in chunks of PREFILL_TOKEN_BUDGET rows; each chunk of
@@ -1214,9 +1435,6 @@ class FakeEngine:
             self.c[f"b{width}"] += 1
             self.c["decode_batches"] += 1
             self.c["decode_output_tokens"] += tokens
-            drafted = tokens * 2
-            self.c["drafted_tokens"] += drafted
-            self.c["accepted_draft_tokens"] += max(0, drafted * 7 // 10)
 
     def score(self, job: FakeJob, options: int) -> Generator[tuple, None, None]:
         """A score-only job (judgments, System One): prefill, then option
@@ -1224,13 +1442,16 @@ class FakeEngine:
         received = time.monotonic()
         with self.lock:
             self.c["submitted"] += 1
+        # Engine.cpp snapshot: a score-only job is a request in service too.
+        request_id = self._admit(job)
         outcome = "failed"
         holding_lane = False
         try:
             yield from self._acquire_lane(job)
             holding_lane = True
             yield from self._restore_weights()
-            matched = self._lookup(job.prompt_tokens)
+            matched = self._lookup(job.prompt_tokens, job.cache_salt)
+            self._progress(request_id, phase="prefill", prompt_processed=matched)
             started = time.monotonic()
             yield ("start", matched)
             yield from self._sleep(
@@ -1239,7 +1460,7 @@ class FakeEngine:
             seed = zlib.crc32(job.prompt_text.encode())
             logits = tuple(float(((seed >> (i % 24)) % 97) / 10.0 - 4.0 + i * 0.01) for i in range(options))
             done = time.monotonic()
-            self._publish(job.prompt_tokens)
+            self._publish(job.prompt_tokens, job.cache_salt)
             with self.lock:
                 self.c["prefill_input_tokens"] += len(job.prompt_tokens) - matched
             outcome = "completed"
@@ -1263,6 +1484,7 @@ class FakeEngine:
         finally:
             with self.lock:
                 self.c[outcome] += 1
+                self.active.pop(request_id, None)
             if holding_lane:
                 self.lanes.release()
 
@@ -1286,6 +1508,21 @@ class FakeEngine:
             cache_tokens = sum(len(k) for k in self.prefix_cache)
             ttft = deque(self.ttft_samples)
             itl = deque(self.itl_samples)
+            now = time.monotonic()
+            # Status.cpp (1.3.2) active_requests, oldest first.
+            active_requests = [
+                {
+                    "id": request_id,
+                    "phase": request["phase"],
+                    "priority": request["priority"],
+                    "prompt_tokens": request["prompt_tokens"],
+                    "prompt_processed": request["prompt_processed"],
+                    "generated_tokens": request["generated_tokens"],
+                    "max_new_tokens": request["max_new_tokens"],
+                    "age_ms": int((now - request["received"]) * 1000),
+                }
+                for request_id, request in sorted(self.active.items())
+            ]
         page = self._page_bytes()
         pages_cache = cache_tokens // KV_PAGE_TOKENS
         pages_active = math.ceil(c["active_tokens"] / KV_PAGE_TOKENS)
@@ -1315,13 +1552,20 @@ class FakeEngine:
             if self.persistent
             else {"states": 0, "kv_blocks": 0, "bytes": 0, "left_behind": 0}
         )
-        disk_used = min(s.max_cache_disk, c["disk_written_bytes"] + taken_back["bytes"]) if s.max_cache_disk else 0
+        quota = s.cache_disk_quota if self.disk_open else 0
+        disk_used = min(self.disk_limit, c["disk_written_bytes"] + taken_back["bytes"]) if self.disk_open else 0
+        # SlotFile.hpp writeBudgetBytes: a budget starts with a quarter of a
+        # day's writes; zero without one.
+        write_budget = max(0, s.max_cache_disk_writes // 4 - c["disk_written_bytes"]) if self.disk_open else 0
+        gated = cfg.writes_gated if cfg.writes_gated in ("no", "budget", "closed") else "no"
+        if s.max_cache_disk_writes and self.disk_open and c["disk_written_bytes"] > s.max_cache_disk_writes // 4:
+            gated = "budget"
         status: dict = {
             "schema_version": STATUS_SCHEMA_VERSION,
             "ready": ready,
             "maximum_context_tokens": self.max_context,
             "memory_pressure": pressure,
-            # Status.cpp (1.3.1): ProcessInfo's thermal state; readiness ignores it.
+            # Status.cpp (1.3.1 on): ProcessInfo's thermal state; readiness ignores it.
             "thermal_state": cfg.thermal_state,
             "admission": {
                 "waiting": c["queued"],
@@ -1362,6 +1606,10 @@ class FakeEngine:
                 "host_measurement_valid": True,
                 "host_available_bytes": cfg.host_available,
                 "host_reserve_bytes": 4 * GIB,
+                # 1.3.2: the spare memory macOS has beyond what it can reclaim,
+                # of which serving keeps a reserve.
+                "host_spare_bytes": max(0, cfg.host_available - 2 * GIB),
+                "host_spare_reserve_bytes": 2 * GIB,
                 "host_headroom_bytes": max(0, cfg.host_available - 4 * GIB),
             },
             "memory_audit": {
@@ -1378,13 +1626,7 @@ class FakeEngine:
                 "device_peak_allocated_bytes": peak,
                 "backend_peak_allocated_bytes": peak,
             },
-            # runtime/engine/Status.cpp appendWeights: null while --idle-release off.
-            "weights": {
-                "idle_release_seconds": None if math.isinf(self.idle_release_seconds) else self.idle_release_seconds,
-                "released": self.weights_released,
-                "restores": self.weights_restores,
-                "restore_failures": 0,
-            },
+            "weights": self.weights_status(),
             # Status.cpp appendAneFfn
             "ane_ffn": {
                 "state": "split" if s.ane_split else "off",
@@ -1440,9 +1682,13 @@ class FakeEngine:
                 "invalidations": 0,
             },
             "disk": {
-                "capacity_bytes": s.max_cache_disk,
+                "capacity_bytes": quota,
+                "limit_bytes": self.disk_limit if self.disk_open else 0,
                 "used_bytes": disk_used,
                 "file_bytes": disk_used,
+                "volume_available_bytes": cfg.volume_available if self.disk_open else 0,
+                "writes_gated": gated,
+                "write_budget_bytes": write_budget,
                 "read_bytes": c["disk_read_bytes"],
                 "written_bytes": c["disk_written_bytes"],
                 "kv_blocks": disk_used // page if page else 0,
@@ -1468,10 +1714,13 @@ class FakeEngine:
                 "kv_disk_hit_tokens": c["kv_restores"] * KV_PAGE_TOKENS,
                 "lost_state_misses": 0,
                 "reused_tokens": c["reused_tokens"],
+                "deduplicated_kv_tokens": 0,
                 "replay_state_publications": 0,
                 "deduplicated_state_publications": 0,
                 "recycled_state_publications": 0,
                 "disk_state_publications": c["durable"],
+                "state_captures": c["publications"],
+                "capture_cuts": 0,
                 "replay_state_publication_failures": 0,
                 "lazy_junctions": 0,
                 "junction_materializations": 0,
@@ -1535,6 +1784,7 @@ class FakeEngine:
                 "decode_batches": c["decode_batches"],
                 "decode_batches_by_width": {k: c[k] for k in ("b1", "b2", "b3", "b4")},
             },
+            "active_requests": active_requests,
             "requests": {k: c[k] for k in ("submitted", "completed", "cancelled", "failed")},
             "metrics": {
                 "ttft_ms": {"p50": _percentile(ttft, 0.5), "p95": _percentile(ttft, 0.95), "samples": len(ttft)},

@@ -1,8 +1,9 @@
 # Derived from Splash (github.com/incoai/splash, Apache-2.0), modified by the Splashboard authors.
 # See LICENSE.splash and NOTICE in scripts/fake_splash.
 """Response and stream-chunk shapes, copied from splash/server/api_shapes.py
-(1.2.0, lines 982-1255) with the tool-policy and thinking-codec objects
-replaced by plain fields of FakeJob. Keep these in step with the engine."""
+(1.2.0, lines 982-1255; unchanged in substance through 1.3.2) with the
+tool-policy and thinking-codec objects replaced by plain fields of FakeJob.
+Keep these in step with the engine."""
 
 from __future__ import annotations
 
@@ -19,6 +20,9 @@ class CacheInfo:
     status: str = "unknown"
     matched_tokens: int = 0
     lane: int = -1
+    # server/backend.py CacheInfo (1.3.2): KV read from blocks another request
+    # computed, past the cached prefix.
+    deduplicated_tokens: int = 0
 
 
 @dataclass
@@ -37,6 +41,10 @@ class NativeResult:
     stop_sequence: str | None = None
     first_token_batch_tokens: int = 0
     option_logits: tuple = ()
+    # server/backend.py NativeResult (1.3.2): the request's speculative decoding.
+    drafted_tokens: int = 0
+    accepted_draft_tokens: int = 0
+    draft_cycles: int = 0
 
     @functools.cached_property
     def metrics(self) -> dict:
@@ -71,6 +79,12 @@ class FakeJob:
     return_progress: bool = False
     last_user: str = ""
     score_options: int = 0
+    # backend.py Job (1.3.2): the thinking tokens before thinking closes (None
+    # for no cap), and a chat request's reasoning for its Started line
+    # (ReasoningRequest's fields plus whether it thinks; None without a template).
+    thinking_token_budget: int | None = None
+    reasoning: dict | None = None
+    cache_salt: str | None = None
 
 
 @dataclass

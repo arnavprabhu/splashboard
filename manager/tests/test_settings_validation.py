@@ -46,9 +46,11 @@ def test_defaults_match_spec() -> None:
     # The defaults are Splash's own.
     s = g.serve
     assert (s.max_memory, s.max_context, s.kv_format) == ("auto", "auto", "int8")
-    assert (s.max_cache_disk, s.persistent_cache) == ("0", False)
+    assert (s.max_cache_disk, s.persistent_cache) == ("auto", False)
     assert (s.decode_share, s.max_request_size, s.max_image_pixels) == (0.5, "128M", 4194304)
     assert (s.request_timeout, s.queue_size, s.default_reasoning_effort) == (None, 32, None)
+    assert (s.state_format, s.max_cache_disk_writes) == ("fp32", "0")
+    assert (s.thinking_token_budget, s.thinking_end_text) == (None, None)
     assert g.hf.offline is False and g.hf.endpoint is None
     r = g.routing
     assert (r.auto_load, r.switch_when_busy, r.default_model) == (True, "reject", None)
@@ -153,7 +155,7 @@ def test_spec_example_document_is_valid() -> None:
         ("serve.max_context", "300K", "must be 'auto' or a token count up to 256K, such as 100K"),
         ("serve.max_context", "0", "must be 'auto' or a token count up to 256K, such as 100K"),
         ("serve.max_memory", "lots", "must be 'auto' or a positive byte count such as 32G"),
-        ("serve.max_cache_disk", "auto", "use 0 to disable, or a size such as 5G"),
+        ("serve.max_cache_disk", "lots", "use auto, 0 to disable, or a size such as 16G"),
         ("serve.max_request_size", "0", "must be a positive byte count such as 128M"),
         ("serve.decode_share", -0.5, "must be a nonnegative number such as 0.5"),
         ("serve.queue_size", 0, "must be a positive number of requests such as 32"),
@@ -188,9 +190,18 @@ def test_field_errors(path: str, value: Any, message: str) -> None:
         ("serve.max_context", 131072),
         ("serve.max_memory", "28G"),
         ("serve.max_cache_disk", "5G"),
+        ("serve.max_cache_disk", "auto"),
+        ("serve.max_cache_disk", "0"),
         ("serve.decode_share", 0),
         ("serve.request_timeout", 3600),
         ("serve.kv_format", "bf16"),
+        ("serve.state_format", "bf16"),
+        ("serve.max_cache_disk_writes", "200G"),
+        ("serve.max_cache_disk_writes", 0),
+        ("serve.thinking_token_budget", 0),
+        ("serve.thinking_token_budget", 12000),
+        ("serve.thinking_end_text", "\n\nAnswer now.\n</think>"),
+        ("serve.thinking_end_text", ""),
         ("server.allowed_origins", ["*", "tauri://localhost"]),
         ("server.allowed_hosts", ["mymac.local"]),
         ("server.host", "0.0.0.0"),  # noqa: S104 (valid once a key exists, see below)
@@ -216,9 +227,81 @@ def test_numbers_are_stored_as_text_for_sizes() -> None:
 
 def test_persistent_cache_requires_disk_tier() -> None:
     raw = doc_with("serve.persistent_cache", True)
-    assert ("serve.persistent_cache", "--persistent-cache needs --max-cache-disk") in errors(raw)
+    # Auto, the default, is an SSD cache.
+    assert errors(raw) == []
+    raw["global"]["serve"]["max_cache_disk"] = "0"
+    assert (
+        "serve.persistent_cache",
+        "--persistent-cache needs the SSD cache --max-cache-disk 0 turns off",
+    ) in errors(raw)
     raw["global"]["serve"]["max_cache_disk"] = "32G"
     assert errors(raw) == []
+
+
+def test_write_budget_requires_disk_tier() -> None:
+    raw = doc_with("serve.max_cache_disk_writes", "200G")
+    assert errors(raw) == []
+    raw["global"]["serve"]["max_cache_disk"] = "0"
+    assert (
+        "serve.max_cache_disk_writes",
+        "--max-cache-disk-writes needs the SSD cache --max-cache-disk 0 turns off",
+    ) in errors(raw)
+    raw["global"]["serve"]["max_cache_disk_writes"] = "0"
+    assert errors(raw) == []
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "message"),
+    [
+        ("serve.state_format", "fp16", "Input should be 'fp32' or 'bf16'"),
+        ("serve.max_cache_disk_writes", "auto", "use 0 for no limit, or a size such as 200G"),
+        ("serve.thinking_token_budget", -1, "must be a nonnegative integer"),
+        ("serve.thinking_token_budget", True, "must be a nonnegative integer"),
+        ("serve.thinking_token_budget", "100", "must be a nonnegative integer"),
+        (
+            "serve.thinking_end_text",
+            "Answer now.",
+            "--thinking-end-text must end with </think> and hold no other special token",
+        ),
+    ],
+)
+def test_new_serve_fields_refuse(path: str, value: Any, message: str) -> None:
+    assert any(message in m for _, m in errors(doc_with(path, value))), errors(
+        doc_with(path, value)
+    )
+
+
+def test_thinking_budget_null_in_a_model_means_no_cap() -> None:
+    """Like default_reasoning_effort, an explicit null is an override (Splash's
+    default, no cap), not "inherit"."""
+    from splash_gui.settings.effective import effective_serve
+
+    raw = doc_with("serve.thinking_token_budget", 8000)
+    raw["models"][MLX] = {
+        "serve": {"thinking_token_budget": None, "thinking_end_text": None},
+        "sampling_defaults": {},
+        "profiles": {},
+    }
+    result = validate_document(raw)
+    assert result.ok and result.document is not None
+    assert effective_serve(result.document, MLX).thinking_token_budget is None
+    assert (
+        effective_serve(result.document, "unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M").thinking_token_budget
+        == 8000
+    )
+
+
+def test_bf16_states_warn() -> None:
+    result = validate_document(doc_with("serve.state_format", "bf16"))
+    assert result.ok
+    assert [w.code for w in result.warnings if w.key == "serve.state_format"] == ["tradeoff"]
+    model = validate_document(doc_with("serve.state_format", "bf16", model=MLX))
+    assert any(w.model == MLX and w.key == "serve.state_format" for w in model.warnings)
+
+
+def test_auto_disk_tier_does_not_warn() -> None:
+    result = validate_document(doc_with("serve.max_cache_disk", "auto"))
+    assert result.ok and result.warnings == []
 
 
 def test_small_disk_tier_warns() -> None:
@@ -350,11 +433,32 @@ def test_unknown_keys_are_rejected() -> None:
         ({"top_k": True}, "top_k must be 0 or -1"),
         ({"top_k": "20"}, "top_k must be 0 or -1"),
         ({"top_k": 20.0}, "top_k must be 0 or -1"),
-        ({"seed": False}, "seed must be an unsigned 64-bit integer"),
+        ({"seed": False}, "seed must be a 64-bit integer"),
         ({"ignore_eos": 1}, "ignore_eos must be a boolean"),
         ({"temperature": float("inf")}, "temperature must be a number in [0, 2]"),
         ({"repetition_penalty": 0}, "repetition_penalty must be a positive number"),
-        ({"seed": -1}, "seed must be an unsigned 64-bit integer"),
+        ({"seed": -(2**63) - 1}, "seed must be a 64-bit integer"),
+        ({"seed": 2**64}, "seed must be a 64-bit integer"),
+        (
+            {"thinking_token_budget": -2},
+            "thinking_token_budget must be a non-negative integer or -1 for no cap",
+        ),
+        (
+            {"thinking_token_budget": True},
+            "thinking_token_budget must be a non-negative integer or -1 for no cap",
+        ),
+        (
+            {"thinking": {"type": "enabled"}},
+            "thinking.budget_tokens must be an integer of at least 1024",
+        ),
+        (
+            {"thinking": {"type": "enabled", "budget_tokens": 512}},
+            "thinking.budget_tokens must be an integer of at least 1024",
+        ),
+        (
+            {"thinking": {"type": "enabled", "budget_tokens": "2048"}},
+            "thinking.budget_tokens must be an integer of at least 1024",
+        ),
         ({"stop": ["a", "b", "c", "d", "e"]}, "stop must be a string or up to four strings"),
         ({"priority": "urgent"}, "Input should be 'foreground', 'normal' or 'background'"),
         ({"reasoning_effort": "huge"}, "Input should be"),
@@ -380,6 +484,20 @@ def test_profile_errors_point_at_the_field() -> None:
 def test_profile_ranges_accept_splash_edges() -> None:
     overlay = {"temperature": 0, "top_p": 1, "top_k": -1, "min_p": 0, "seed": 2**64 - 1}
     assert errors(doc_with("profiles", {"edge": overlay}, model=MLX)) == []
+    # -1 asks for a random seed and a budget of -1 sets no cap, as in Splash 1.3.2.
+    low = {"seed": -(2**63), "thinking_token_budget": -1}
+    assert errors(doc_with("profiles", {"low": low}, model=MLX)) == []
+    for budget in (0, 4096):
+        assert (
+            errors(doc_with("sampling_defaults", {"thinking_token_budget": budget}, model=MLX))
+            == []
+        )
+    for thinking in (
+        {"type": "enabled", "budget_tokens": 1024},
+        {"type": "adaptive"},
+        {"type": "disabled"},
+    ):
+        assert errors(doc_with("profiles", {"t": {"thinking": thinking}}, model=MLX)) == []
 
 
 def test_profile_names_and_default_profile() -> None:

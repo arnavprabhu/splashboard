@@ -216,7 +216,8 @@ def test_metrics_prometheus(engine):
     assert 'splash_memory_pressure{state="normal"} 1' in text
     assert "splash_requests_submitted_total" in text
     assert "# TYPE splash_http_ttft_seconds histogram" in text
-    assert "splash_disk" not in text  # disk fields are /status only
+    # 1.3.2 exports the SSD cache's sizes and its write gate.
+    assert "splash_disk_limit_bytes" in text and 'splash_disk_writes_gated{state="no"} 1' in text
 
 
 def test_models_listing_and_lookup(engine):
@@ -260,6 +261,8 @@ def test_chat_non_stream(engine):
         "predicted_ms",
         "predicted_per_second",
         "cache_n",
+        "draft_n",
+        "draft_n_accepted",
     }
     assert body["metrics"]["cache"]["status"] in ("hit", "miss")
 
@@ -343,6 +346,9 @@ def test_chat_validation_errors(engine):
         ({"messages": []}, "messages must be a non-empty array"),
         (chat_body(reasoning_effort="huge"), "invalid reasoning_effort"),
         (chat_body(priority="urgent"), "priority must be foreground, normal, or background"),
+        (chat_body(seed=2**64), "seed must be a 64-bit integer"),
+        (chat_body(thinking_token_budget=-2), "thinking_token_budget must be a non-negative integer or -1 for no cap"),
+        (chat_body(cache_salt=""), "cache_salt must be a non-empty string"),
     ]
     for body, message in cases:
         status, error = engine.json("POST", "/v1/chat/completions", body)
@@ -352,8 +358,10 @@ def test_chat_validation_errors(engine):
         }
     status, error = engine.json("POST", "/v1/chat/completions", chat_body(model="other/model"))
     assert status == 404 and error["error"]["code"] == "model_not_found"
-    status, error = engine.json("POST", "/v1/chat/completions", chat_body(max_tokens=10**7))
-    assert status == 400 and error["error"]["code"] == "context_length_exceeded"
+    # 1.3.2 clamps an output limit above the context instead of refusing it.
+    assert engine.json("POST", "/v1/chat/completions", chat_body(max_tokens=10**7))[0] == 200
+    # A null field is one left out; an empty model means the served one; seed -1 is random.
+    assert engine.json("POST", "/v1/chat/completions", chat_body(model="", temperature=None, seed=-1))[0] == 200
     status, _, data = engine.request("POST", "/v1/chat/completions", headers={"Content-Type": "text/plain"}, body="x")
     assert status == 415 and b"Content-Type must be application/json" in data
 
@@ -442,8 +450,11 @@ def test_messages_non_stream_and_stream(engine):
         "model": MODEL,
         "max_tokens": 200,
         "messages": [{"role": "user", "content": "hi claude"}],
-        "thinking": {"type": "enabled", "budget_tokens": 100},
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
     }
+    low = {**body, "thinking": {"type": "enabled", "budget_tokens": 100}}
+    status, error = engine.json("POST", "/v1/messages", low)
+    assert (status, error["error"]["message"]) == (400, "thinking.budget_tokens must be an integer of at least 1024")
     status, message = engine.json("POST", "/v1/messages", body)
     assert status == 200
     assert message["type"] == "message" and message["id"].startswith("msg_")

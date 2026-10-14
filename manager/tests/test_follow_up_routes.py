@@ -159,8 +159,8 @@ def real_clients_engine() -> EngineInfo:
     return EngineInfo(
         found=True,
         cli=Path("/x/splash"),
-        version="1.3.1",
-        version_tuple=(1, 3, 0),
+        version="1.3.2",
+        version_tuple=(1, 3, 2),
         support="supported",
         pkg=REPO / "splash",
         python=Path(sys.executable),
@@ -189,7 +189,7 @@ def test_print_runs_splash_s_configurator(
     assert claude["command"].startswith("claude ") and claude["files"] == []
     codex = client.post("/api/admin/integrations/codex/print", params={"model": model}).json()
     assert codex["exact"] is True and f'model="{model}"' in codex["args"]
-    assert "-c features.apps=false" in codex["command"], "the Codex flag shows in the preview"
+    assert "features.apps=false" not in codex["command"], "ChatGPT Apps connectors stay on"
     assert "features.apps=false" not in claude["command"]
     opencode = client.post("/api/admin/integrations/opencode/print", params={"model": model}).json()
     assert f"splash/{model}" in opencode["env"]["OPENCODE_CONFIG_CONTENT"]
@@ -232,8 +232,9 @@ def test_print_falls_back_to_a_description(svc: Any, client: TestClient, home: P
     assert pi["model"] is None and pi["files"][0]["change"]
     codex = client.post("/api/admin/integrations/codex/print", params={"model": MODEL}).json()
     assert codex["exact"] is False
-    assert codex["args"][-2:] == ["-c", "features.apps=false"], "Codex flag in the description"
-    assert any("64 characters" in n for n in codex["notes"])
+    assert codex["args"][-2:] == ["-c", "model_auto_compact_token_limit=<90% of context>"]
+    assert "features.apps=false" not in codex["args"], "ChatGPT Apps connectors stay on"
+    assert not any("64 characters" in n for n in codex["notes"])
 
 
 def test_print_shows_the_profile_s_reasoning_flag(svc: Any, client: TestClient) -> None:

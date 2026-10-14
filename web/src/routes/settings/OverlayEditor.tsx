@@ -20,11 +20,12 @@ export const OVERLAY_FIELDS: ReadonlyArray<{ key: string; label: string; kind: O
   { key: 'repetition_penalty', label: 'Repetition penalty', kind: 'number', step: 0.01, note: 'not Messages' },
   { key: 'max_tokens', label: 'Max tokens', kind: 'int', note: 'max_completion_tokens / max_tokens / max_output_tokens; never on Messages' },
   { key: 'reasoning_effort', label: 'Reasoning effort', kind: 'effort', note: 'reasoning_effort / reasoning.effort' },
+  { key: 'thinking_token_budget', label: 'Thinking budget', kind: 'int', note: 'Chat and Responses; −1 means no cap' },
   { key: 'seed', label: 'Seed', kind: 'int' },
   { key: 'stop', label: 'Stop sequences', kind: 'stop' },
   { key: 'priority', label: 'Priority', kind: 'priority' },
   { key: 'timeout', label: 'Timeout', kind: 'number' },
-  { key: 'chat_template_kwargs', label: 'chat_template_kwargs', kind: 'json', note: 'Chat only' },
+  { key: 'chat_template_kwargs', label: 'chat_template_kwargs', kind: 'json', note: 'Chat, Responses and Messages' },
   { key: 'ignore_eos', label: 'ignore_eos', kind: 'bool', note: 'Chat/Completions only' },
 ];
 

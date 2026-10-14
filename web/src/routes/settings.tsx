@@ -28,7 +28,8 @@ const SETTINGS_SECTIONS = SECTIONS_RAW.map((s) => ({ slug: s.slug, label: t(`set
 import { SettingField } from "./settings/SettingField";
 import { globalForm, schema, schemaError, loadSchema, type SettingsForm } from "./settings/state";
 import { settingsApi } from "./settings/api";
-import { isLoopback, SECTION_TO_SLUG, SLUG_TO_SECTION } from "./settings/form";
+import { isLoopback, SECTION_TO_SLUG, SLUG_TO_SECTION, splitAdvanced } from "./settings/form";
+import { AdvancedFields } from "./settings/AdvancedFields";
 import { SettingsSave } from "./settings/SaveFlow";
 import { ApiKeyField, HfTokenField } from "./settings/Secrets";
 import { DataPrivacy } from "./settings/DataPrivacy";
@@ -346,6 +347,10 @@ export default function SettingsPage({ params }: { params?: { section?: string }
   const prev = SETTINGS_SECTIONS[index - 1];
   const next = SETTINGS_SECTIONS[index + 1];
   const fields = allFields.filter((f) => f.section === SLUG_TO_SECTION[current.slug]);
+  const { main, advanced } = splitAdvanced(fields, current.slug);
+  const revealAdvanced = advanced.some(
+    (f) => f.key === hash || form.isDirty({ key: f.key, model: null }) || form.errorsFor({ key: f.key, model: null }).length > 0,
+  );
   const modelIds = models.data?.models.map((m) => m.id);
   const sectionLabel = (f: SchemaField) =>
     SETTINGS_SECTIONS.find((s) => s.slug === SECTION_TO_SLUG[f.section])?.label ?? f.section;
@@ -430,9 +435,14 @@ export default function SettingsPage({ params }: { params?: { section?: string }
                 </p>
               ))}
               {current.slug === "storage" && <SharedHfCacheNotice />}
-              {fields.map((field) => (
+              {main.map((field) => (
                 <FieldFor key={field.key} field={field} form={form} models={modelIds} hash={hash} />
               ))}
+              <AdvancedFields key={current.slug} keys={advanced.map((f) => f.key)} reveal={revealAdvanced}>
+                {advanced.map((field) => (
+                  <FieldFor key={field.key} field={field} form={form} models={modelIds} hash={hash} />
+                ))}
+              </AdvancedFields>
               <SectionExtras slug={current.slug} form={form} />
               {fields.length === 0 && !["security", "hf", "data", "about", "notifications"].includes(current.slug) && schema.value && (
                 <p class="meta">{t("settings.no_fields")}</p>

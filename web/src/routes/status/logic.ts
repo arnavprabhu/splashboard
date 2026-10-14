@@ -3,7 +3,7 @@
  * tested in tests/status-logic.test.ts.
  */
 
-import type { EngineError, EngineNotice, EngineSuggestion, EngineView, InstalledModel } from '../../api/models';
+import type { ActiveRequest, EngineError, EngineNotice, EngineSuggestion, EngineView, InstalledModel } from '../../api/models';
 import type { EngineState, SettingsDoc } from '../../api/types';
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -88,6 +88,8 @@ export interface MetaInput {
   format?: string | null;
   context?: number | null;
   kv?: string | null;
+  /** `memory_plan.model.state_format`: fp32 or bf16 recurrent states. */
+  states?: string | null;
   vision?: boolean | null;
   draft?: string | null;
   uptime?: string | null;
@@ -96,11 +98,14 @@ export interface MetaInput {
 }
 
 /** Ordered meta items; missing ones are dropped, except CONTEXT while starting (shows —). */
-export function metaKeys(m: MetaInput): Array<'format' | 'context' | 'kv' | 'vision' | 'draft' | 'uptime' | 'version'> {
-  const out: Array<'format' | 'context' | 'kv' | 'vision' | 'draft' | 'uptime' | 'version'> = [];
+export type MetaKey = 'format' | 'context' | 'kv' | 'states' | 'vision' | 'draft' | 'uptime' | 'version';
+
+export function metaKeys(m: MetaInput): MetaKey[] {
+  const out: MetaKey[] = [];
   if (m.format) out.push('format');
   if (m.context != null || m.starting) out.push('context');
   if (m.kv) out.push('kv');
+  if (m.states) out.push('states');
   if (m.vision != null) out.push('vision');
   if (m.draft !== undefined) out.push('draft');
   if (m.uptime) out.push('uptime');
@@ -111,7 +116,12 @@ export function metaKeys(m: MetaInput): Array<'format' | 'context' | 'kv' | 'vis
 export function formatLabel(m: Pick<InstalledModel, 'format' | 'variant'> | null | undefined): string | null {
   if (!m) return null;
   if (m.format === 'gguf') return m.variant ? `GGUF ${m.variant}` : 'GGUF';
-  if (m.format === 'mlx') return 'MLX';
+  if (m.format === 'mlx') {
+    // A Model Optimizer or compressed-tensors checkpoint loads as MLX but is labelled by its
+    // quantization ("NVFP4 · Model Optimizer" shows as NVFP4). Read loosely: older managers omit it.
+    const checkpoint = (m as { checkpoint?: unknown }).checkpoint;
+    return typeof checkpoint === 'string' && checkpoint ? (checkpoint.split(' · ')[0] ?? 'MLX') : 'MLX';
+  }
   if (m.format === 'legacy') return 'Splash package';
   return null;
 }
@@ -242,27 +252,27 @@ export function visionBytes(budget: EngineError['budget']): number | null {
   return row?.bytes ?? null;
 }
 
-// ---------- disk-tier suggestion ----------
+// ---------- SSD cache off this start ----------
 
-export interface DiskSuggestion {
-  availableBytes: number | null;
-  tokens: number | null;
-}
+export type CacheOffKind = 'disk_cache_off' | 'persistent_cache_off';
 
-export function diskNotice(notices: readonly EngineNotice[] | null | undefined): EngineNotice | null {
-  return (notices ?? []).find((n) => n.kind === 'disk_tier_suggestion') ?? null;
-}
+const CACHE_OFF_PREFIX: Record<CacheOffKind, string> = { disk_cache_off: 'SSD cache off: ', persistent_cache_off: 'Persistent cache off: ' };
+// What Splash adds after the reason (runtime/engine/RuntimeResources.mm); the reason itself can hold "; ".
+const CACHE_OFF_TAIL = /;\s*(?:no state staging is set aside|the state staging the plan set aside stays unused|the SSD cache keeps temporary files)\.?\s*$/;
 
-/** "The {N} MiB this Mac had available at startup may not hold a {C}-token request; …" */
-export function parseDiskSuggestion(text: string | null | undefined): DiskSuggestion {
-  const m = /The ([\d,]+) MiB this Mac had available at startup may not hold an? ([\d,]+)-token request/.exec(text ?? '');
-  if (!m?.[1] || !m[2]) return { availableBytes: null, tokens: null };
-  return { availableBytes: Number(m[1].replace(/,/g, '')) * 1024 * 1024, tokens: Number(m[2].replace(/,/g, '')) };
-}
-
-/** Decision T4: 16G, or 32G when the persistent cache is on (the Coding preset's value). */
-export function ssdCacheSize(persistent: unknown): '16G' | '32G' {
-  return persistent === true ? '32G' : '16G';
+/** Why Splash turned the SSD cache, or only its persistence, off this start: the reason from the
+ * latest "SSD cache off: …" or "Persistent cache off: …" line, or null when it is not off. */
+export function cacheOffReason(notices: readonly EngineNotice[] | null | undefined, kind: CacheOffKind): string | null {
+  const list = notices ?? [];
+  let notice: EngineNotice | undefined;
+  for (let i = list.length - 1; i >= 0 && !notice; i--) if (list[i]?.kind === kind) notice = list[i];
+  if (!notice) return null;
+  let text = (notice.raw ?? notice.message ?? '').trim();
+  const prefix = CACHE_OFF_PREFIX[kind];
+  const at = text.indexOf(prefix);
+  if (at >= 0) text = text.slice(at + prefix.length);
+  text = text.replace(CACHE_OFF_TAIL, '').trim().replace(/\.$/, '');
+  return text || null;
 }
 
 // ---------- endpoints ----------
@@ -402,6 +412,54 @@ export function checkpointEntries(state: unknown): Array<[string, number]> {
   return Object.entries(state)
     .filter((e): e is [string, number] => e[0].startsWith('checkpoint_') && typeof e[1] === 'number')
     .map(([k, v]) => [k.slice('checkpoint_'.length), v]);
+}
+
+// ---------- SSD cache ----------
+
+/**
+ * Whether the SSD cache is on. The engine decides once it reports `disk`: a quota or a limit
+ * above 0 (`--max-cache-disk 0`, or a start that turned the cache off, leaves both at 0).
+ * Before that, the setting: anything but `0` is on.
+ */
+export function diskEnabled(raw: unknown, maxCacheDisk: unknown): boolean {
+  const capacity = rawNum(raw, 'disk.capacity_bytes');
+  const limit = rawNum(raw, 'disk.limit_bytes');
+  if (capacity !== null || limit !== null) return (capacity ?? 0) > 0 || (limit ?? 0) > 0;
+  return maxCacheDisk !== undefined && maxCacheDisk !== null && String(maxCacheDisk).trim() !== '0';
+}
+
+export type DiskWrites = 'open' | 'budget_left' | 'budget_spent' | 'closed';
+
+/**
+ * What holds the SSD cache's writes back (`disk.writes_gated`): nothing, the write budget
+ * (`--max-cache-disk-writes`) while it is spent, or a file that stopped taking writes for the
+ * session. Without a budget `write_budget_bytes` is 0 and the gate is never `budget`.
+ */
+export function diskWrites(raw: unknown): DiskWrites | null {
+  const gate = rawGet(raw, 'disk.writes_gated');
+  if (gate === 'closed') return 'closed';
+  if (gate === 'budget') return 'budget_spent';
+  if (gate !== 'no') return null;
+  return (rawNum(raw, 'disk.write_budget_bytes') ?? 0) > 0 ? 'budget_left' : 'open';
+}
+
+// ---------- active requests ----------
+
+/**
+ * `active_requests` from the live sample (1 s while the page is open), else from the raw
+ * `/status` document. Both are the engine's own list, ordered by id.
+ */
+export function activeRequests(sample: { active_requests?: ActiveRequest[] } | null | undefined, raw: unknown): ActiveRequest[] {
+  if (sample?.active_requests) return sample.active_requests;
+  const list = rawGet(raw, 'active_requests');
+  if (!Array.isArray(list)) return [];
+  return list.filter((r): r is ActiveRequest => isRecord(r) && typeof r.id === 'number' && typeof r.phase === 'string');
+}
+
+/** Encoded share of the prompt (cached tokens count as encoded), 0..1, or null for none. */
+export function promptProgress(r: Pick<ActiveRequest, 'prompt_tokens' | 'prompt_processed'>): number | null {
+  if (!r.prompt_tokens || r.prompt_tokens <= 0) return null;
+  return Math.max(0, Math.min(1, (r.prompt_processed ?? 0) / r.prompt_tokens));
 }
 
 /** Failure counters for the Cache band; any > 0 is accent. */

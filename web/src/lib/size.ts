@@ -1,6 +1,7 @@
 /**
  * Client-side mirror of Splash's size parsers (splash/server/serve_options.py:
- * parse_max_context, parse_max_memory, parse_max_cache_disk, parse_request_size). The manager validates
+ * parse_max_context, parse_max_memory, parse_max_cache_disk, parse_max_cache_disk_writes,
+ * parse_request_size). The manager validates
  * again on save; this is for inline feedback only.
  */
 
@@ -40,13 +41,18 @@ export function parseMaxMemory(value: string): SizeResult {
     : { ok: true, bytes: Number(size) };
 }
 
-/** `--max-cache-disk`: 0 disables, otherwise a size such as 5G. */
+/** `--max-cache-disk`: 'auto' (null), 0 disables, otherwise a size such as 16G. */
 export function parseMaxCacheDisk(value: string): SizeResult {
   if (value.trim() === '0') return { ok: true, bytes: 0 };
-  const size = value.trim().toUpperCase() === 'AUTO' ? null : parseBytes(value);
-  return size === null
-    ? { ok: false, error: 'use 0 to disable, or a size such as 5G' }
-    : { ok: true, bytes: Number(size) };
+  const r = parseMaxMemory(value);
+  return r.ok ? r : { ok: false, error: 'use auto, 0 to disable, or a size such as 16G' };
+}
+
+/** `--max-cache-disk-writes`: 0 for no daily limit, otherwise a size such as 200G (never 'auto'). */
+export function parseMaxCacheDiskWrites(value: string): SizeResult {
+  if (value.trim() === '0') return { ok: true, bytes: 0 };
+  const r = parseMaxMemory(value);
+  return r.ok && r.bytes !== null ? r : { ok: false, error: 'use 0 for no limit, or a size such as 200G' };
 }
 
 /** `--max-request-size`: a positive byte count such as 128M. */
@@ -74,7 +80,7 @@ export function parseMaxContext(value: string): TokensResult {
     : { ok: false, error: "must be 'auto' or a token count up to 256K, such as 100K" };
 }
 
-export type SizeKind = 'max-memory' | 'max-cache-disk' | 'request-size';
+export type SizeKind = 'max-memory' | 'max-cache-disk' | 'max-cache-disk-writes' | 'request-size';
 
 export function parseSize(kind: SizeKind, value: string): SizeResult {
   switch (kind) {
@@ -82,6 +88,8 @@ export function parseSize(kind: SizeKind, value: string): SizeResult {
       return parseMaxMemory(value);
     case 'max-cache-disk':
       return parseMaxCacheDisk(value);
+    case 'max-cache-disk-writes':
+      return parseMaxCacheDiskWrites(value);
     case 'request-size':
       return parseRequestSize(value);
   }

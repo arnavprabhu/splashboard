@@ -266,6 +266,7 @@ export const toolsStrings = {
   'tools.bm.h.aggregate': 'Aggregate tok/s',
   'tools.bm.sample': 'Sample',
   'tools.bm.median': 'Median',
+  'tools.bm.truncated': 'Splash capped the output of {n} of the requests at the end of the context, so their decode numbers come from shorter runs.',
   'tools.bm.compare_title': 'Compare',
   'tools.bm.col.select': 'Select',
   'tools.bm.col.when': 'When',

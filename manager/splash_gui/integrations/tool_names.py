@@ -1,16 +1,17 @@
 """Tool names a Splash model can take, and the originals back.
 
-Splash 1.3.0 refuses a Responses request whose namespace tool has a namespace or child
-name outside `[A-Za-z0-9_-]{1,64}` (400 "invalid namespace tool name",
-`server/api_shapes.py` `_namespace_alias`, lines 468-475), and a plain function tool
-whose name is outside `[A-Za-z0-9_-]{1,128}` (`server/tool_schema.py` `normalize_tools`,
-lines 857-859). Codex allows 128 characters for an MCP namespace plus tool name
-(codex-rs `codex-mcp/src/tools.rs`, `MAX_TOOL_NAME_LENGTH`), so the ChatGPT app's own
-connectors send names Splash refuses.
+Splash 1.3.2 takes a function tool whose name is 1 to 256 characters in NFC, without
+<, >, line breaks, lone surrogates or surrounding whitespace (`server/tool_schema.py`
+`is_tag_name`, lines 42-62, checked in `normalize_tools`, lines 896-898). A namespace
+tool's child goes by `<namespace>__<name>` (`server/api_shapes.py` `_namespace_alias`,
+lines 381-388), and that joined name must follow the same rule. Codex's names (at most
+128 characters for an MCP namespace plus tool name, codex-rs `codex-mcp/src/tools.rs`
+`MAX_TOOL_NAME_LENGTH`) all do, so in practice nothing is renamed; the router still
+guards against a connector name Splash would refuse.
 
 For Splash models the router renames each such name to a valid alias before the request
 reaches the engine, and names every function call in the answer back before Codex sees
-it. An alias is a function of the name alone (sanitized, cut, plus a hash of the
+it. An alias is a function of the name alone (cleaned, cut, plus a hash of the
 original), so the map is rebuilt from each request and nothing is kept between turns.
 """
 
@@ -20,6 +21,7 @@ import hashlib
 import json
 import logging
 import re
+import unicodedata
 from collections.abc import AsyncIterable, AsyncIterator, Iterable
 from dataclasses import dataclass, field
 from typing import Any
@@ -28,19 +30,33 @@ from starlette.responses import Response, StreamingResponse
 
 log = logging.getLogger(__name__)
 
-NAMESPACE_LIMIT = 64  # a namespace and each of its tools (api_shapes.py `_namespace_alias`)
-FUNCTION_LIMIT = 128  # a plain function tool (tool_schema.py `normalize_tools`)
+FUNCTION_LIMIT = 256  # a function tool's name (tool_schema.py `MAX_NAME_LENGTH`)
+# A namespace and each of its tools, so that `<namespace>__<name>` stays within the limit.
+PART_LIMIT = (FUNCTION_LIMIT - len("__")) // 2
 HASH_LENGTH = 10
 SEARCH_NAME = "tool_search"  # tool_search.NAME (codex-rs `TOOL_SEARCH_TOOL_NAME`)
-_INVALID = re.compile(r"[^A-Za-z0-9_-]")
+_SPACE = " \t\n\r"  # tool_schema.py `NAME_SPACE`
+_INVALID = re.compile("[<>\r\n\ud800-\udfff]")
+
+
+def is_valid(name: str, limit: int) -> bool:
+    """Whether Splash takes `name` (tool_schema.py `is_tag_name`), at most `limit` long."""
+    return (
+        0 < len(name) <= limit
+        and name == name.strip(_SPACE)
+        and _INVALID.search(name) is None
+        and unicodedata.is_normalized("NFC", name)
+    )
 
 
 def alias(name: str, limit: int) -> str:
     """`name` when Splash takes it, else a valid name unique to it, at most `limit` long."""
-    if 0 < len(name) <= limit and _INVALID.search(name) is None:
+    if is_valid(name, limit):
         return name
-    digest = hashlib.sha256(name.encode()).hexdigest()[:HASH_LENGTH]
-    return f"{_INVALID.sub('_', name)[: limit - HASH_LENGTH - 1]}_{digest}"
+    digest = hashlib.sha256(name.encode("utf-8", "surrogatepass")).hexdigest()[:HASH_LENGTH]
+    clean = unicodedata.normalize("NFC", _INVALID.sub("_", name))
+    stem = clean[: limit - HASH_LENGTH - 1].strip(_SPACE)
+    return unicodedata.normalize("NFC", f"{stem}_{digest}")
 
 
 @dataclass
@@ -66,10 +82,10 @@ class ToolNames:
         return new
 
     def namespace(self, name: Any) -> Any:
-        return self._alias(self.namespaces, name, NAMESPACE_LIMIT)
+        return self._alias(self.namespaces, name, PART_LIMIT)
 
     def child(self, name: Any) -> Any:
-        return self._alias(self.children, name, NAMESPACE_LIMIT)
+        return self._alias(self.children, name, PART_LIMIT)
 
     def function(self, name: Any) -> Any:
         return self._alias(self.functions, name, FUNCTION_LIMIT)

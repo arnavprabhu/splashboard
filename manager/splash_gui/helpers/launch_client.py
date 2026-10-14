@@ -6,13 +6,6 @@ import shlex
 import shutil
 import sys
 
-# Codex sends the user's ChatGPT Apps connectors as namespace tools, and
-# Splash 1.2.0 through 1.3.0 rejects any tool name over 64 characters ("invalid namespace tool
-# name", server/api_shapes.py:468-475 at 1.3.0). Turning the `apps` feature off is a `-c`
-# override, so it applies to this session only; plain `codex` keeps it.
-CODEX_SESSION_ARGS = ("-c", "features.apps=false")
-
-
 # A profile's `reasoning_effort` is injected only when a request leaves
 # the field out, and Claude Code, Codex (with `model_reasoning_effort` in its
 # config), Hermes and Pi always send their own. So a `model:profile` session also
@@ -62,13 +55,11 @@ def reasoning_env(client: str, effort: str | None, environ: dict[str, str]) -> d
 
 
 def session_args(client: str, args: list[str], effort: str | None = None) -> list[str]:
-    """The client arguments plus Splashboard's own session overrides. Ours go
-    first: Splash keeps user `-c` overrides in order after its defaults
-    (install/clients.py _codex_config_args), so a user's own
-    `-c features.apps=true` still wins."""
+    """The client arguments plus Splashboard's own session overrides (the profile's
+    per-run reasoning option). Ours go first: Splash keeps user `-c` overrides in order
+    after its defaults (install/clients.py _codex_config_args), so a user's own
+    `-c model_reasoning_effort=…` still wins."""
     ours = reasoning_args(client, effort, args)
-    if client == "codex":
-        ours = [*CODEX_SESSION_ARGS, *ours]
     return [*ours, *args]
 
 

@@ -47,6 +47,7 @@ from ..settings.parsers import PACKAGE_REPLACEMENTS, parse_model_id, split_model
 from ..system.macos import CommandResult
 from ..usage.db import iso
 from . import catalog as cat
+from . import checkpoint as cp
 from . import compat
 from . import inspection as ins
 from .hf import HfClient, HubError, strip_front_matter
@@ -105,6 +106,13 @@ def package_notice(selection: Selection) -> str:
     )
 
 
+# A safetensors check reads the shard index, which names every tensor: 14 MB for
+# a Model Optimizer checkpoint that stores each routed expert's tensors apart
+# (splash/install/models.py `MAX_JSON_BYTES`), and the check runs twice (with
+# vision, then language-only).
+SAFETENSORS_TIMEOUT_S = 45.0
+
+
 def inspect_timeout(
     files: dict[str, int | None], variant: str | None, count: int | None = None
 ) -> float:
@@ -112,15 +120,41 @@ def inspect_timeout(
     metadata block (several MB, the tokenizer included) over range requests, so
     a full variant table of a 27-file repository measured ~37 s on 2026-10-04;
     allow 20 s plus 4 s per variant beyond the first, up to 150 s. `count`
-    is how many variants this run checks when the others are stored."""
+    is how many variants this run checks when the others are stored. A
+    safetensors repository gets `SAFETENSORS_TIMEOUT_S`."""
     if variant is not None:
         return 20.0
+    roots = [n for n in files if "/" not in n and n.endswith(".gguf") and not cat.is_projector(n)]
+    if not roots and any(n.endswith(".safetensors") for n in files):
+        return SAFETENSORS_TIMEOUT_S
     if count is None:
-        roots = [
-            n for n in files if "/" not in n and n.endswith(".gguf") and not cat.is_projector(n)
-        ]
         count = len(roots)
     return min(150.0, 20.0 + 4.0 * max(0, count - 1))
+
+
+# A config.json larger than this is not read for the checkpoint label (a Model
+# Optimizer config lists its quantized layers; NVIDIA's is well under 1 MB).
+MAX_CONFIG_BYTES = 8 * 1024 * 1024
+_checkpoint_cache: dict[tuple[str, int, int], str | None] = {}
+
+
+def installed_checkpoint(selection: Selection) -> str | None:
+    """The checkpoint label of an installed safetensors model, from its assembly's
+    `target/config.json` (`checkpoint.from_config`), cached by the file's identity."""
+    if selection.format != "mlx":
+        return None
+    ref = next((f for f in selection.files if f.name == "target/config.json"), None)
+    if ref is None or ref.real is None:
+        return None
+    try:
+        stat = ref.real.stat()
+        key = (str(ref.real), stat.st_mtime_ns, stat.st_size)
+        if key not in _checkpoint_cache:
+            config = json.loads(ref.real.read_bytes()) if stat.st_size <= MAX_CONFIG_BYTES else None
+            _checkpoint_cache[key] = cp.from_config(config)
+        return _checkpoint_cache[key]
+    except (OSError, ValueError):
+        return None
 
 
 def valid_id(model: str) -> str:
@@ -249,6 +283,7 @@ class Models:
                     "variant": selection.variant,
                     "family": selection.family,
                     "format": selection.format,
+                    "checkpoint": installed_checkpoint(selection),
                     "language_only": selection.language_only,
                     "vision": not selection.language_only,
                     "size_bytes": sum(files.values()),
@@ -740,6 +775,11 @@ class Models:
                 else "checking",
                 "family": selected.get("family") if selected else None,
                 "format": selected.get("format") if selected else ("gguf" if variants else None),
+                # Splash checks a Model Optimizer or compressed-tensors checkpoint as
+                # it does MLX's; the Hub's tags tell them apart.
+                "checkpoint": cp.from_hub(repo_id, repo.tags)
+                if not variants and (not selected or selected.get("format") == "mlx")
+                else None,
                 "variants": variants,
                 "recommended_variant": recommended.name if recommended else None,
                 "first_variant": run.first,
@@ -962,7 +1002,7 @@ class Models:
         families: list[CatalogFamily] = []
         for family in dict.fromkeys(row[0] for row in rows):
             groups = []
-            for fmt in ("mlx", "gguf"):
+            for fmt in ("mlx", "nvfp4", "gguf"):
                 entries = []
                 for (fam, repo, kind, notes, perf), info in zip(rows, infos, strict=True):
                     if fam != family or kind != fmt:
@@ -1011,7 +1051,11 @@ class Models:
                                 "repo_id": repo,
                                 "recommended_variant": default_variant,
                                 "family": fam,
-                                "format": kind,
+                                # An "nvfp4" row is a safetensors target, as MLX's is.
+                                "format": "gguf" if kind == "gguf" else "mlx",
+                                "checkpoint": cp.from_hub(repo, info.tags)
+                                if info is not None
+                                else None,
                                 "notes": notes,
                                 "perf_note": perf,
                                 "installed": repo in installed,
@@ -1021,8 +1065,10 @@ class Models:
                             }
                         )
                     )
-                labels = {"mlx": "MLX", "gguf": "GGUF"}
-                groups.append(CatalogGroup(format=fmt, label=labels[fmt], entries=entries))
+                labels = {"mlx": "MLX", "nvfp4": "NVFP4", "gguf": "GGUF"}
+                # The NVFP4 group only where the seed has rows.
+                if entries or fmt != "nvfp4":
+                    groups.append(CatalogGroup(format=fmt, label=labels[fmt], entries=entries))
             families.append(
                 CatalogFamily.model_validate(
                     {

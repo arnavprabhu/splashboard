@@ -275,3 +275,118 @@ def test_copy_safety() -> None:
     a, b = status(), status()
     a["metrics"]["decode_output_tokens"] = 1
     assert b["metrics"]["decode_output_tokens"] == 500 and copy.deepcopy(a) == a
+
+
+def test_disk_limit_gate_and_budget_from_splash_1_3_2(app: FastAPI) -> None:
+    """Under the automatic quota the tier can hold less than `capacity_bytes`: the live
+    `limit_bytes`, the volume's free space, the write gate and the budget come through."""
+    sample = hub_of(app).derive(
+        status(
+            disk__capacity_bytes=34_359_738_368,
+            disk__limit_bytes=8_589_934_592,
+            disk__volume_available_bytes=46_170_898_432,
+            disk__writes_gated="budget",
+            disk__write_budget_bytes=0,
+        ),
+        time.time(),
+    )
+    disk = sample.disk
+    assert disk.enabled and disk.capacity_bytes == 34_359_738_368
+    assert disk.limit_bytes == 8_589_934_592 and disk.volume_available_bytes == 46_170_898_432
+    assert disk.writes_gated == "budget" and disk.write_budget_bytes == 0
+    flat = flatten(sample)
+    assert flat["disk.limit_bytes"] == 8_589_934_592.0 and "disk.writes_gated" not in flat
+    unknown = hub_of(app).derive(status(disk__writes_gated="later"), time.time())
+    assert unknown.disk.writes_gated is None
+
+
+def test_a_cache_turned_off_is_not_enabled(app: FastAPI) -> None:
+    off = hub_of(app).derive(status(disk__capacity_bytes=0, disk__limit_bytes=0), time.time())
+    assert off.disk.enabled is False
+    limited = hub_of(app).derive(
+        status(disk__capacity_bytes=0, disk__limit_bytes=1024), time.time()
+    )
+    assert limited.disk.enabled is True
+
+
+def test_writes_closed_raises_a_disk_alert_once(app: FastAPI) -> None:
+    hub = hub_of(app)
+    hub.on_status(status(disk__writes_gated="no"), False)
+    assert "disk_tier_failures" not in conditions(app)
+    hub.on_status(status(disk__writes_gated="closed"), False)
+    alert = app.state.manager.alerts.get("disk_tier_failures")
+    assert alert is not None and "stopped taking writes" in alert.title
+
+
+def test_writes_closed_on_the_first_poll_after_a_restart_alerts(app: FastAPI) -> None:
+    hub = hub_of(app)
+    hub.on_status(status(disk__writes_gated="closed"), True)
+    alert = app.state.manager.alerts.get("disk_tier_failures")
+    assert alert is not None and "stopped taking writes" in alert.title
+
+
+def test_write_budget_spent_raises_an_info_banner_until_it_refills(app: FastAPI) -> None:
+    hub = hub_of(app)
+    hub.on_status(status(disk__writes_gated="no"), False)
+    assert "disk_write_budget" not in conditions(app)
+    hub.on_status(status(disk__writes_gated="budget"), False)
+    alert = app.state.manager.alerts.get("disk_write_budget")
+    assert alert is not None and alert.severity == "info"
+    assert "write budget" in alert.title
+    hub.on_status(status(disk__writes_gated="budget"), False)
+    assert app.state.manager.alerts.get("disk_write_budget").count == 1
+    hub.on_status(status(disk__writes_gated="no"), False)
+    assert "disk_write_budget" not in conditions(app)
+    hub.on_status(status(disk__writes_gated="budget"), False)
+    hub.on_state("ready", "stopped")
+    assert "disk_write_budget" not in conditions(app)
+    # A cache that stops taking writes clears the budget banner: it writes nothing even
+    # once the budget refills, and the closed alert says so.
+    hub.on_status(status(disk__writes_gated="budget"), False)
+    assert "disk_write_budget" in conditions(app)
+    hub.on_status(status(disk__writes_gated="closed"), False)
+    assert "disk_write_budget" not in conditions(app)
+    assert "disk_tier_failures" in conditions(app)
+
+
+def test_active_requests_host_spare_and_deduplicated_tokens(app: FastAPI) -> None:
+    sample = hub_of(app).derive(
+        status(
+            active_requests=[
+                {
+                    "id": 7,
+                    "phase": "prefill",
+                    "priority": "foreground",
+                    "prompt_tokens": 4096,
+                    "prompt_processed": 2048,
+                    "generated_tokens": 0,
+                    "max_new_tokens": 256,
+                    "age_ms": 1500.5,
+                },
+                {"phase": "decode"},
+                "junk",
+            ],
+            cache__deduplicated_kv_tokens=640,
+            memory_governor__host_spare_bytes=8_589_934_592,
+            memory_governor__host_spare_reserve_bytes=2_147_483_648,
+            memory_governor__host_headroom_bytes=6_442_450_944,
+        ),
+        time.time(),
+    )
+    assert [r.model_dump() for r in sample.active_requests] == [
+        {
+            "id": 7,
+            "phase": "prefill",
+            "priority": "foreground",
+            "prompt_tokens": 4096,
+            "prompt_processed": 2048,
+            "generated_tokens": 0,
+            "max_new_tokens": 256,
+            "age_ms": 1500.5,
+        }
+    ], "entries without an id are skipped"
+    assert sample.totals.deduplicated_kv_tokens == 640
+    assert sample.memory.host_spare_bytes == 8_589_934_592
+    assert sample.memory.host_spare_reserve_bytes == 2_147_483_648
+    assert sample.memory.host_headroom_bytes == 6_442_450_944
+    assert hub_of(app).derive(status(), time.time()).active_requests == []

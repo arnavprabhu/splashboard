@@ -25,6 +25,8 @@ import { OverlayEditor, overlayErrors } from "./settings/OverlayEditor";
 import { SettingsSave } from "./settings/SaveFlow";
 import { SettingField } from "./settings/SettingField";
 import { modelForm, schema, loadSchema } from "./settings/state";
+import { splitAdvanced } from "./settings/form";
+import { AdvancedFields } from "./settings/AdvancedFields";
 import { overlaySummary, profileNameError } from "./settings/validate";
 import { MODELS_TABS } from "./tabs";
 
@@ -33,6 +35,23 @@ const SECTIONS: readonly Sec[] = ["overrides", "sampling", "profiles", "info"];
 
 function shortName(id: string): string {
   return id.slice(id.indexOf("/") + 1);
+}
+
+/** The per-model overrides, with the fields metadata marks advanced folded at the end. */
+function ModelOverrides({ id, memoryBytes }: { id: string; memoryBytes: number | null }) {
+  const form = modelForm(id);
+  const { main, advanced } = splitAdvanced((schema.value?.fields ?? []).filter((f) => f.scope !== "G"), "overrides");
+  const hash = decodeURIComponent(location.hash.slice(1));
+  const reveal = advanced.some((f) => f.key === hash || form.isDirty({ key: f.key, model: id }) || form.errorsFor({ key: f.key, model: id }).length > 0);
+  const row = (field: (typeof main)[number]) => <SettingField key={field.key} field={field} form={form} model={id} memoryBytes={memoryBytes} />;
+  return (
+    <div class="stack">
+      {main.map(row)}
+      <AdvancedFields key={id} keys={advanced.map((f) => f.key)} reveal={reveal}>
+        {advanced.map(row)}
+      </AdvancedFields>
+    </div>
+  );
 }
 
 export default function ModelSettingsPage({ params = {} }: { params?: Record<string, string | undefined> }) {
@@ -88,19 +107,7 @@ export default function ModelSettingsPage({ params = {} }: { params?: Record<str
       {section === "overrides" && (
         <Section label={t("settings.model.section.overrides")} meta={t("settings.model.overrides_meta")}>
           {!!form.loadError.value && <LoadError thing={t("settings.model.thing")} error={form.loadError.value} onRetry={() => void form.load(true)} />}
-          <div class="stack">
-            {(schema.value?.fields ?? [])
-              .filter((f) => f.scope !== "G")
-              .map((field) => (
-                <SettingField
-                  key={field.key}
-                  field={field}
-                  form={form}
-                  model={id}
-                  memoryBytes={system.data?.memory_bytes ?? null}
-                />
-              ))}
-          </div>
+          <ModelOverrides id={id} memoryBytes={system.data?.memory_bytes ?? null} />
         </Section>
       )}
       {section === "sampling" && <SamplingDefaults id={id} view={profiles.data} error={profiles.error} onSaved={profiles.reload} />}

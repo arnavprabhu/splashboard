@@ -8,6 +8,7 @@ import { ADMIN, api, buildUrl, type Query } from '../../api/client';
 import type {
   EngineView,
   InstalledModels,
+  MemoryReleased,
   MetricsSeries,
   OkResponse,
   ProfilesView,
@@ -25,6 +26,8 @@ import { applyPatch } from './logic';
 export const loadModel = (model: string, force = false) => api.post<EngineView>('/engine/load', { model, force });
 export const stopEngine = () => api.post<EngineView>('/engine/stop');
 export const restartEngine = (force = false) => api.post<EngineView>(force ? '/engine/restart?force=true' : '/engine/restart');
+/** Gives the weights' memory back now; the next request restores them. 409 while busy or with no model. */
+export const releaseMemory = () => api.post<MemoryReleased>('/engine/release-memory');
 /** Raw Splash /status (schema 6, any shape); 503 while the engine is not running. */
 export const rawStatus = (signal?: AbortSignal) => api.get<Record<string, unknown>>('/engine/status', undefined, signal);
 

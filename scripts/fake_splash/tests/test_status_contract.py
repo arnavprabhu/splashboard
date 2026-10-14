@@ -110,12 +110,16 @@ def native_status_paths() -> set[str]:
 
 
 def flatten(value: object, prefix: tuple[str, ...] = ()) -> set[str]:
+    """Every key path of a document; a list's items share their list's path."""
     paths: set[str] = set()
     if isinstance(value, dict):
         for key, child in value.items():
             path = (*prefix, key)
             paths.add(".".join(path))
             paths |= flatten(child, path)
+    elif isinstance(value, list):
+        for item in value:
+            paths |= flatten(item, prefix)
     return paths
 
 
@@ -146,8 +150,12 @@ def test_extractor_reads_the_engine_source():
 
 @pytest.mark.skipif(not ENGINE.exists(), reason="no ./splash reference clone")
 def test_fake_status_has_every_native_key_path(status):
-    missing = native_status_paths() - flatten(status)
+    # An idle engine has no active requests; test_splash_1_3_2.py checks an
+    # active request's fields against the engine's.
+    expected = {p for p in native_status_paths() if not p.startswith("active_requests.")}
+    missing = expected - flatten(status)
     assert not missing, sorted(missing)
+    assert status["active_requests"] == []
 
 
 def test_fake_status_has_server_groups(status):
