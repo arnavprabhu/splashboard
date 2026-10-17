@@ -13,6 +13,22 @@ Claude Code, Codex and other coding agents at it, all on your own Mac.
 
 **[⬇ Download Splashboard for macOS](https://github.com/arnavprabhu/splashboard/releases/latest)** · or `brew install --cask arnavprabhu/tap/splashboard`
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/screenshots/status-dark.png">
+  <img alt="Status page: the loaded model, live numbers (tokens, decode and prefill speed, draft acceptance), the local endpoints and live charts" src=".github/screenshots/status.png">
+</picture>
+
+<table>
+  <tr>
+    <td width="50%"><img alt="Chat with the local model, with per-turn speed and sampling settings" src=".github/screenshots/chat.png"></td>
+    <td width="50%"><img alt="Integrations: run Claude Code or Codex on the local model for one session" src=".github/screenshots/integrations.png"></td>
+  </tr>
+  <tr>
+    <td><b>Chat</b> with the loaded model: streamed replies, thinking, per-turn speed, sampling profiles, tools and MCP.</td>
+    <td><b>Integrations</b>: <code>splash launch claude</code>, <code>codex</code> and others run on your local model for one session.</td>
+  </tr>
+</table>
+
 ## Why Splashboard
 Splash is fast, but it is a command-line engine that serves one model per process. Splashboard wraps it in an app:
 
