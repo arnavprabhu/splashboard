@@ -1,0 +1,16 @@
+<!--
+  Release notes for 0.5.0 (TEMPLATE.html says how these are used).
+-->
+<h2>Splashboard 0.5.0</h2>
+<p>Splashboard now requires Splash 1.4.0. Update the engine with <code>brew upgrade incoai/tap/splash</code>, or from Settings → About.</p>
+<ul>
+  <li>Qwen3.8-Flash-Next is in the catalog (GGUF only): ISTA-DASLab's GSQ-RCO GGUF, with Q2_0 recommended, and Unsloth's GGUFs. Models now lists split GGUFs, whose files sit in a folder per variant, as one variant, and the models folder takes split GGUFs you drop in.</li>
+  <li>Models that are too big for memory but can stream their experts from the SSD are marked "Streams from SSD" instead of "Won't fit". They run, more slowly.</li>
+  <li>The context limit now goes up to 1,010,000 tokens. Past 256K Splash turns on YaRN, which changes answers at every length, so Settings warns before you use it.</li>
+  <li>New settings: Expert memory, PLE table memory and Sparse KV memory (under Advanced), and Draft verification, where "All rows" makes MoE models give the same output for the same seed. Sizes such as 2.5G are accepted.</li>
+  <li>Status has an SSD streaming band, shown while experts, the PLE table or a request's KV are read from the SSD. Active requests shows where each request's KV is kept, and the header shows YaRN and what limits the context.</li>
+  <li>Chat explains the new SSD cache errors, such as a spent daily write budget, with the time it refills. Alerts cover SSD cache refusals and failed expert reads.</li>
+  <li>If you use the persistent cache, it starts empty once after the upgrade for 27B and 35B MLX models and refills as you use them.</li>
+</ul>
+<p>Engine: <a href="https://github.com/incoai/splash">Splash</a> by inco.ai, 1.4.0 or newer (Homebrew <code>incoai/tap/splash</code>). Restart the server after upgrading Splash. Splashboard is not an inco.ai product.</p>
+<p>Splashboard is not notarized. On a first install, open it once from System Settings → Privacy &amp; Security → Open Anyway.</p>
