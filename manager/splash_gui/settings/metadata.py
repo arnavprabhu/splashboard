@@ -264,7 +264,9 @@ FIELDS: tuple[FieldMeta, ...] = (
     FieldMeta(
         "storage.cache_dir",
         "Cache directory",
-        "Persistent KV cache (--cache-dir) and the session SSD tier (TMPDIR=<dir>/tmp).",
+        "Persistent KV cache (--cache-dir) and the session SSD tier (TMPDIR=<dir>/tmp). "
+        "A Qwen3.8-Flash-Next model keeps long requests' KV here too, so its context "
+        "follows this disk's free space.",
         "models_storage",
         "path",
         applies="restart",
@@ -334,14 +336,41 @@ FIELDS: tuple[FieldMeta, ...] = (
     _serve(
         "serve.max_context",
         "Context limit",
-        "Context limit; Auto = largest that fits. Up to 256K (K = 1024).",
+        "Context limit; Auto = the largest that fits, up to the 256K native window. Up to "
+        "1,010,000 (K = 1024, M = a million); past 256K Splash turns on YaRN, which changes "
+        "answers at every length and gives the persistent cache a separate namespace.",
         "memory_context",
         "context",
         "--max-context",
         scope="GM",
         min=4096,
-        max=262144,
+        max=1010000,
         unit="tokens",
+        warnings=("Past 256K: YaRN changes answers at every length.",),
+    ),
+    _serve(
+        "serve.expert_memory",
+        "Expert memory",
+        "RAM for a MoE model's routed experts, such as 16G; the rest are read from the SSD "
+        "when a token routes them, which is slower. Auto loads them all where memory holds "
+        "them; off always loads every expert. Ignored by a dense model.",
+        "memory_context",
+        "size",
+        "--expert-memory",
+        scope="GM",
+        advanced=True,
+    ),
+    _serve(
+        "serve.ple_memory",
+        "PLE table memory",
+        "RAM row cache for a Qwen3.8-Flash-Next GGUF's PLE table, such as 2G; the rest of "
+        "the table (tens of GB) stays on the SSD. Auto streams it only where memory can't "
+        "hold it; off always loads the whole table. Other models ignore it.",
+        "memory_context",
+        "size",
+        "--ple-memory",
+        scope="GM",
+        advanced=True,
     ),
     _serve(
         "serve.idle_release",
@@ -360,8 +389,9 @@ FIELDS: tuple[FieldMeta, ...] = (
     _serve(
         "serve.max_cache_disk",
         "SSD cache",
-        "SSD cache for KV pages and states. Auto follows the disk's free space up to "
-        "32 GiB; 0 turns it off.",
+        "SSD cache for KV pages and states. Auto takes a quarter of the disk's free space "
+        "beyond the 10 GiB it keeps free, up to 32 GiB; a size such as 16G is kept as given "
+        "while the disk keeps that floor; 0 turns it off.",
         "cache",
         "size",
         "--max-cache-disk",
@@ -378,6 +408,18 @@ FIELDS: tuple[FieldMeta, ...] = (
         "cache",
         "size",
         "--max-cache-disk-writes",
+        advanced=True,
+    ),
+    _serve(
+        "serve.sparse_kv_memory",
+        "Sparse KV memory",
+        "RAM for the KV blocks a block-sparse model such as Qwen3.8-Flash-Next reads back "
+        "for requests whose KV is on the SSD, such as 1200M. Auto keeps its floor, the "
+        "smallest Splash takes; it needs the SSD cache on.",
+        "cache",
+        "size",
+        "--sparse-kv-memory",
+        scope="GM",
         advanced=True,
     ),
     _serve(
@@ -405,11 +447,23 @@ FIELDS: tuple[FieldMeta, ...] = (
         "serve.disable_ane",
         "GPU-only prefill",
         "Prefill on the GPU alone. By default a dense model's (27B) long prompts also use "
-        "the Neural Engine when that is faster; the 35B MoE always prefills on the GPU.",
+        "the Neural Engine when that is faster; MoE models always prefill on the GPU.",
         "performance",
         "toggle",
         "--disable-ane",
         scope="GM",
+    ),
+    _serve(
+        "serve.verify_rows",
+        "Draft verification",
+        "Rows of each draft block decoding verifies. Auto lets a learned budget choose a MoE "
+        "model's rows: faster, but its greedy and seeded outputs can differ from run to run. "
+        "All verifies every row, so they repeat as a dense model's do.",
+        "performance",
+        "select",
+        "--verify-rows",
+        scope="GM",
+        choices=("auto", "all"),
     ),
     _serve(
         "serve.allow_idle_sleep",

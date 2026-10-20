@@ -473,6 +473,24 @@ def test_messages_non_stream_and_stream(engine):
     assert all(d["type"] == e for e, d in events)
 
 
+def test_messages_bounded_end_and_ssd_cache_refusals(make_engine):
+    """1.4.0: a LENGTH end the engine sets at its own bound is
+    model_context_window_exceeded on Messages, still length on Chat
+    Completions; the SSD cache's refusals keep their codes and statuses."""
+    fake = make_engine()
+    body = {"model": MODEL, "max_tokens": 400, "messages": [{"role": "user", "content": "tell me a story"}]}
+    fake.set_mode("bounded")
+    status, message = fake.json("POST", "/v1/messages", body)
+    assert status == 200 and message["stop_reason"] == "model_context_window_exceeded"
+    assert message["usage"]["output_tokens"] < 400
+    status, chat = fake.json("POST", "/v1/chat/completions", chat_body(max_tokens=400))
+    assert status == 200 and chat["choices"][0]["finish_reason"] == "length"
+    for mode, expected in (("kv_write_budget", 503), ("kv_disk_quota", 400), ("kv_unreadable", 503)):
+        fake.set_mode(mode)
+        status, error = fake.json("POST", "/v1/chat/completions", chat_body())
+        assert (status, error["error"]["code"]) == (expected, mode)
+
+
 def test_messages_errors_use_anthropic_shape(engine):
     status, error = engine.json(
         "POST",

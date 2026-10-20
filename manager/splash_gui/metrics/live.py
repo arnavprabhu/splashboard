@@ -55,7 +55,17 @@ _TOTAL_KEYS = (
     "requests_failed",
     "requests_cancelled",
 )
-_DISK_FAILURES = ("disk.kv_demotion_failures", "disk.kv_copy_failures", "state.offload_failures")
+# Counters of failed SSD cache writes, and of failed reads of a long request's
+# KV that lives on the SSD (`kv_spill`, a Qwen3.8-Flash-Next target only).
+_DISK_WRITE_FAILURES = (
+    "disk.kv_demotion_failures",
+    "disk.kv_copy_failures",
+    "state.offload_failures",
+)
+_SPILL_WRITE_FAILURES = "kv_spill.write_through.failures"
+_DISK_READ_FAILURES = ("kv_spill.block_cache.read_failures",)
+_DISK_FAILURES = (*_DISK_WRITE_FAILURES, _SPILL_WRITE_FAILURES, *_DISK_READ_FAILURES)
+_KV_MODES = ("resident", "spill")
 
 
 def _rate(cur: float | None, prev: float | None, seconds: float) -> float | None:
@@ -101,7 +111,8 @@ _WRITE_GATES = ("no", "budget", "closed")
 
 def active_requests(status: dict[str, Any]) -> list[ActiveRequest]:
     """`/status.active_requests`: each request the engine holds, ordered by id
-    (Status.cpp). Entries without an integer id are skipped."""
+    (Status.cpp). Entries without an integer id are skipped; `kv_mode` is
+    there only for a target whose KV can spill to the SSD cache."""
     raw = status.get("active_requests")
     if not isinstance(raw, list):
         return []
@@ -119,6 +130,7 @@ def active_requests(status: dict[str, Any]) -> list[ActiveRequest]:
                 generated_tokens=st.integer(entry, "generated_tokens") or 0,
                 max_new_tokens=st.integer(entry, "max_new_tokens"),
                 age_ms=st.num(entry, "age_ms"),
+                kv_mode=kv_mode if (kv_mode := st.text(entry, "kv_mode")) in _KV_MODES else None,  # type: ignore[arg-type]
             )
         )
     return out
@@ -139,6 +151,9 @@ class MetricsHub:
         self._refused: float | None = None
         self._pressure: str | None = None
         self._gate: str | None = None
+        self._expert_failure: str | None = None
+        # Whether the last poll found a long request's KV write-through paused.
+        self._spill_paused = False
 
     async def start(self) -> None:
         sup = self.state.supervisor
@@ -178,12 +193,15 @@ class MetricsHub:
             self._failure_counts.clear()
             self._refused = None
             self._gate = None
+            self._expert_failure = None
+            self._spill_paused = False
             for condition in (
                 "engine_recovering",
                 "engine_failed",
                 "memory_critical",
                 "memory_warning",
                 "disk_write_budget",
+                "expert_streaming_failed",
             ):
                 self.state.alerts.clear_condition(condition)
         if current == "starting":
@@ -324,6 +342,7 @@ class MetricsHub:
                 volume_available_bytes=st.integer(status, "disk.volume_available_bytes"),
                 writes_gated=gate if gate in _WRITE_GATES else None,  # type: ignore[arg-type]
                 write_budget_bytes=st.integer(status, "disk.write_budget_bytes"),
+                writes_deferred_ms=st.num(status, "disk.writes_deferred_ms"),
             ),
             active_requests=active_requests(status),
             stages=stages,
@@ -437,6 +456,23 @@ class MetricsHub:
 
     # Alerts -------------------------------------------------------------
 
+    def _expert_alert(self, status: dict[str, Any]) -> None:
+        """`streamed_experts.failure`: once a routed expert could not be read from
+        the SSD, every later load fails, so every request fails while the engine
+        keeps running; only a restart recovers."""
+        failure = st.text(status, "streamed_experts.failure") or None
+        if failure is not None and failure != self._expert_failure:
+            self.state.alerts.raise_alert(
+                "expert_streaming_failed",
+                "Reading the model's experts from the SSD failed — restart the engine",
+                f"Every request fails until the engine restarts ({failure}).",
+                source="status",
+                actions=[RESTART_ACTION],
+            )
+        elif failure is None:
+            self.state.alerts.clear_condition("expert_streaming_failed")
+        self._expert_failure = failure
+
     def _alerts(self, status: dict[str, Any], restarted: bool) -> None:
         alerts = self.state.alerts
         recovering = st.boolean(status, "transport.recovering") or False
@@ -491,24 +527,59 @@ class MetricsHub:
             self._failure_counts.clear()
             self._refused = None
             self._gate = None
+            self._expert_failure = None
+            self._spill_paused = False
         failures = {path: st.num(status, path) for path in _DISK_FAILURES}
-        grew = any(
-            value is not None
+        grew = {
+            path
+            for path, value in failures.items()
+            if value is not None
             and path in self._failure_counts
             and value > self._failure_counts[path]
-            for path, value in failures.items()
-        )
+        }
         for path, value in failures.items():
             if value is not None:
                 self._failure_counts[path] = value
-        if grew:
+        if grew & set(_DISK_WRITE_FAILURES):
             alerts.raise_alert(
                 "disk_tier_failures",
                 "SSD cache write failed — writes disabled for this session",
-                "Splash reported a disk tier failure (kv_demotion_failures, kv_copy_failures or "
-                "offload_failures increased).",
+                "Splash reported a disk tier failure (kv_demotion_failures, kv_copy_failures "
+                "or offload_failures increased).",
                 source="status",
             )
+        # A long request's KV write-through pauses while the volume is full and resumes
+        # once it has room (Cache.cpp); only a tier that stopped taking writes stays off.
+        spill = status.get("kv_spill")
+        paused = isinstance(spill, dict) and (spill.get("write_through") or {}).get("paused")
+        if _SPILL_WRITE_FAILURES in grew:
+            if paused:
+                title = "SSD cache write failed — long requests' KV writes paused"
+                body = (
+                    "The SSD cache's disk is full: Splash stops writing long requests' KV until "
+                    "it has room again. Free space on that disk, or lower the SSD cache size."
+                )
+            else:
+                title = "SSD cache write failed — writes disabled for this session"
+                body = "Splash could not write a long request's KV to the SSD cache."
+            alerts.raise_alert(
+                "disk_tier_failures", title, body, source="status", subject="spill_write"
+            )
+        elif paused is False and self._spill_paused:
+            # The disk had room again: the paused writes resumed.
+            alerts.clear("disk_tier_failures:spill_write")
+        if isinstance(spill, dict):
+            self._spill_paused = bool(paused)
+        if grew & set(_DISK_READ_FAILURES):
+            alerts.raise_alert(
+                "disk_tier_failures",
+                "SSD cache read failed",
+                "Splash could not read a long request's KV back from the SSD cache; the request "
+                "failed, and a retry computes that KV again.",
+                source="status",
+                subject="read",
+            )
+        self._expert_alert(status)
         # `disk.writes_gated` turns "closed" once a cache file stopped taking writes:
         # the SSD cache keeps what it holds and writes nothing more this session. A session
         # whose first poll already reports it closed alerts too; the reset on restart and stop
@@ -526,13 +597,16 @@ class MetricsHub:
         # refills; "no" again clears the banner, and so does "closed", since a closed cache
         # writes nothing even after the budget refills.
         if gate == "budget" and self._gate != "budget":
-            alerts.raise_alert(
-                "disk_write_budget",
-                "Daily SSD write budget reached",
+            body = (
                 "Until it refills, states a later request could reuse and suspended requests' "
                 "progress checkpoints are dropped instead of written; the state a conversation "
-                "resumes from is still written.",
-                source="status",
+                "resumes from is still written."
+            )
+            if isinstance(status.get("kv_spill"), dict):
+                # A Flash-Next target keeps a long request's KV on the SSD cache.
+                body += " Long requests whose KV must go to the SSD cache are refused until then."
+            alerts.raise_alert(
+                "disk_write_budget", "Daily SSD write budget reached", body, source="status"
             )
         elif gate in ("no", "closed"):
             alerts.clear_condition("disk_write_budget")

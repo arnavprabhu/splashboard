@@ -105,3 +105,25 @@ def busy(status: Any) -> bool:
 
 def build_id(status: Any) -> str | None:
     return text(status, "identity.cache.build_id")
+
+
+def yarn_factor(status: Any) -> float | None:
+    """YaRN's factor over the native window (`identity.cache.rope_scaling`, null
+    without YaRN): the context served past 256K stretches the model's positions."""
+    if text(status, "identity.cache.rope_scaling.type") != "yarn":
+        return None
+    return num(status, "identity.cache.rope_scaling.factor")
+
+
+def context_bound(status: Any) -> str | None:
+    """What sets `maximum_context_tokens`: the model's window, memory, or the
+    free space of the SSD cache's volume (`memory_plan.budget.context_bounds`)."""
+    bound = text(status, "memory_plan.budget.context_bounds.bound")
+    return bound if bound in ("model", "memory", "disk") else None
+
+
+def verify_rows(status: Any) -> str | None:
+    """The rows decode cycles verify: "auto" lets a MoE model's greedy and seeded
+    outputs differ between runs, "all" keeps them reproducible."""
+    rows = text(status, "verify_rows")
+    return rows if rows in ("auto", "all") else None

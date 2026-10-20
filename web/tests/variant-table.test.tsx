@@ -78,3 +78,32 @@ describe('GGUF variant table', () => {
     expect(isProjector('UD-Q4_K_M')).toBe(false);
   });
 });
+
+describe('split GGUF variants and streaming', () => {
+  const Q2: VariantOut = {
+    name: 'Q2_0',
+    size_bytes: 66_420_000_000,
+    bits_per_weight: 2,
+    quality: 'Compact',
+    loadable: true,
+    reason: null,
+    fit: 'streams',
+    recommended: true,
+    files: ['Q2_0/Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00001-of-00002.gguf', 'Q2_0/Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00002-of-00002.gguf', 'mmproj-BF16.gguf'],
+  };
+
+  it('names a variant folder and how many files its parts are, the projector not counted', () => {
+    render(<VariantTable variants={[Q2, Q4]} caption="Variants" />);
+    const row = screen.getByText('Q2_0').closest('tr');
+    expect(row?.textContent).toContain('2 files');
+    expect(screen.getByText('UD-Q4_K_M').closest('tr')?.textContent).not.toContain('files');
+  });
+
+  it('shows a variant that runs streamed as Streams from SSD, never in the accent', () => {
+    const { container } = render(<VariantTable variants={[Q2]} selected="Q2_0" onSelect={vi.fn()} caption="Variants" />);
+    const tag = screen.getByText('Streams from SSD');
+    expect(tag).toBeTruthy();
+    expect(container.querySelector('[data-tone="acc"]')).toBeNull();
+    expect((screen.getByRole('radio') as HTMLInputElement).disabled).toBe(false);
+  });
+});

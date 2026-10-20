@@ -80,10 +80,14 @@ _ADOPTED_FLAGS: dict[str, tuple[str, Callable[[str], Any]]] = {
     "--max-cache-disk-writes": ("max_cache_disk_writes", p.parse_max_cache_disk_writes),
     "--thinking-token-budget": ("thinking_token_budget", p.parse_thinking_token_budget),
     "--thinking-end-text": ("thinking_end_text", p.check_thinking_end_text),
+    "--expert-memory": ("expert_memory", p.parse_expert_memory),
+    "--ple-memory": ("ple_memory", p.parse_ple_memory),
+    "--sparse-kv-memory": ("sparse_kv_memory", p.parse_sparse_kv_memory),
+    "--verify-rows": ("verify_rows", p.parse_verify_rows),
 }
 
 
-def _adopt_extra_flags(glob: dict[str, Any]) -> None:
+def _adopt_extra_flags(glob: dict[str, Any], version: int) -> None:
     """Move an extra flag that is now a setting into that setting, so the upgrade
     doesn't refuse it as a managed flag. A value the setting would refuse stays
     where it was, and validation then names it."""
@@ -110,7 +114,9 @@ def _adopt_extra_flags(glob: dict[str, Any]) -> None:
             kept.append(extra)
             continue
         serve[key] = parsed if key == "thinking_token_budget" else value
-        log.info("settings.json v3: %s moved from engine.extra_flags to serve.%s", name, key)
+        log.info(
+            "settings.json v%d: %s moved from engine.extra_flags to serve.%s", version, name, key
+        )
     engine["extra_flags"] = kept
 
 
@@ -125,7 +131,7 @@ def _v2_to_v3(data: dict[str, Any]) -> dict[str, Any]:
         serve["max_cache_disk"] = "auto"
         log.info("settings.json v3: SSD cache set to auto")
     if isinstance(glob, dict):
-        _adopt_extra_flags(glob)
+        _adopt_extra_flags(glob, 3)
     models = data.get("models")
     for entry in models.values() if isinstance(models, dict) else ():
         if not isinstance(entry, dict):
@@ -138,7 +144,18 @@ def _v2_to_v3(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-MIGRATIONS: dict[int, Migration] = {0: _v0_to_v1, 1: _v1_to_v2, 2: _v2_to_v3}
+def _v3_to_v4(data: dict[str, Any]) -> dict[str, Any]:
+    """Expert, PLE and sparse KV memory and --verify-rows have settings of their own.
+    A Splashboard that ran a newer Splash as untested could have them only in
+    `engine.extra_flags`; they move into those settings."""
+    glob = data.get("global")
+    if isinstance(glob, dict):
+        _adopt_extra_flags(glob, 4)
+    data["version"] = 4
+    return data
+
+
+MIGRATIONS: dict[int, Migration] = {0: _v0_to_v1, 1: _v1_to_v2, 2: _v2_to_v3, 3: _v3_to_v4}
 
 
 class SettingsError(RuntimeError):

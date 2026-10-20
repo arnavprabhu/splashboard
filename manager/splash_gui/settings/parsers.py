@@ -2,7 +2,7 @@
 
 Each function reproduces the logic and error message of its counterpart in
 splash/server/serve_options.py, server/origins.py, server/frontend.py and
-install/models.py at tag 1.3.2, so the GUI refuses exactly what Splash refuses.
+install/models.py at tag 1.4.0, so the GUI refuses exactly what Splash refuses.
 The parity test runs both under Splash's bundled Python when it is installed.
 Functions raise `ValueError` where Splash raises `argparse.ArgumentTypeError`.
 """
@@ -12,12 +12,19 @@ from __future__ import annotations
 import ipaddress
 import math
 import re
+from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlsplit
 
 # serve_options.py
 REASONING_EFFORTS: tuple[str, ...] = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+# The models' native window, the most context without --max-context, and the
+# most --max-context takes, which YaRN stretches that window to.
 MAX_CONTEXT_TOKENS = 262144
+MAX_YARN_CONTEXT_TOKENS = 1010000
+# The suffixes of a --max-context: K, 1024 tokens, and M, a million.
+_CONTEXT_UNITS = {"K": 1024, "M": 1000000}
+VERIFY_ROWS: tuple[str, ...] = ("auto", "all")
 DEFAULT_MAX_REQUEST_BYTES = 128 * 1024 * 1024
 DEFAULT_QUEUE_SIZE = 32
 DEFAULT_DECODE_SHARE = 0.5  # the engine's default when --decode-share is absent
@@ -53,24 +60,35 @@ _SIZE_UNITS = {
     for power, unit in enumerate(("K", "M", "G"), 1)
     for suffix in ("", "B", "IB")
 }
+# A size's number: whole, or with a fraction before a unit (2.5G).
+_SIZE_NUMBER = re.compile(r"\d+(\.\d+)?")
 
 
 def parse_max_context(value: str) -> int | None:
-    """'auto' (None), or a token count; K is 1024 tokens."""
+    """'auto' (None), or a token count with an optional K (1024 tokens) or M
+    (a million) suffix, up to MAX_YARN_CONTEXT_TOKENS: past the native window
+    the engine turns on YaRN."""
     normalized = value.strip().upper()
     if normalized == "AUTO":
         return None
+    number, multiplier = normalized, 1
+    if normalized[-1:] in _CONTEXT_UNITS:
+        number, multiplier = normalized[:-1], _CONTEXT_UNITS[normalized[-1]]
     try:
-        tokens = int(normalized[:-1]) * 1024 if normalized.endswith("K") else int(normalized)
+        tokens = int(number) * multiplier
     except ValueError:
         tokens = 0
-    if not 1 <= tokens <= MAX_CONTEXT_TOKENS:
-        raise ValueError("must be 'auto' or a token count up to 256K, such as 100K")
+    if not 1 <= tokens <= MAX_YARN_CONTEXT_TOKENS:
+        raise ValueError(
+            "must be 'auto' or a token count up to 1010000, such as 100K or 1M "
+            "(K = 1024 tokens, M = 1000000 tokens)"
+        )
     return tokens
 
 
 def parse_max_memory(value: str) -> int | None:
-    """'auto' (None), or a byte count with an optional K, M or G suffix."""
+    """'auto' (None), or a byte count with an optional K, M or G suffix; a count
+    with a suffix may have a fraction (2.5G), rounded down to whole bytes."""
     normalized = value.strip().upper()
     if normalized == "AUTO":
         return None
@@ -79,12 +97,12 @@ def parse_max_memory(value: str) -> int | None:
         if normalized.endswith(suffix):
             normalized, multiplier = normalized[: -len(suffix)], _SIZE_UNITS[suffix]
             break
-    try:
-        size = int(normalized) * multiplier
-    except ValueError:
-        size = 0
+    number = _SIZE_NUMBER.fullmatch(normalized)
+    size = 0
+    if number and (multiplier > 1 or not number.group(1)):
+        size = int(Decimal(normalized) * multiplier)
     if not 1 <= size <= 2**63 - 1:
-        raise ValueError("must be 'auto' or a positive byte count such as 32G")
+        raise ValueError("must be 'auto' or a positive byte count such as 32G or 2.5G")
     return size
 
 
@@ -111,6 +129,46 @@ def parse_max_cache_disk_writes(value: str) -> int:
     if size is None:
         raise ValueError("use 0 for no limit, or a size such as 200G")
     return size
+
+
+def _memory_size(value: str, example: str, choices: tuple[str, ...]) -> int | str | None:
+    """'auto' (None), one of `choices` in lowercase, or a byte count with an
+    optional K, M or G suffix: the memory of a store the engine plans itself when
+    it is auto. The engine refuses a size below the store's smallest when it
+    starts."""
+    normalized = value.strip().lower()
+    if normalized == "auto":
+        return None
+    if normalized in choices:
+        return normalized
+    try:
+        return parse_max_memory(value)
+    except ValueError:
+        options = ", ".join(("auto", *choices))
+        raise ValueError(f"use {options}, or a size such as {example}") from None
+
+
+def parse_ple_memory(value: str) -> int | str | None:
+    """--ple-memory: the RAM row cache of a Qwen3.8-Flash-Next GGUF's PLE table."""
+    return _memory_size(value, "2G", ("off",))
+
+
+def parse_expert_memory(value: str) -> int | str | None:
+    """--expert-memory: the RAM slots of a MoE model's routed experts."""
+    return _memory_size(value, "16G", ("off",))
+
+
+def parse_sparse_kv_memory(value: str) -> int | str | None:
+    """--sparse-kv-memory: the RAM cache of the KV blocks a block-sparse model reads
+    from the SSD; it has no off."""
+    return _memory_size(value, "1200M", ())
+
+
+def parse_verify_rows(value: str) -> str:
+    # argparse choices=("auto", "all")
+    if value not in VERIFY_ROWS:
+        raise ValueError(f"invalid choice: {value!r} (choose from 'auto', 'all')")
+    return value
 
 
 def parse_cache_dir(value: str) -> Path:

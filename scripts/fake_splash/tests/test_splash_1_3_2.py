@@ -65,18 +65,19 @@ def test_a_full_volume_turns_the_automatic_cache_off(make_engine):
 
 def test_the_volume_limits_the_cache_and_a_write_budget_is_reported(make_engine):
     fake = make_engine(
-        args=["--no-webui", "--max-cache-disk", "32G", "--max-cache-disk-writes", "100G"],
+        args=["--no-webui", "--max-cache-disk", "64G", "--max-cache-disk-writes", "100G"],
         env={"FAKE_SPLASH_VOLUME_AVAILABLE": "50G"},
     )
     line = fake.wait_for_line(r"SSD cache: up to ", stream="stderr")
+    # From 1.4.0 a size is held as given while the volume keeps its floor: all its room.
     assert re.search(
-        r"SSD cache: up to 10\.0 GiB of temporary files in \S+ \(a quarter of the 40\.0 GiB its volume has beyond "
+        r"SSD cache: up to 40\.0 GiB of temporary files in \S+ \(the 40\.0 GiB its volume has beyond "
         r"the 10\.0 GiB it keeps free\); a write budget of 100\.0 GiB a day, which the states conversations resume "
         r"from and KV pages pass, starting with a quarter of a day's; KV pages of",
         line,
     )
     disk = fake.json("GET", "/status")[1]["disk"]
-    assert (disk["capacity_bytes"], disk["limit_bytes"]) == (32 * GIB, 10 * GIB)
+    assert (disk["capacity_bytes"], disk["limit_bytes"]) == (64 * GIB, 40 * GIB)
     assert disk["write_budget_bytes"] == 25 * GIB
 
 
@@ -210,7 +211,8 @@ def test_active_requests(make_engine):
     assert request["age_ms"] >= 0 and isinstance(request["id"], int)
     if ENGINE.exists():
         fields = {p.removeprefix("active_requests.") for p in native_status_paths() if p.startswith("active_requests.")}
-        assert set(request) == fields
+        # kv_mode is written only where the target's KV can spill (1.4.0).
+        assert set(request) == fields - {"kv_mode"}
     response.close()
     connection.close()
     deadline = time.monotonic() + 5
@@ -293,7 +295,8 @@ def test_messages_pass_thinking_budget_and_template_kwargs(engine):
 
 def test_serve_help_matches_the_new_flags(tmp_path):
     help_text = run_cli(tmp_path, "serve", "--help", env={"COLUMNS": "200"}).stdout
-    assert "auto follows the volume's free space up to 32G, 0 disables" in help_text
+    # 1.4.0's wording: a size is held as given while the volume keeps its floor.
+    assert "is held as given while the volume keeps that floor; 0 disables (default: auto)" in help_text
     assert "(default: 0, no limit)" in help_text and "{fp32,bf16}" in help_text
 
 

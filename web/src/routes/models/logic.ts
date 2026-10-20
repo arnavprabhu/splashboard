@@ -410,6 +410,21 @@ export function catalogSeed(memoryBytes = 0): Catalog {
           { format: 'gguf', label: t('models.format.gguf'), entries: [entry('unsloth/Qwen3.6-35B-A3B-GGUF', 'Qwen3.6-35B-A3B', 'gguf', t('models.seed.moe_gguf'))] },
         ],
       },
+      // Loads from GGUFs only, so it has no MLX group.
+      {
+        family: 'Qwen3.8-Flash-Next',
+        label: t('models.catalog.family.flash_next'),
+        groups: [
+          {
+            format: 'gguf',
+            label: t('models.format.gguf'),
+            entries: [
+              entry('ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF', 'Qwen3.8-Flash-Next', 'gguf', t('models.seed.flash_next_gguf')),
+              entry('unsloth/Qwen3.8-Flash-Next-GGUF', 'Qwen3.8-Flash-Next', 'gguf', t('models.seed.flash_next_unsloth')),
+            ],
+          },
+        ],
+      },
     ],
   };
 }

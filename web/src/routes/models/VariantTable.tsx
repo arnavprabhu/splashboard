@@ -23,6 +23,22 @@ export interface VariantTableProps {
   caption: string;
 }
 
+/** How many files a variant downloads besides the projector: a split GGUF's parts. */
+function partCount(v: VariantOut): number {
+  return (v.files ?? []).filter((f) => !isProjector(f)).length;
+}
+
+/** The variant's name, and how many files it is when a split GGUF's parts make it. */
+function VariantName({ v }: { v: VariantOut }) {
+  const parts = partCount(v);
+  return (
+    <>
+      <span class="mono">{v.name}</span>
+      {parts > 1 && <span class="meta"> · {t('models.variant.parts', { n: parts })}</span>}
+    </>
+  );
+}
+
 /** GGUF variants: size, bits, tier, fit, Recommended, disabled rows with reasons. */
 export function VariantTable({ variants, projector, selected, onSelect, onDownload, installed, pending, caption }: VariantTableProps) {
   const group = useId();
@@ -34,7 +50,8 @@ export function VariantTable({ variants, projector, selected, onSelect, onDownlo
       label: t('models.variant.col.variant'),
       render: (v) => {
         const disabled = v.loadable === false || isProjector(v.name) || waiting.has(v.name);
-        if (!onSelect || isProjector(v.name)) return <span class="mono">{v.name}</span>;
+        if (isProjector(v.name)) return <span class="mono">{v.name}</span>;
+        if (!onSelect) return <VariantName v={v} />;
         return (
           <label class="variant-pick">
             <input
@@ -46,7 +63,7 @@ export function VariantTable({ variants, projector, selected, onSelect, onDownlo
               onChange={() => onSelect(v.name)}
             />
             <span class="variant-radio" aria-hidden="true" />
-            <span class="mono">{v.name}</span>
+            <VariantName v={v} />
           </label>
         );
       },

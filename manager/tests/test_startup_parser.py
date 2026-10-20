@@ -1,4 +1,4 @@
-"""Engine output lines → structured events. Lines are Splash 1.3.0's own."""
+"""Engine output lines → structured events. Lines are Splash's own (1.3.0 to 1.4.0)."""
 
 from __future__ import annotations
 
@@ -248,3 +248,181 @@ def test_unknown_lines_produce_nothing() -> None:
     assert parser.feed("22:52:58 Kernel policy for GPU family 10 with 20 cores.") == []
     assert parser.feed("22:52:58 Done · input 5 · cached 0 · output 5") == []
     assert parser.feed("") == []
+
+
+# --- Splash 1.4.0 -----------------------------------------------------------
+
+
+def test_a_store_setting_refusal_is_a_settings_error_not_a_memory_one() -> None:
+    """The planner refuses an explicit store size before the weights load, in the
+    same [resource_assembly/…] form as a budget refusal (MemoryPlan.cpp resolve)."""
+    for line, key in (
+        (
+            "error: runtime bootstrap failed [resource_assembly/configuration]: --expert-memory of "
+            "100 MiB is less than its smallest store, 448 MiB",
+            "serve.expert_memory",
+        ),
+        (
+            "error: runtime bootstrap failed [resource_assembly/configuration]: --ple-memory "
+            "cannot stream the PLE table: its rows are not one format",
+            "serve.ple_memory",
+        ),
+        (
+            "error: runtime bootstrap failed [resource_assembly/configuration]: --sparse-kv-memory "
+            "of 9000 MiB is more than the hot block cache's floor, 390 MiB, and the 2048 MiB the "
+            "floors leave",
+            "serve.sparse_kv_memory",
+        ),
+    ):
+        events = feed_all(StartupParser(), line)
+        (event,) = [e for e in events if isinstance(e, ErrorEvent)]
+        error = event.error
+        assert (error.kind, error.code) == ("other", "invalid_setting")
+        assert error.message.startswith("Settings · ") and f"({key}): --" in error.message
+        assert error.budget is None
+        reset = error.suggestions[0]
+        assert (reset.action, reset.patch) == ("reset_setting", {key: "auto"})
+
+
+def test_a_store_refusal_from_the_plan_after_the_load_keeps_its_settings_fix() -> None:
+    """The plan made with the loaded arenas refuses a store at memory_planning, and
+    Bootstrap.mm describe() then prints the same message as a budget block."""
+    text = (
+        "error: runtime bootstrap failed [resource_assembly/memory_planning]: --sparse-kv-memory "
+        "of 9000 MiB is more than the hot block cache's floor, 390 MiB, and the 2048 MiB the "
+        "floors leave\n"
+        "engine memory budget validation failed [kv_pool_does_not_fit]: --sparse-kv-memory of "
+        "9000 MiB is more than the hot block cache's floor, 390 MiB, and the 2048 MiB the floors "
+        "leave\nhard budget: 7516192768 bytes (7168.00 MiB)\nmodel weights: 5000000000 bytes"
+    )
+    errors = [e.error for e in feed_all(StartupParser(), text) if isinstance(e, ErrorEvent)]
+    assert [(e.kind, e.code) for e in errors] == [("other", "invalid_setting")]
+    assert errors[0].suggestions[0].patch == {"serve.sparse_kv_memory": "auto"}
+
+
+def test_a_real_capacity_refusal_with_streamed_stores_stays_a_budget_refusal() -> None:
+    line = (
+        "error: runtime bootstrap failed [resource_assembly/memory_planning]: model weights with "
+        "the runtime reserves, one lane's state, the KV runway, the streamed stores at their "
+        "floors and any SSD cache state staging require 40000000000 bytes but the Metal memory "
+        "budget is 30000000000 bytes"
+    )
+    (event,) = [e for e in feed_all(StartupParser(), line) if isinstance(e, ErrorEvent)]
+    assert (event.error.kind, event.error.code) == ("budget_refusal", "kv_pool_does_not_fit")
+
+
+def test_a_context_the_ssd_cache_bounds_suggests_the_cache_not_memory() -> None:
+    text = (
+        "error: runtime bootstrap failed [model_creation]: --max-context 1000000 exceeds the "
+        "160000 tokens the model and the SSD cache's room for its KV allow; omit it or pass at "
+        "most 160000\nhard budget: 7516192768 bytes (7168.00 MiB)"
+    )
+    (event,) = [e for e in feed_all(StartupParser(), text) if isinstance(e, ErrorEvent)]
+    error = event.error
+    assert error.code == "max_context_exceeds"
+    assert "SSD cache's room" in error.message and "1,000,000" in error.message
+    actions = [(s.action, s.patch) for s in error.suggestions]
+    assert actions == [
+        ("lower_max_context", {"serve.max_context": "160000"}),
+        ("enable_ssd_cache", {"serve.max_cache_disk": "auto"}),
+    ]
+    memory = (
+        "error: runtime bootstrap failed [model_creation]: --max-context 900000 exceeds the "
+        "500000 tokens the model and --max-memory allow; omit it or pass at most 500000"
+    )
+    (event,) = [e for e in feed_all(StartupParser(), memory) if isinstance(e, ErrorEvent)]
+    assert "the memory ceiling allows" in event.error.message
+    assert any(s.action == "language_only" for s in event.error.suggestions)
+
+
+def test_new_startup_notices() -> None:
+    parser = StartupParser()
+    for line, kind in (
+        (
+            "12:00:00 --ple-memory ignored: Qwen3.6-35B-A3B has no PLE table to stream",
+            "setting_ignored",
+        ),
+        (
+            "12:00:00 --sparse-kv-memory ignored: Qwen3.8-Flash-Next keeps its KV in memory, the "
+            "SSD cache is off.",
+            "setting_ignored",
+        ),
+        (
+            "12:00:00 YaRN is on: the target's RoPE is scaled by 3.8147 for 1000000 tokens of "
+            "context, past the native window of 262144. Static YaRN changes answers at every "
+            "length, so pass a --max-context above 262144 only when a request needs it.",
+            "yarn_on",
+        ),
+        (
+            "12:00:00 Persistent cache emptied: the last two starts failed within their "
+            "probation, or the last one's engine did.",
+            "persistent_cache_emptied",
+        ),
+    ):
+        (event,) = parser.feed(line)
+        assert isinstance(event, NoticeEvent) and event.kind == kind
+        assert event.message == strip_stamp(line)
+    # Lines that say how a store or the verify rows were set up are informational.
+    for line in (
+        "12:00:00 Routed experts stream from their files: 1820 slots for 10240 experts (17%) in "
+        "16380 MiB.",
+        "12:00:00 Decode cycles verify every row of the draft's block (--verify-rows all).",
+        "12:00:00 Long requests keep their KV on the SSD cache: 262144 tokens of context (bound: "
+        "model; window 262144, resident 65536, spilled 262144, disk 900000); a request whose KV "
+        "fits 2048 MiB stays in memory; hot block cache 390 MiB (floor 390 MiB); history staging "
+        "in 2 buffers; SSD room for active KV 180.0 GiB.",
+    ):
+        assert parser.feed(line) == []
+
+
+def test_a_reload_and_the_new_took_back_suffix() -> None:
+    parser = StartupParser()
+    assert parser.feed("12:00:00 Weights loaded in 4.10 s.") == [PhaseEvent("warming")]
+    assert parser.feed("12:00:00 Weights loaded again in 3.90 s.") == []
+    (taken,) = parser.feed(
+        "12:00:00 Persistent cache /c/abc: took back 3 restore points over 40 KV blocks (12 MiB); "
+        "left 0 copies behind. The last process did not stop cleanly."
+    )
+    assert taken == TakenBackEvent(3, 40, 12, 0)
+
+
+def test_a_million_token_ready_line() -> None:
+    (_, ready) = StartupParser().feed(
+        "12:00:00 Ready · unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_M · context 1,000,000 · "
+        "http://127.0.0.1:18000"
+    )
+    assert isinstance(ready, ReadyEvent) and ready.context_tokens == 1_000_000
+
+
+def test_an_unprepared_model_is_its_own_error() -> None:
+    for line in (
+        "12:00:00 Error · /Users/me/.splash/models/.links/abc names no model Splash prepared: "
+        "prepare the model again",
+        "12:00:00 Error · /tmp/x is not a model directory Splash prepared",
+        "12:00:00 Error · cannot hold /m/.links/a in /m: [Errno 13] Permission denied",
+    ):
+        (event,) = StartupParser().feed(line)
+        assert isinstance(event, ErrorEvent) and event.error.code == "model_not_prepared", line
+        assert "Models page" in event.error.message
+
+
+def test_a_fix_that_repeats_the_refused_settings_is_dropped() -> None:
+    """With the SSD cache already auto, "Let the SSD cache follow the disk" would
+    start the same way; only the context fix is left."""
+    from types import SimpleNamespace
+
+    from splash_gui.engine.supervisor import Supervisor
+    from splash_gui.settings.model import SettingsDocument
+
+    text = (
+        "error: runtime bootstrap failed [model_creation]: --max-context 1000000 exceeds the "
+        "160000 tokens the model and the SSD cache's room for its KV allow; omit it or pass at "
+        "most 160000\nhard budget: 7516192768 bytes (7168.00 MiB)"
+    )
+    (event,) = [e for e in feed_all(StartupParser(), text) if isinstance(e, ErrorEvent)]
+    owner = SimpleNamespace(
+        model="unsloth/Qwen3.8-Flash-Next-GGUF:Q2_0",
+        app=SimpleNamespace(settings=SimpleNamespace(current=SettingsDocument())),
+    )
+    kept = Supervisor._without_noop_fixes(owner, event.error)  # type: ignore[arg-type]
+    assert [s.action for s in kept.suggestions] == ["lower_max_context"]

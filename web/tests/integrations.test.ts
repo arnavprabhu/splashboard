@@ -135,6 +135,15 @@ describe('gateway /v1/models preview', () => {
     expect(out.data[1]!.display_name).toBe(MODEL);
     expect(out).toMatchObject({ first_id: 'claude-sonnet-5', last_id: 'claude-opus-5', has_more: false });
     expect((gatewayModels({ 'claude-haiku-5': '' }, null) as { data: Array<Record<string, unknown>> }).data[0]!.display_name).toBe('Splash');
+    expect(out.data[0]!.max_tokens).toBe(262144);
+    const yarn = gatewayModels({ 'claude-opus-5': '' }, MODEL, 1000000) as { data: Array<Record<string, unknown>> };
+    expect(yarn.data[0]!.max_tokens).toBe(1000000);
+    // A slot aimed at another model takes that model's own context, as the gateway does.
+    const other = 'unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M';
+    const mixed = gatewayModels({ 'claude-opus-5': '', 'claude-haiku-5': other }, MODEL, 1000000, new Map([[other, 131072]])) as {
+      data: Array<Record<string, unknown>>;
+    };
+    expect(mixed.data.map((d) => d.max_tokens)).toEqual([1000000, 131072]);
   });
 });
 

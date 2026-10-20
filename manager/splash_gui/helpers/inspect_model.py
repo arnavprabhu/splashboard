@@ -3,6 +3,9 @@
 stdin: {"repo", "sha", "files": {name: size}, "variant", "first"?, "only"?}.
 stdout, one JSON object per line as soon as it is known:
   {"variants": [{name, files, size_bytes}], "first": NAME|null}   the table, at once;
+                                                                   a root GGUF, or a split
+                                                                   GGUF's parts in a folder
+                                                                   named after its variant;
   {"result": {name, compatible, ...}}                              one per variant checked.
 `first` (the variant the manager expects to recommend) is checked alone before the
 others, so its verdict arrives first; the rest are checked in parallel after it.
@@ -22,33 +25,75 @@ from pathlib import Path
 from typing import Any
 
 
-def variant_label(repo_id: str, name: str, names: list[str], upstream: Any) -> str:
+def is_projector(name: str) -> bool:
+    return "mmproj" in Path(name).stem.lower()
+
+
+# A multi-token-prediction head published beside the model (`mtp-MODEL-Q8_0.gguf`).
+MTP = re.compile(r"(?:^|[-_.])mtp(?:[-_.]|$)", re.IGNORECASE)
+
+
+def variant_label(
+    repo_id: str, name: str, names: list[str], upstream: Any, files: Any = None
+) -> str:
     """The shortest :VARIANT that Splash's own `select_gguf` resolves to `name`.
 
     Splash strips the model name all root GGUFs share (`X-Q4_K_M` → `Q4_K_M`),
     but one odd file (an `imatrix_*.gguf`) leaves nothing shared, so the label
     is also tried without the repository's model name and as the full stem; the
-    first that Splash resolves uniquely to this file is the ID's VARIANT."""
-    if len(names) == 1:
-        return Path(name).stem
+    first that Splash resolves to this file alone is the ID's VARIANT. `files`
+    is the whole repository as Splash lists it (`names` when not given): every
+    root GGUF counts in Splash's shared name, an MTP head too."""
+    files = names if files is None else files
+    roots = sorted(n for n in files if "/" not in n and n.endswith(".gguf") and not is_projector(n))
     stem = Path(name).stem
-    parts = [Path(n).stem.split("-") for n in names]
-    shared = len(os.path.commonprefix(parts))
     model = re.sub(r"-gguf$", "", repo_id.split("/", 1)[-1], flags=re.IGNORECASE)
     labels = []
-    if shared:
-        labels.append("-".join(stem.split("-")[shared:]))
-    if stem.lower().startswith(model.lower() + "-"):
-        labels.append(stem[len(model) + 1 :])
+    if len(names) == 1 and len(roots) <= 1:
+        # A lone root GGUF is asked for by its bare ID, unless variant folders sit
+        # beside it: then it needs a :VARIANT, an ending Splash matches to it.
+        if not folder_variants(files):
+            return stem
+        if stem.lower().startswith(model.lower() + "-"):
+            labels.append(stem[len(model) + 1 :])
+        words = stem.split("-")
+        labels += ["-".join(words[i:]) for i in range(1, len(words))]
+    else:
+        parts = [Path(n).stem.split("-") for n in roots or names]
+        shared = len(os.path.commonprefix(parts))
+        if shared:
+            labels.append("-".join(stem.split("-")[shared:]))
+        if stem.lower().startswith(model.lower() + "-"):
+            labels.append(stem[len(model) + 1 :])
     labels.append(stem)
     for label in labels:
         try:
-            chosen, _ = upstream.select_gguf(names, label)
+            chosen, _ = upstream.select_gguf(files, label)
         except Exception:  # noqa: S112 - not unique or not found: try the next label
             continue
-        if chosen == name:
+        if list(chosen) == [name]:
             return label
     return stem
+
+
+def folder_variants(files: Any) -> dict[str, list[str]]:
+    """Each split GGUF a repository keeps in a folder named after its variant
+    (`Q2_0/MODEL-Q2_0-00001-of-00002.gguf` ...), which Splash installs as
+    :VARIANT (`upstream.split_gguf`): folder -> its GGUFs in split order."""
+    found: dict[str, list[str]] = {}
+    for name in files:
+        if name.count("/") != 1 or not name.endswith(".gguf"):
+            continue
+        if is_projector(name):
+            continue
+        found.setdefault(name.split("/", 1)[0], []).append(name)
+    # An MTP head in a variant's folder is one of its files to Splash, which then
+    # refuses the folder; a folder of MTP heads only is no variant.
+    return {
+        folder: sorted(parts)
+        for folder, parts in sorted(found.items())
+        if not all(MTP.search(Path(part).stem) for part in parts)
+    }
 
 
 BUFFER = 256 << 10
@@ -105,9 +150,9 @@ class SharedReader(io.RawIOBase):
 def main() -> None:
     from install import hub, models, upstream  # type: ignore[import-not-found]
 
-    # Splash 1.3 writes a GGUF's derived config and metadata into a scratch
+    # Splash writes a GGUF's derived config and metadata into a scratch
     # directory, and the target carries the family the engine's model-check
-    # found (splash/install/upstream.py:165-204).
+    # found (splash/install/upstream.py `inspect_target`, `gguf_target`).
     def inspect_target(choice: str | None, language_only: bool, scratch: str) -> Any:
         return upstream.inspect_target(repo, choice, language_only, Path(scratch))
 
@@ -138,27 +183,46 @@ def main() -> None:
             return io.BufferedReader(shared[name].reader(), BUFFER)
 
     repo = Repository(spec["repo"], spec["sha"], set(spec["files"]))
+    # An MTP head is never a variant, though Splash's selection counts it.
     names = [
         n
         for n in spec["files"]
-        if "/" not in n and n.endswith(".gguf") and "mmproj" not in Path(n).stem.lower()
+        if "/" not in n
+        and n.endswith(".gguf")
+        and not is_projector(n)
+        and not MTP.search(Path(n).stem)
     ]
     variants = [
         {
-            "name": variant_label(spec["repo"], name, names, upstream),
+            "name": variant_label(spec["repo"], name, names, upstream, spec["files"]),
             "files": [name],
             "size_bytes": spec["files"][name],
         }
         for name in names
     ]
+    # A root variant of the same name is what Splash takes for it; the folder is not.
+    taken = {v["name"].lower() for v in variants}
+    folders = {
+        folder: parts
+        for folder, parts in folder_variants(spec["files"]).items()
+        if folder.lower() not in taken
+    }
+    variants += [
+        {
+            "name": folder,
+            "files": parts,
+            "size_bytes": sum(spec["files"].get(part) or 0 for part in parts),
+        }
+        for folder, parts in folders.items()
+    ]
     requested = spec.get("variant")
     # Each choice is (variant to ask the engine for, name to report it under).
-    # They differ for a repository of one GGUF, which names no variant apart
+    # They differ for a repository of one root GGUF, which names no variant apart
     # from its model: the engine is asked for the only file it has, but the
     # result is still reported under the name the variant table shows.
     if requested:
         choices = [(requested, requested)]
-    elif len(variants) == 1:
+    elif len(variants) == 1 and not folders:
         choices = [(None, variants[0]["name"])]
     elif variants:
         choices = [(v["name"], v["name"]) for v in variants]
@@ -202,6 +266,14 @@ def main() -> None:
             # Splash's installer does (install/upstream.py `prepare`); another
             # tool's manifest.json passes.
             models.refuse_package(spec["repo"], models.read_json(repo.file("manifest.json")))
+        if choice in folders:
+            # Splash looks in VARIANT/ only when no root GGUF answers :VARIANT, and
+            # a root file such as an MTP head `mtp-MODEL-Q8_0.gguf` answers :Q8_0.
+            chosen, _ = upstream.select_gguf(repo.files, choice)
+            if list(chosen) != folders[choice]:
+                raise models.ModelError(
+                    f"Splash takes {chosen[0]} for :{choice}, not the files in {choice}/"
+                )
         # The full check (target plus vision) first: when it passes, the
         # language-only selection is the same files minus the projector, so
         # the target header is read once instead of twice.
@@ -226,6 +298,8 @@ def main() -> None:
             format="gguf" if target.format == "gguf" else "mlx",
             vision=vision,
             vision_reason=reason,
+            # None for a family without a released draft: Splash then installs
+            # it only with a draft the model's settings name.
             draft=family.draft_repo,
             files=sorted(set(target.files.values())),
             language_files=language_files,

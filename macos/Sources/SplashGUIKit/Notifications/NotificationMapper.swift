@@ -37,17 +37,17 @@ public enum NotificationMapper {
     public static func toggleKey(for kind: String) -> String? {
         switch kind {
         case "download_done": return "download_done"
-        case "engine_failed": return "engine_failed"
+        case "engine_failed", "expert_streaming_failed": return "engine_failed"
         case "memory_critical": return "memory_critical"
         case "update_available": return "update_available"
-        case "disk_tier_failures": return "disk_cache_errors"
+        case "disk_tier_failures", "kv_disk_quota": return "disk_cache_errors"
         default: return nil
         }
     }
 
     /// Critical kinds are posted time-sensitive (never `.critical`).
     public static func isCritical(_ kind: String) -> Bool {
-        ["engine_failed", "crash_loop", "memory_critical"].contains(kind)
+        ["engine_failed", "crash_loop", "memory_critical", "expert_streaming_failed"].contains(kind)
     }
 
     /// The admin page the body opens.
@@ -55,10 +55,11 @@ public enum NotificationMapper {
         switch kind {
         case "download_done": return "/admin/models"
         case "download_failed": return "/admin/models/downloader"
-        case "engine_failed", "crash_loop": return "/admin/logs"
+        case "engine_failed", "crash_loop", "expert_streaming_failed": return "/admin/logs"
         case "update_available": return "/admin/settings/about"
         case "unclean_integration_shutdown": return "/admin/integrations"
         case "capacity_exhausted", "resource_timeout": return "/admin/settings/memory"
+        case "kv_disk_quota": return "/admin/settings/cache"
         case "queue_full": return "/admin/settings/requests"
         default: return "/admin/status"
         }
@@ -66,9 +67,9 @@ public enum NotificationMapper {
 
     /// Maps an event to a notification, or nil when its toggle is off.
     ///
-    /// Critical kinds (`engine_failed`, `crash_loop`, `memory_critical`) are delivered even when
-    /// their `notifications.*` toggle is off (critical = AlertBand + OS notification). Pass `criticalBypassesToggle: false` to honour
-    /// every toggle instead.
+    /// Critical kinds (`engine_failed`, `crash_loop`, `memory_critical`, `expert_streaming_failed`)
+    /// are delivered even when their `notifications.*` toggle is off (critical = AlertBand + OS
+    /// notification). Pass `criticalBypassesToggle: false` to honour every toggle instead.
     public static func map(
         _ n: NotificationPayload, settings: AppSettings, criticalBypassesToggle: Bool = true
     ) -> MappedNotification? {

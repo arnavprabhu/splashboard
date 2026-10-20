@@ -102,6 +102,44 @@ ERROR_ALERTS = {
         "Engine stopped after repeated failures",
         "Restart the engine",
     ),
+    # A long request's KV on the SSD cache (Qwen3.8-Flash-Next).
+    "kv_disk_quota": (
+        "kv_disk_quota",
+        "A request needs more SSD cache than it can hold now",
+        "Raise the SSD cache size in Settings › Cache, or free space on its disk.",
+    ),
+    "kv_write_budget": (
+        "disk_write_budget",
+        "Daily SSD write budget reached — long requests are refused until it refills",
+        "Long requests keep their KV on the SSD cache, and the daily write budget "
+        "(--max-cache-disk-writes) is spent. Raise or remove the budget in Settings › Cache.",
+    ),
+    "kv_unreadable": (
+        "disk_tier_failures",
+        "SSD cache read failed",
+        "Splash could not read a conversation's KV back from the SSD cache; a retry computes "
+        "it again.",
+    ),
+}
+# The same refusals by message, for APIs whose errors carry no code (Messages).
+SSD_ERROR_MESSAGES = (
+    ("whose daily write budget (--max-cache-disk-writes) is spent", "kv_write_budget"),
+    ("of the SSD cache, which may hold active_limit_bytes=", "kv_disk_quota"),
+    ("could not be read from the SSD cache", "kv_unreadable"),
+)
+# capacity_exhausted and resource_timeout with an SSD cache cause rather than memory.
+SSD_CAUSES = {
+    "capacity_exhausted": (
+        "which takes no writes",
+        "Request refused: the SSD cache takes no writes",
+        "Long requests keep their KV on the SSD cache, which stopped taking writes this "
+        "session; restart the engine.",
+    ),
+    "resource_timeout": (
+        "SSD cache's room for active KV",
+        "Request timed out waiting for room in the SSD cache — other long requests hold it",
+        "",
+    ),
 }
 
 
@@ -909,7 +947,12 @@ class ProxyPipeline:
                 source="proxy",
             )
             return
+        if code not in ERROR_ALERTS:
+            code = next((c for phrase, c in SSD_ERROR_MESSAGES if phrase in text), code)
         entry = ERROR_ALERTS.get(code or "")
+        cause = SSD_CAUSES.get(code or "")
+        if cause is not None and cause[0] in text:
+            entry = (code or "", cause[1], cause[2])
         if entry is not None:
             condition, title, message = entry
             actions = []
@@ -922,6 +965,8 @@ class ProxyPipeline:
                 title,
                 message,
                 source="proxy",
+                # A failed read stands beside, not over, a standing write failure.
+                subject="read" if code == "kv_unreadable" else None,
                 actions=actions,
             )
 

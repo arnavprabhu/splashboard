@@ -383,6 +383,7 @@ def test_active_requests_host_spare_and_deduplicated_tokens(app: FastAPI) -> Non
             "generated_tokens": 0,
             "max_new_tokens": 256,
             "age_ms": 1500.5,
+            "kv_mode": None,
         }
     ], "entries without an id are skipped"
     assert sample.totals.deduplicated_kv_tokens == 640
@@ -390,3 +391,88 @@ def test_active_requests_host_spare_and_deduplicated_tokens(app: FastAPI) -> Non
     assert sample.memory.host_spare_reserve_bytes == 2_147_483_648
     assert sample.memory.host_headroom_bytes == 6_442_450_944
     assert hub_of(app).derive(status(), time.time()).active_requests == []
+
+
+def spill(**over: Any) -> dict[str, Any]:
+    """A Qwen3.8-Flash-Next target's /status: its KV can spill to the SSD cache."""
+    return status(
+        kv_spill={
+            "write_through": {"failures": 0, "paused": False},
+            "block_cache": {"read_failures": 0},
+        },
+        **over,
+    )
+
+
+def test_kv_mode_and_writes_deferred(app: FastAPI) -> None:
+    row = {"id": 1, "phase": "decode", "prompt_tokens": 600_000}
+    sample = hub_of(app).derive(
+        status(
+            active_requests=[
+                {**row, "kv_mode": "spill"},
+                {**row, "id": 2, "kv_mode": "resident"},
+                {**row, "id": 3, "kv_mode": "elsewhere"},
+                {**row, "id": 4},
+            ],
+            disk__writes_deferred_ms=12.5,
+        ),
+        time.time(),
+    )
+    assert [r.kv_mode for r in sample.active_requests] == ["spill", "resident", None, None]
+    assert sample.disk.writes_deferred_ms == 12.5
+
+
+def test_spilled_kv_write_and_read_failures_are_disk_failures(app: FastAPI) -> None:
+    hub = hub_of(app)
+    alerts = app.state.manager.alerts
+    hub.on_status(spill(), False)
+    # A full volume pauses write-through until it has room: said so, then cleared.
+    hub.on_status(spill(kv_spill__write_through={"failures": 1, "paused": True}), False)
+    alert = alerts.get("disk_tier_failures:spill_write")
+    assert alert is not None and alert.title.endswith("long requests' KV writes paused")
+    hub.on_status(spill(kv_spill__write_through={"failures": 1, "paused": False}), False)
+    assert alerts.get("disk_tier_failures:spill_write") is None
+    # A write failure with the tier closed is off for the session.
+    hub.on_status(spill(kv_spill__write_through={"failures": 2, "paused": False}), False)
+    alert = alerts.get("disk_tier_failures:spill_write")
+    assert alert is not None and "disabled for this session" in alert.title
+    # A failed read stands beside the write failure instead of replacing its banner.
+    hub.on_status(
+        spill(
+            kv_spill__write_through={"failures": 2, "paused": False},
+            kv_spill__block_cache={"read_failures": 2},
+        ),
+        False,
+    )
+    assert alerts.get("disk_tier_failures:read").title == "SSD cache read failed"
+    assert "disabled for this session" in alerts.get("disk_tier_failures:spill_write").title
+
+
+def test_an_expert_load_failure_asks_for_a_restart(app: FastAPI) -> None:
+    hub = hub_of(app)
+    hub.on_status(status(streamed_experts={"failure": ""}), False)
+    assert "expert_streaming_failed" not in conditions(app)
+    failed = status(streamed_experts={"failure": "cannot read expert 3 of layer 7"})
+    hub.on_status(failed, False)
+    hub.on_status(failed, False)
+    alert = app.state.manager.alerts.get("expert_streaming_failed")
+    assert alert is not None and alert.severity == "critical" and alert.count == 1
+    assert "cannot read expert 3 of layer 7" in alert.message
+    assert [a.id for a in alert.actions] == ["restart"]
+    # The restarted engine's store is healthy again.
+    hub.on_status(status(streamed_experts={"failure": ""}), True)
+    assert "expert_streaming_failed" not in conditions(app)
+    hub.on_status(failed, False)
+    hub.on_state("ready", "stopped")
+    assert "expert_streaming_failed" not in conditions(app)
+
+
+def test_a_spent_write_budget_refuses_long_requests_on_a_spill_target(app: FastAPI) -> None:
+    hub = hub_of(app)
+    hub.on_status(status(disk__writes_gated="budget"), False)
+    alert = app.state.manager.alerts.get("disk_write_budget")
+    assert alert is not None and "Long requests" not in alert.message
+    hub.on_state("ready", "stopped")
+    hub.on_status(spill(disk__writes_gated="budget"), False)
+    alert = app.state.manager.alerts.get("disk_write_budget")
+    assert alert is not None and "Long requests whose KV must go to the SSD cache" in alert.message

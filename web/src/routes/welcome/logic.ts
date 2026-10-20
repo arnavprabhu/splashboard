@@ -86,9 +86,9 @@ export function brewStatus(brew: BrewInfo | null): CheckStatus {
   return brew.installed ? 'ok' : 'fail';
 }
 
-/** The lowest supported Splash version from the manager's `supported_range` (">=1.3.2 <1.4.0" → "1.3.2"). */
+/** The lowest supported Splash version from the manager's `supported_range` (">=1.4.0 <1.5.0" → "1.4.0"). */
 export function minimumEngine(range: string | null | undefined): string {
-  return /^\s*>=\s*(\d+\.\d+\.\d+)/.exec(range ?? '')?.[1] ?? '1.3.2';
+  return /^\s*>=\s*(\d+\.\d+\.\d+)/.exec(range ?? '')?.[1] ?? '1.4.0';
 }
 
 /** Splash: found and in the manager's supported range; newer minor = warning; older = blocking. */
@@ -236,7 +236,7 @@ export function presetPatch(preset: PresetOut): Record<string, unknown> {
 
 // ---------- step 4: recommendation rows ----------
 
-export type Fit = 'fits' | 'tight' | 'wont_fit';
+export type Fit = 'fits' | 'tight' | 'streams' | 'wont_fit';
 
 export interface ModelRow {
   model: string;

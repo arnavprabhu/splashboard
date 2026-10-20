@@ -2,7 +2,11 @@
 
 Splash serves only `OWNER/REPO[:VARIANT]` Hub IDs (`install/models.py`), so a
 `.gguf` placed at the root of the models directory is registered as a synthetic
-Hub-cache repo, `local/<file stem>-GGUF`, whose snapshot symlinks the file. Its
+Hub-cache repo, `local/<file stem>-GGUF`, whose snapshot symlinks the file. A split
+GGUF (`MODEL-Q2_0-00001-of-00002.gguf` ...) is one model once every part is there:
+its parts are linked into a folder named after its variant, as Hub repositories
+publish them, and it is registered as `local/<model>-GGUF:<variant>`, which Splash
+installs from that folder (`install/upstream.py` `split_gguf`). Its
 family (and so its DFlash2 draft) comes from the file's own header through Splash's
 reader and matcher (`helpers/classify_gguf.py`), the draft is fetched into the Hub
 cache once (Splash resolves a draft online only when the Hub answered for the
@@ -22,13 +26,14 @@ import re
 import shutil
 import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..hubcache import repo_folder
 from ..paths import splash_models_dir, write_atomic
 from ..schemas import ModelsChangedEvent
+from .catalog import NO_DRAFT, SPLIT_NAME, split_complete
 from .layout import read_all
 
 if TYPE_CHECKING:
@@ -41,6 +46,8 @@ POLL_S = 5.0
 RETRY_NETWORK_S = 600.0
 IGNORED_FILE = ".local-ignored.json"
 SLUG = re.compile(r"[^A-Za-z0-9._-]+")
+# Splash's :VARIANT (install/models.py `VARIANT`).
+VARIANT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 
 
 class DraftOffline(RuntimeError):
@@ -67,9 +74,24 @@ def is_projector(path: Path) -> bool:
     return "mmproj" in path.name.lower()
 
 
+def projector_base(path: Path) -> str:
+    """The model a projector named `mmproj-MODEL-BF16.gguf` belongs to; "" otherwise."""
+    stem = re.sub(r"^mmproj[-_.]", "", path.stem, flags=re.IGNORECASE)
+    if stem == path.stem:
+        return ""
+    return re.sub(r"[-_.](?:BF16|F16|F32)$", "", stem, flags=re.IGNORECASE)
+
+
 def revision_for(path: Path, size: int, mtime_ns: int) -> str:
     """A 40-hex commit for the file's content identity, so Splash never asks the Hub."""
     return hashlib.sha1(f"{path.name}\0{size}\0{mtime_ns}".encode()).hexdigest()  # noqa: S324
+
+
+def split_variant(model: str) -> str:
+    """The :VARIANT a split GGUF named `model` is registered under: its last word
+    (`Qwen3.8-Flash-Next-Q2_0` → `Q2_0`), else `split`."""
+    word = model.rsplit("-", 1)[-1]
+    return word if VARIANT.fullmatch(word) else "split"
 
 
 @dataclass
@@ -77,10 +99,52 @@ class Candidate:
     path: Path
     size: int
     mtime_ns: int
+    # Every part of a split GGUF, in split order, `path` being the first; empty for
+    # one file. `size` is then the parts' total and `mtime_ns` the latest.
+    parts: list[Candidate] = field(default_factory=list)
 
     @property
     def key(self) -> str:
+        if self.parts:
+            return "+".join(part.key for part in self.parts)
         return f"{self.path.name}:{self.size}:{self.mtime_ns}"
+
+    @property
+    def keys(self) -> list[str]:
+        """The key of each file: what a tombstone records."""
+        return [part.key for part in self.parts] or [self.key]
+
+    @property
+    def stem(self) -> str:
+        """The model's name: the file's stem, or a split GGUF's name without its part."""
+        return SPLIT_NAME.sub("", self.path.name) if self.parts else self.path.stem
+
+    @property
+    def repo_id(self) -> str:
+        return repo_id_for(Path(self.stem + ".gguf")) if self.parts else repo_id_for(self.path)
+
+    @property
+    def model(self) -> str:
+        """The model ID it is registered under."""
+        return f"{self.repo_id}:{split_variant(self.stem)}" if self.parts else self.repo_id
+
+    @property
+    def revision(self) -> str:
+        if not self.parts:
+            return revision_for(self.path, self.size, self.mtime_ns)
+        return hashlib.sha1("\0".join(self.keys).encode()).hexdigest()  # noqa: S324
+
+    def links(self) -> dict[str, Path]:
+        """Snapshot path -> file: the file at the root, or each part in the folder
+        named after the split GGUF's variant."""
+        if not self.parts:
+            return {self.path.name: self.path}
+        folder = split_variant(self.stem)
+        return {f"{folder}/{part.path.name}": part.path for part in self.parts}
+
+    @property
+    def complete(self) -> bool:
+        return not self.parts or split_complete([part.path.name for part in self.parts])
 
 
 class LocalModels:
@@ -151,7 +215,7 @@ class LocalModels:
             return []
         repo = repo_folder(self.state.settings.models_dir(), model.split(":")[0])
         found: list[Path] = []
-        for link in sorted(repo.glob("snapshots/*/*.gguf")):
+        for link in sorted(repo.glob("snapshots/*/**/*.gguf")):
             if is_projector(link):
                 continue
             with contextlib.suppress(OSError):
@@ -197,37 +261,61 @@ class LocalModels:
     # --- scanning --------------------------------------------------------------------
 
     def candidates(self) -> list[Candidate]:
+        """The root's GGUF files, a split GGUF's parts as one candidate."""
         found: list[Candidate] = []
         try:
             entries = sorted(self.state.settings.models_dir().iterdir())
         except OSError:
             return found
+        splits: dict[str, list[Candidate]] = {}
         for entry in entries:
             if entry.suffix != ".gguf" or entry.name.startswith(".") or entry.is_symlink():
                 continue
             with contextlib.suppress(OSError):
                 if entry.is_file():
                     info = entry.stat()
-                    found.append(Candidate(entry, info.st_size, info.st_mtime_ns))
-        return found
+                    item = Candidate(entry, info.st_size, info.st_mtime_ns)
+                    if SPLIT_NAME.search(entry.name) and not is_projector(entry):
+                        splits.setdefault(SPLIT_NAME.sub("", entry.name), []).append(item)
+                    else:
+                        found.append(item)
+        for parts in splits.values():
+            first = parts[0]
+            found.append(
+                Candidate(
+                    first.path,
+                    sum(part.size for part in parts),
+                    max(part.mtime_ns for part in parts),
+                    parts,
+                )
+            )
+        return sorted(found, key=lambda item: item.path.name)
 
-    def registered(self, repo_id: str, revision: str, path: Path | None = None) -> bool:
-        """Registered at this revision, with its link intact and its settings saved."""
-        folder = repo_folder(self.state.settings.models_dir(), repo_id)
+    def registered(self, model: str, revision: str, path: Path | Candidate | None = None) -> bool:
+        """Registered at this revision, with its links intact and its settings saved.
+        `path` is the file, or the candidate whose files each link names."""
+        folder = repo_folder(self.state.settings.models_dir(), model.split(":")[0])
+        links = (
+            path.links()
+            if isinstance(path, Candidate)
+            else {path.name: path}
+            if path is not None
+            else {}
+        )
         try:
             if (folder / "refs" / "main").read_text().strip() != revision:
                 return False
-            if path is not None:
-                link = folder / "snapshots" / revision / path.name
-                if link.resolve(strict=True) != path.resolve(strict=True):
+            for name, file in links.items():
+                link = folder / "snapshots" / revision / name
+                if link.resolve(strict=True) != file.resolve(strict=True):
                     return False
         except OSError:
             return False
-        if not any(s.model == repo_id for s in read_all(splash_models_dir())):
+        if not any(s.model == model for s in read_all(splash_models_dir())):
             return False
         if path is None:
             return True
-        entry = self.state.settings.current.models.get(repo_id)
+        entry = self.state.settings.current.models.get(model)
         return entry is not None and entry.serve.revision == revision
 
     async def scan(self, *, restore_ignored: bool = False, retry: bool = False) -> list[str]:
@@ -245,17 +333,17 @@ class LocalModels:
             self.waiting = {k: v for k, v in self.waiting.items() if k in self.sizes}
             for item in seen:
                 settled = item.key in self.stable
-                if item.key in ignored or not settled:
+                if all(key in ignored for key in item.keys) or not settled:
                     continue
                 if not retry and self.failed.get(item.key, 0) > time.monotonic():
                     continue
                 if is_projector(item.path):
                     continue  # paired with its model, never a model itself
-                if self.registered(
-                    repo_id_for(item.path),
-                    revision_for(item.path, item.size, item.mtime_ns),
-                    item.path,
-                ):
+                if not item.complete:
+                    # A split GGUF waits for the rest of its parts.
+                    self.last[item.path.name] = {"waiting": "parts"}
+                    continue
+                if self.registered(item.model, item.revision, item):
                     continue
                 fresh.append(item)
             if not fresh:
@@ -331,9 +419,11 @@ class LocalModels:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+        # A split GGUF's parts go as one entry, its verdict keyed by the first part.
+        paths = [[str(p.path) for p in i.parts] if i.parts else str(i.path) for i in items]
         try:
             out, err = await asyncio.wait_for(
-                proc.communicate(json.dumps({"paths": [str(i.path) for i in items]}).encode()), 60
+                proc.communicate(json.dumps({"paths": paths}).encode()), 60
             )
         except BaseException:
             proc.kill()
@@ -347,9 +437,15 @@ class LocalModels:
     # --- registering -----------------------------------------------------------------
 
     def projector_for(self, item: Candidate, others: list[Candidate]) -> Path | None:
-        """A loose `*mmproj*.gguf` next to the model: named after it, or the only one."""
+        """A loose `*mmproj*.gguf` next to the model: named after it (`MODEL-mmproj-F16`,
+        or `mmproj-BASE-BF16` for a model named `BASE-...`), or the only one."""
         projectors = [p for p in self._all_ggufs() if is_projector(p) and self._settled(p)]
-        named = [p for p in projectors if p.name.startswith(item.path.stem)]
+        named = [
+            p
+            for p in projectors
+            if p.name.startswith(item.stem)
+            or ((base := projector_base(p)) and item.stem.lower().startswith(base.lower() + "-"))
+        ]
         if named:
             return named[0]
         return projectors[0] if len(projectors) == 1 and len(others) == 1 else None
@@ -370,39 +466,44 @@ class LocalModels:
     ) -> str | None:
         """Register the file; None when its draft is not there yet (the file waits)."""
         models_dir = self.state.settings.models_dir()
-        repo_id = repo_id_for(item.path)
-        revision = revision_for(item.path, item.size, item.mtime_ns)
+        model = item.model
+        revision = item.revision
         draft_repo = verdict["draft_repo"]
+        if not draft_repo:
+            raise RuntimeError(NO_DRAFT)
         # The draft first: offline or on a bad network a replacement must fail before the
         # model's earlier registration is touched.
         if not await self._ensure_draft(draft_repo, force=force):
             return None
-        if self.state.active_model() == repo_id:
+        if self.state.active_model() == model:
             raise RuntimeError("this model is running and its file changed; stop it, then rescan")
         async with self.state.supervisor.hold("local_model"):
             # A changed file under the same name replaces its earlier registration. The draft
             # stays through the drop, so it is still there for the new registration.
-            if any(s.model == repo_id for s in read_all(splash_models_dir())):
-                await self.models.drop_selection(repo_id, keep_draft=True)
+            if any(s.model == model for s in read_all(splash_models_dir())):
+                await self.models.drop_selection(model, keep_draft=True)
                 if not await self._ensure_draft(draft_repo, force=force):
                     return None
-            repo = repo_folder(models_dir, repo_id)
+            repo = repo_folder(models_dir, item.repo_id)
             shutil.rmtree(repo / "snapshots", ignore_errors=True)
             snapshot = repo / "snapshots" / revision
             snapshot.mkdir(parents=True, exist_ok=True)
-            # Relative links survive a move of the models folder, like Hub-cache links.
-            (snapshot / item.path.name).symlink_to(os.path.relpath(item.path, snapshot))
+            for name, file in item.links().items():
+                link = snapshot / name
+                link.parent.mkdir(parents=True, exist_ok=True)
+                # Relative links survive a move of the models folder, like Hub-cache links.
+                link.symlink_to(os.path.relpath(file, link.parent))
             models_only = [c for c in self.candidates() if not is_projector(c.path)]
             projector = self.projector_for(item, models_only)
             if projector:
                 (snapshot / projector.name).symlink_to(os.path.relpath(projector, snapshot))
-            return await self._finish(item, verdict, repo_id, revision, repo, snapshot, projector)
+            return await self._finish(item, verdict, model, revision, repo, snapshot, projector)
 
     async def _finish(
         self,
         item: Candidate,
         verdict: dict[str, Any],
-        repo_id: str,
+        model: str,
         revision: str,
         repo: Path,
         snapshot: Path,
@@ -411,19 +512,19 @@ class LocalModels:
         (repo / "refs").mkdir(parents=True, exist_ok=True)
         write_atomic(repo / "refs" / "main", revision.encode())
         language_only = projector is None
-        if projector and not await self._prepare(repo_id, revision, language_only=False):
+        if projector and not await self._prepare(model, revision, language_only=False):
             language_only = True
             (snapshot / projector.name).unlink()
         if language_only:
-            await self._prepare(repo_id, revision, language_only=True, must=True)
-        self._remember_settings(repo_id, revision, language_only)
+            await self._prepare(model, revision, language_only=True, must=True)
+        self._remember_settings(model, revision, language_only)
         self.last[item.path.name] = {
-            "model": repo_id,
+            "model": model,
             "family": verdict["family"],
             "draft": verdict["draft_repo"],
             "language_only": language_only,
         }
-        return repo_id
+        return model
 
     @staticmethod
     def _draft_complete(folder: Path) -> bool:
@@ -465,17 +566,17 @@ class LocalModels:
         return False
 
     async def _prepare(
-        self, repo_id: str, revision: str, *, language_only: bool, must: bool = False
+        self, model: str, revision: str, *, language_only: bool, must: bool = False
     ) -> bool:
-        # Splash hashes the file more than once; allow for ~30 MB/s over three reads.
-        snapshot = repo_folder(self.state.settings.models_dir(), repo_id) / "snapshots" / revision
+        # Splash hashes the files more than once; allow for ~30 MB/s over three reads.
+        folder = repo_folder(self.state.settings.models_dir(), model.split(":")[0])
         size = 0
-        for gguf in snapshot.glob("*.gguf"):
+        for gguf in (folder / "snapshots" / revision).glob("**/*.gguf"):
             with contextlib.suppress(OSError):
-                size = max(size, gguf.resolve().stat().st_size)
+                size += gguf.resolve().stat().st_size
         timeout = max(300.0, size * 3 / 30e6)
         argv, env = self.models.installer(
-            repo_id, "prepare", revision=revision, language_only=language_only
+            model, "prepare", revision=revision, language_only=language_only
         )
         env["HF_HUB_OFFLINE"] = "1"
         proc = await asyncio.create_subprocess_exec(
@@ -492,11 +593,11 @@ class LocalModels:
             raise RuntimeError(lines[-1] if lines else "Splash could not install this file")
         return not proc.returncode
 
-    def _remember_settings(self, repo_id: str, revision: str, language_only: bool) -> None:
+    def _remember_settings(self, model: str, revision: str, language_only: bool) -> None:
         from ..settings.api import save_settings
 
         doc = self.state.settings.current.model_dump(mode="json", by_alias=True)
-        entry = doc["models"].setdefault(repo_id, {})
+        entry = doc["models"].setdefault(model, {})
         serve = entry.setdefault("serve", {})
         serve["revision"] = revision
         serve["language_only"] = language_only

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import shutil
 import socket
@@ -17,13 +18,29 @@ from fastapi.testclient import TestClient
 
 from splash_gui import paths as paths_module
 from splash_gui.app import AppConfig, create_app
-from splash_gui.engine.discovery import EngineInfo
+from splash_gui.engine.discovery import SUPPORTED_BELOW, SUPPORTED_MIN, EngineInfo
 from splash_gui.paths import Paths
 from splash_gui.secrets import MemoryBackend, SecretStore
 
 SPLASH_PKG = Path("/opt/homebrew/opt/splash/libexec")
 SPLASH_PYTHON = SPLASH_PKG / "python" / "bin" / "python3"
-HAVE_SPLASH = SPLASH_PYTHON.exists() and (SPLASH_PKG / "server" / "serve_options.py").exists()
+
+
+def _homebrew_splash_supported() -> bool:
+    """Homebrew Splash is installed and its version is one this checkout supports. The
+    parity and real-engine tests compare against it, so an older or newer engine
+    skips them rather than failing on a difference the GUI doesn't claim to match."""
+    if not (SPLASH_PYTHON.exists() and (SPLASH_PKG / "server" / "serve_options.py").exists()):
+        return False
+    try:
+        version = json.loads((SPLASH_PKG / "release.json").read_text())["version"]
+        parts = tuple(int(part) for part in str(version).split(".")[:3])
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    return SUPPORTED_MIN <= parts < SUPPORTED_BELOW
+
+
+HAVE_SPLASH = _homebrew_splash_supported()
 
 REPO = Path(__file__).resolve().parents[2]
 FAKE_SPLASH = REPO / "scripts" / "fake_splash"
@@ -142,8 +159,8 @@ def fake_engine() -> EngineInfo:
         found=True,
         cli=Path("/opt/homebrew/opt/splash/bin/splash"),
         source="brew",
-        version="1.3.2",
-        version_tuple=(1, 3, 2),
+        version="1.4.0",
+        version_tuple=(1, 4, 0),
         support="supported",
         pkg=Path("/nonexistent/pkg"),
         python=None,

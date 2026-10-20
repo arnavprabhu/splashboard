@@ -51,6 +51,8 @@ def test_defaults_match_spec() -> None:
     assert (s.request_timeout, s.queue_size, s.default_reasoning_effort) == (None, 32, None)
     assert (s.state_format, s.max_cache_disk_writes) == ("fp32", "0")
     assert (s.thinking_token_budget, s.thinking_end_text) == (None, None)
+    assert (s.expert_memory, s.ple_memory, s.sparse_kv_memory) == ("auto", "auto", "auto")
+    assert s.verify_rows == "auto"
     assert g.hf.offline is False and g.hf.endpoint is None
     r = g.routing
     assert (r.auto_load, r.switch_when_busy, r.default_model) == (True, "reject", None)
@@ -152,9 +154,13 @@ def test_spec_example_document_is_valid() -> None:
 @pytest.mark.parametrize(
     ("path", "value", "message"),
     [
-        ("serve.max_context", "300K", "must be 'auto' or a token count up to 256K, such as 100K"),
-        ("serve.max_context", "0", "must be 'auto' or a token count up to 256K, such as 100K"),
+        ("serve.max_context", "987K", "must be 'auto' or a token count up to 1010000"),
+        ("serve.max_context", "0", "must be 'auto' or a token count up to 1010000"),
         ("serve.max_memory", "lots", "must be 'auto' or a positive byte count such as 32G"),
+        ("serve.expert_memory", "0", "use auto, off, or a size such as 16G"),
+        ("serve.ple_memory", "lots", "use auto, off, or a size such as 2G"),
+        ("serve.sparse_kv_memory", "off", "use auto, or a size such as 1200M"),
+        ("serve.verify_rows", "some", "Input should be 'auto' or 'all'"),
         ("serve.max_cache_disk", "lots", "use auto, 0 to disable, or a size such as 16G"),
         ("serve.max_request_size", "0", "must be a positive byte count such as 128M"),
         ("serve.decode_share", -0.5, "must be a nonnegative number such as 0.5"),
@@ -202,6 +208,15 @@ def test_field_errors(path: str, value: Any, message: str) -> None:
         ("serve.thinking_token_budget", 12000),
         ("serve.thinking_end_text", "\n\nAnswer now.\n</think>"),
         ("serve.thinking_end_text", ""),
+        ("serve.max_context", "1M"),
+        ("serve.max_context", "1010000"),
+        ("serve.max_memory", "27.5G"),
+        ("serve.expert_memory", "16G"),
+        ("serve.expert_memory", "off"),
+        ("serve.ple_memory", "OFF"),
+        ("serve.ple_memory", "2.5G"),
+        ("serve.sparse_kv_memory", "1200M"),
+        ("serve.verify_rows", "all"),
         ("server.allowed_origins", ["*", "tauri://localhost"]),
         ("server.allowed_hosts", ["mymac.local"]),
         ("server.host", "0.0.0.0"),  # noqa: S104 (valid once a key exists, see below)
@@ -297,6 +312,71 @@ def test_bf16_states_warn() -> None:
     assert [w.code for w in result.warnings if w.key == "serve.state_format"] == ["tradeoff"]
     model = validate_document(doc_with("serve.state_format", "bf16", model=MLX))
     assert any(w.model == MLX and w.key == "serve.state_format" for w in model.warnings)
+
+
+def test_a_context_past_the_native_window_warns_of_yarn() -> None:
+    """Past 256K Splash turns on YaRN, which changes every answer; the setting saves
+    with a warning, globally and on a model."""
+    for value in ("256K", "262144", "auto"):
+        assert not validate_document(doc_with("serve.max_context", value)).warnings
+    result = validate_document(doc_with("serve.max_context", "1M"))
+    assert result.ok
+    (warning,) = result.warnings
+    assert (warning.key, warning.code) == ("serve.max_context", "yarn")
+    assert "YaRN" in warning.message and "Qwen3.8-Flash-Next" in warning.message
+    model = validate_document(doc_with("serve.max_context", "512K", model=MLX))
+    assert [(w.model, w.key, w.code) for w in model.warnings] == [
+        (MLX, "serve.max_context", "yarn")
+    ]
+
+
+def test_sparse_kv_memory_without_the_ssd_cache_warns() -> None:
+    """Splash ignores --sparse-kv-memory with the SSD cache off: no KV spills."""
+    raw = doc_with("serve.sparse_kv_memory", "1200M")
+    assert validate_document(raw).warnings == []
+    raw["global"]["serve"]["max_cache_disk"] = "0"
+    result = validate_document(raw)
+    assert result.ok
+    assert [(w.key, w.code) for w in result.warnings] == [("serve.sparse_kv_memory", "ignored")]
+    per_model = doc_with("serve.sparse_kv_memory", "2G", model=MLX)
+    per_model["global"]["serve"]["max_cache_disk"] = "0"
+    assert [(w.model, w.code) for w in validate_document(per_model).warnings] == [(MLX, "ignored")]
+
+
+def test_the_new_engine_options_cannot_be_extra_flags() -> None:
+    for flag in ("--expert-memory", "--ple-memory", "--sparse-kv-memory", "--verify-rows"):
+        assert errors(doc_with("engine.extra_flags", [{"flag": flag, "value": "auto"}])) == [
+            ("engine.extra_flags.0.flag", f"{flag} is set through its own setting")
+        ]
+    assert errors(doc_with("engine.extra_flags", [{"flag": "--verify", "value": "all"}])) == [
+        (
+            "engine.extra_flags.0.flag",
+            "--verify abbreviates --verify-rows, which is set through its own setting",
+        )
+    ]
+
+
+def test_new_engine_options_are_global_and_per_model() -> None:
+    from splash_gui.settings.effective import effective_serve
+
+    raw = doc_with("serve.expert_memory", "16G")
+    raw["global"]["serve"]["verify_rows"] = "all"
+    raw["models"][MLX] = {
+        "serve": {"expert_memory": "off", "ple_memory": "2G", "sparse_kv_memory": "1G"},
+        "sampling_defaults": {},
+        "profiles": {},
+    }
+    result = validate_document(raw)
+    assert result.ok and result.document is not None
+    serve = effective_serve(result.document, MLX)
+    assert (serve.expert_memory, serve.ple_memory, serve.sparse_kv_memory) == ("off", "2G", "1G")
+    assert serve.verify_rows == "all"
+    other = effective_serve(result.document, "unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M")
+    assert (other.expert_memory, other.ple_memory, other.verify_rows) == ("16G", "auto", "all")
+    for key in ("serve.expert_memory", "serve.ple_memory", "serve.sparse_kv_memory"):
+        assert FIELDS_BY_KEY[key].scope == "GM" and FIELDS_BY_KEY[key].advanced
+    assert FIELDS_BY_KEY["serve.verify_rows"].choices == ("auto", "all")
+    assert FIELDS_BY_KEY["serve.max_context"].max == 1010000
 
 
 def test_auto_disk_tier_does_not_warn() -> None:
@@ -572,6 +652,10 @@ def test_every_appendix_a_flag_has_metadata() -> None:
         "--request-timeout",
         "--queue-size",
         "--api-key",
+        "--expert-memory",
+        "--ple-memory",
+        "--sparse-kv-memory",
+        "--verify-rows",
     ):
         assert flag in flags, flag
     envs = {f.env for f in FIELDS if f.env}

@@ -115,6 +115,14 @@ def serve_flags(
         argv += ["--state-format", serve.state_format]
     if p.parse_max_memory(serve.max_memory) is not None:
         argv += ["--max-memory", serve.max_memory.strip()]
+    # The streamed stores: auto, Splash's default, passes nothing; off and a size do.
+    for flag, text, parse in (
+        ("--expert-memory", serve.expert_memory, p.parse_expert_memory),
+        ("--ple-memory", serve.ple_memory, p.parse_ple_memory),
+        ("--sparse-kv-memory", serve.sparse_kv_memory, p.parse_sparse_kv_memory),
+    ):
+        if (store := parse(text)) is not None:
+            argv += [flag, store if isinstance(store, str) else text.strip()]
     # Auto is Splash's default; 0 (off) and a size are passed.
     if cache_disk is not None:
         argv += ["--max-cache-disk", serve.max_cache_disk.strip()]
@@ -138,6 +146,8 @@ def serve_flags(
         argv += ["--idle-release", serve.idle_release.strip()]
     if serve.disable_ane:
         argv.append("--disable-ane")
+    if p.parse_verify_rows(serve.verify_rows) != "auto":
+        argv += ["--verify-rows", serve.verify_rows]
     if serve.allow_idle_sleep:
         argv.append("--allow-idle-sleep")
     for extra in extra_flags:

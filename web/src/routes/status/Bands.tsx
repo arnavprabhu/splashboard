@@ -1,8 +1,9 @@
 /**
- * The lower Status bands: Active requests, Memory, Neural Engine, Cache, Scheduler & admission,
- * Latency and Claude Code. Field names are Splash's `/status` schema 6 (runtime/engine/Status.cpp,
- * server/latency.py; `weights` since 1.2.1, `ane_ffn` since 1.3.0, `active_requests` and the SSD
- * cache's live limit and write gate since 1.3.2). Loaded lazily: they sit below the fold.
+ * The lower Status bands: Active requests, Memory, SSD streaming, Neural Engine, Cache, Scheduler &
+ * admission, Latency and Claude Code. Field names are Splash's `/status` schema 6
+ * (runtime/engine/Status.cpp, server/latency.py; `weights` since 1.2.1, `ane_ffn` since 1.3.0,
+ * `active_requests` and the SSD cache's live limit and write gate since 1.3.2, the streamed
+ * stores, `kv_spill` and `kv_mode` since 1.4.0). Loaded lazily: they sit below the fold.
  */
 import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useState } from 'preact/hooks';
@@ -32,13 +33,17 @@ import {
   claudeEnv,
   diskEnabled,
   diskWrites,
+  kvModeOf,
   launchCommand,
   promptProgress,
   rawGet,
   rawNum,
+  showsKvMode,
+  spillTarget,
   stageBuckets,
   stageMeanMs,
   stagePercentileMs,
+  streamingOf,
   viewOf,
   type Stage,
 } from './logic';
@@ -137,6 +142,19 @@ export function ActiveRequestsBand({ raw, stopped }: BandsProps) {
             render: (r) =>
               r.max_new_tokens ? t('bands.active.output_v', { g: formatCount(r.generated_tokens), m: formatCount(r.max_new_tokens) }) : formatCount(r.generated_tokens),
           },
+          // Only a target whose KV can spill to the SSD cache says where each request's KV is.
+          ...(showsKvMode(rows)
+            ? [
+                {
+                  key: 'kv',
+                  label: t('bands.active.kv'),
+                  render: (r: (typeof rows)[number]) => {
+                    const mode = kvModeOf(r);
+                    return mode ? t(`bands.active.kv.${mode}`) : DASH;
+                  },
+                },
+              ]
+            : []),
           { key: 'age', label: t('bands.active.age'), align: 'right', render: (r) => (r.age_ms == null ? DASH : formatMs(r.age_ms)) },
         ]}
       />
@@ -292,6 +310,96 @@ export function MemoryBand({ raw, stopped }: BandsProps) {
   );
 }
 
+// ---------- SSD streaming (Splash 1.4.0) ----------
+
+const rate = (v: number | null) => (v === null ? DASH : formatPercent(v));
+
+/** What streams from the SSD: routed experts, Flash-Next's PLE table and long requests' KV.
+ * Hidden unless something streams; the accent marks only a failure. */
+export function StreamingBand({ raw, stopped }: BandsProps) {
+  const streaming = stopped ? null : streamingOf(raw);
+  if (!streaming) return null;
+  const { experts, table, spill } = streaming;
+  const items: KeyValueItem[] = [];
+  if (experts) {
+    const failure = rawGet(experts, 'failure');
+    items.push({
+      key: 'experts',
+      label: t('bands.stream.experts'),
+      value:
+        typeof failure === 'string' && failure
+          ? t('bands.stream.failed', { reason: failure })
+          : t('bands.stream.experts_v', {
+              r: count(rawNum(experts, 'resident')),
+              s: count(rawNum(experts, 'slots')),
+              e: count(rawNum(experts, 'experts')),
+            }),
+      accent: typeof failure === 'string' && failure !== '',
+      meta: t('bands.stream.experts_meta', {
+        h: rate(rawNum(experts, 'decode.hit_rate')),
+        b: bytes((rawNum(experts, 'prefill.read_bytes') ?? 0) + (rawNum(experts, 'decode.read_bytes') ?? 0)),
+        a: bytes(rawNum(experts, 'arena_bytes')),
+      }),
+    });
+  }
+  if (table) {
+    const poisoned = rawGet(table, 'poisoned') === true;
+    const errors = rawNum(table, 'read_errors');
+    items.push({
+      key: 'table',
+      label: t('bands.stream.table'),
+      value: poisoned
+        ? t('bands.stream.failed', { reason: String(rawGet(table, 'failure') || t('bands.stream.table_poisoned')) })
+        : t('bands.stream.table_v', { c: bytes(rawNum(table, 'cache_bytes')), t: bytes(rawNum(table, 'table_bytes')) }),
+      accent: poisoned,
+      meta: t('bands.stream.table_meta', { h: rate(rawNum(table, 'decode.hit_rate')), b: bytes(rawNum(table, 'read_bytes')), e: count(errors) }),
+    });
+  }
+  if (spill) {
+    const writeFailures = rawNum(spill, 'write_through.failures') ?? 0;
+    const readFailures = rawNum(spill, 'block_cache.read_failures') ?? 0;
+    const lines: ComponentChildren[] = [
+      t('bands.stream.kv_requests', { s: count(rawNum(spill, 'requests.spill')), r: count(rawNum(spill, 'requests.resident')) }),
+      t('bands.stream.kv_quota', {
+        b: bytes(rawNum(spill, 'pages.spilled_bytes')),
+        h: bytes(rawNum(spill, 'quota.held_bytes')),
+        l: bytes(rawNum(spill, 'quota.active_limit_bytes')),
+      }),
+      rawGet(spill, 'block_cache') === null ? null : t('bands.stream.kv_hits', { h: rate(rawNum(spill, 'block_cache.hit_rate')), b: bytes(rawNum(spill, 'block_cache.bytes')) }),
+      t('bands.stream.kv_refused', {
+        q: count(rawNum(spill, 'requests.refused.quota')),
+        w: count(rawNum(spill, 'requests.refused.write_budget')),
+        c: count(rawNum(spill, 'requests.refused.closed')),
+        b: count(rawNum(spill, 'requests.bounded')),
+      }),
+    ];
+    items.push({
+      key: 'kv',
+      label: t('bands.stream.kv'),
+      value: (
+        <span class="band-lines">
+          {lines.filter(Boolean).map((l, i) => (
+            <span key={i}>{l}</span>
+          ))}
+          {writeFailures + readFailures > 0 && (
+            <span class="acc" data-accent="true" data-testid="spill-failures">
+              {t('bands.stream.kv_failures', { w: count(writeFailures), r: count(readFailures) })}
+            </span>
+          )}
+        </span>
+      ),
+    });
+  }
+  return (
+    <Section label={t('bands.stream.label')} id="ssd-streaming">
+      <div class="stack">
+        <KeyValue items={items} label={t('bands.stream.label')} />
+        <p class="meta">{t('bands.stream.explainer')}</p>
+      </div>
+    </Section>
+  );
+}
+
 // ---------- Neural Engine (Splash 1.3.0 `ane_ffn`) ----------
 
 /** The reason Splash gives when `--disable-ane` turned the split off (AneFfnStartup.cpp). */
@@ -432,6 +540,7 @@ export function CacheBand({ raw, stopped }: BandsProps) {
                     ) : (
                       t(`bands.cache.writes.${writes}`, { b: bytes(rawNum(raw, 'disk.write_budget_bytes')) })
                     )}
+                    {writes === 'budget_spent' && spillTarget(raw) && ` · ${t('bands.cache.writes.long_refused')}`}
                   </span>
                 )}
                 <span>{t('bands.cache.kv_blocks', { n: count(rawNum(raw, 'disk.kv_blocks')), b: bytes(rawNum(raw, 'disk.kv_bytes')) })}</span>
@@ -450,7 +559,10 @@ export function CacheBand({ raw, stopped }: BandsProps) {
                     o: count(rawNum(raw, 'state.offloads')),
                   })}
                 </span>
-                <span>{t('bands.cache.wear', { r: bytes(rawNum(raw, 'disk.read_bytes')), w: bytes(rawNum(raw, 'disk.written_bytes')) })}</span>
+                <span>
+                  {t('bands.cache.wear', { r: bytes(rawNum(raw, 'disk.read_bytes')), w: bytes(rawNum(raw, 'disk.written_bytes')) })}
+                  {(rawNum(raw, 'disk.writes_deferred_ms') ?? 0) > 0 && ` · ${t('bands.cache.deferred', { v: formatMs(rawNum(raw, 'disk.writes_deferred_ms')) })}`}
+                </span>
               </span>
             ) : (
               <span class="band-lines">
@@ -767,6 +879,7 @@ export default function LowerBands({ raw, stopped, models }: BandsProps & { mode
     <>
       <ActiveRequestsBand raw={raw} stopped={stopped} />
       <MemoryBand raw={raw} stopped={stopped} />
+      <StreamingBand raw={raw} stopped={stopped} />
       <NeuralEngineBand raw={raw} stopped={stopped} />
       <CacheBand raw={raw} stopped={stopped} />
       <SchedulerBand raw={raw} stopped={stopped} />

@@ -1,7 +1,7 @@
 """Engine output lines → structured events.
 
-Every pattern below is a line Splash 1.2.0 prints; the source is noted beside
-each. Matching is lenient (case-insensitive substrings where possible), the
+Every pattern below is a line Splash prints (1.4.0 unless noted); the source is
+noted beside each. Matching is lenient (case-insensitive substrings where possible), the
 `HH:MM:SS ` prefix Splash's `print_status` and `logStartup` add is optional, and
 the raw text is always kept by the caller. Lines the parser does not know
 produce no event.
@@ -30,6 +30,22 @@ _WEIGHTS_RESTORED = re.compile(r"Weights restored in ([\d.]+) s")
 _TAKEN_BACK = re.compile(
     r"took back (\d+) restore points over (\d+) KV blocks \((\d+) MiB\); left (\d+) copies behind"
 )
+# The streamed stores' settings the memory planner refuses before the weights load
+# (runtime/engine/MemoryPlan.cpp resolve and the hot block cache's floor,
+# RuntimeResources.mm "--ple-memory cannot stream the PLE table"), printed as
+# "runtime bootstrap failed [resource_assembly/configuration]: <option> …".
+_STORE_SETTINGS = {
+    "--expert-memory": ("serve.expert_memory", "Expert memory"),
+    "--ple-memory": ("serve.ple_memory", "PLE table memory"),
+    "--sparse-kv-memory": ("serve.sparse_kv_memory", "Sparse KV memory"),
+}
+_REFUSED_SETTING = re.compile(r"\]:\s*(--(?:expert|ple|sparse-kv)-memory)\b(.*)$")
+# Options a start had no use for (RuntimeResources.mm reportIgnoredSetting and the
+# KV spill's "--sparse-kv-memory ignored: …").
+_IGNORED_SETTING = re.compile(r"^--[a-z-]+ ignored: ")
+# server.py holds the model's assembly itself and stops on a ModelError
+# (install/assembly.py `hold`).
+_UNPREPARED = ("names no model splash prepared", "is not a model directory splash prepared")
 
 Phase = Literal["installing", "loading", "warming"]
 TemplateMode = Literal["native", "patched", "unsupported"]
@@ -40,6 +56,9 @@ NoticeKind = Literal[
     "new_commit_not_installed",
     "weights_restored",
     "schema_unrecognized",
+    "setting_ignored",
+    "yarn_on",
+    "persistent_cache_emptied",
     "other",
 ]
 
@@ -131,7 +150,12 @@ def template_mode(text: str) -> TemplateMode | None:
     return None
 
 
-def _suggestions_for_budget(context_cap: int | None) -> list[EngineSuggestion]:
+def _suggestions_for_budget(
+    context_cap: int | None, *, disk: bool = False
+) -> list[EngineSuggestion]:
+    """The fixes for a start the budget refused. Where the SSD cache's room bounds a
+    block-sparse model's context, more memory and less vision do not help: a larger
+    SSD cache (or more free disk space) does."""
     out = []
     if context_cap is not None:
         out.append(
@@ -149,6 +173,15 @@ def _suggestions_for_budget(context_cap: int | None) -> list[EngineSuggestion]:
                 patch={"serve.max_context": "64K"},
             )
         )
+    if disk:
+        out.append(
+            EngineSuggestion(
+                action="enable_ssd_cache",
+                label="Let the SSD cache follow the disk (auto)",
+                patch={"serve.max_cache_disk": "auto"},
+            )
+        )
+        return out
     out += [
         EngineSuggestion(
             action="language_only",
@@ -165,10 +198,34 @@ def _suggestions_for_budget(context_cap: int | None) -> list[EngineSuggestion]:
     return out
 
 
+def _store_setting_error(text: str) -> EngineError | None:
+    """A streamed store's size the engine refused at startup, as a settings error
+    whose fix puts the setting back to auto."""
+    refused = _REFUSED_SETTING.search(text)
+    if refused is None:
+        return None
+    key, label = _STORE_SETTINGS[refused.group(1)]
+    message = f"{refused.group(1)}{refused.group(2)}".strip()
+    return EngineError(
+        kind="other",
+        code="invalid_setting",
+        message=f"Settings · {label} ({key}): {message}",
+        raw=[text],
+        suggestions=[
+            EngineSuggestion(
+                action="reset_setting", label=f"Set {label} to auto", patch={key: "auto"}
+            ),
+            EngineSuggestion(action="open_logs", label="Open logs"),
+        ],
+    )
+
+
 def classify_error(text: str) -> EngineError | None:
     """An error line from the launcher, installer or server as an EngineError."""
     lowered = text.lower()
     message = re.sub(r"^(error:\s*|error · )", "", text, flags=re.IGNORECASE).strip()
+    if setting := _store_setting_error(text):
+        return setting
     if (
         "set hf_token or run 'hf auth login'" in lowered
         or "cannot access gated repo" in lowered
@@ -249,6 +306,21 @@ def classify_error(text: str) -> EngineError | None:
             raw=[text],
             suggestions=[EngineSuggestion(action="retry", label="Retry")],
         )
+    # server.py (1.4.0) holds the assembly before the engine starts.
+    if any(phrase in lowered for phrase in _UNPREPARED) or (
+        lowered.startswith("error · cannot hold ") and " in " in lowered
+    ):
+        return EngineError(
+            kind="other",
+            code="model_not_prepared",
+            message="Splash could not open the installed model; repair it on the Models page, "
+            "or check that Splash's models folder is writable",
+            raw=[text],
+            suggestions=[
+                EngineSuggestion(action="retry", label="Retry"),
+                EngineSuggestion(action="open_logs", label="Open logs"),
+            ],
+        )
     if "is not installed in" in lowered:
         return EngineError(kind="unknown_model", code="not_installed", message=message, raw=[text])
     if "neither this installation nor the hub cache records a commit" in lowered or (
@@ -275,11 +347,21 @@ class StartupParser:
     _budget: EngineError | None = None
     _budget_rows: list[MemoryBudgetRow] = field(default_factory=list)
     _context_cap: int | None = None
+    # The SSD cache's room, not memory, bounds the refused context.
+    _disk_bound: bool = False
+    # A streamed store's size was refused: the budget block the engine prints after
+    # it (the same message, then its breakdown) is that refusal, not another one.
+    _setting_refused: bool = False
 
     def feed(self, raw_line: str) -> list[Event]:
         line = strip_stamp(raw_line)
         if not line.strip():
             return self._end_budget()
+        if self._setting_refused and (
+            "memory budget validation failed" in line.lower()
+            or (_BUDGET_ROW.match(line) and not _STAMP.match(raw_line))
+        ):
+            return []
         if self._budget is not None:
             if line.startswith("memory_plan_json:"):
                 self._attach_plan(line)
@@ -315,10 +397,11 @@ class StartupParser:
         error = self._budget.model_copy(
             update={
                 "budget": list(self._budget_rows),
-                "suggestions": _suggestions_for_budget(self._context_cap),
+                "suggestions": _suggestions_for_budget(self._context_cap, disk=self._disk_bound),
             }
         )
         self._budget, self._budget_rows, self._context_cap = None, [], None
+        self._disk_bound = False
         return [ErrorEvent(error)]
 
     def _attach_plan(self, line: str) -> None:
@@ -344,15 +427,32 @@ class StartupParser:
 
     def _line(self, line: str) -> list[Event]:
         lowered = line.lower()
-        # Memory budget refusal (RuntimeResources.mm / Bootstrap.mm via main.mm).
+        # A streamed store's size refused, before the weights load or by the plan made
+        # with them: a setting, not the budget, so it is told apart from the memory
+        # refusals below.
+        if "runtime bootstrap failed" in lowered and (setting := _store_setting_error(line)):
+            self._setting_refused = True
+            if self._budget is not None:
+                return [*self._end_budget(), ErrorEvent(setting)]
+            return [ErrorEvent(setting)]
+        # Memory budget refusal (RuntimeResources.mm / Bootstrap.mm:286-299 via main.mm).
         exceeds = _MAX_CONTEXT_EXCEEDS.search(line)
         if exceeds:
             cap = int(exceeds.group(3))
+            # A block-sparse model's context follows the SSD cache's room for its KV.
+            disk = "the ssd cache's room" in lowered
+            bound = (
+                "the SSD cache's room for its KV allows; free disk space or let the SSD cache grow"
+                if disk
+                else "the memory ceiling allows"
+                if "--max-memory allow" in lowered
+                else "this Mac's memory allows"
+            )
+            self._disk_bound = disk
             return self._start_budget(
                 line,
                 "max_context_exceeds",
-                f"--max-context {int(exceeds.group(1)):,} is more than the {cap:,} tokens "
-                "this Mac's memory allows",
+                f"--max-context {int(exceeds.group(1)):,} is more than the {cap:,} tokens {bound}",
                 cap,
             )
         if "memory budget validation failed" in lowered or (
@@ -364,7 +464,8 @@ class StartupParser:
                 "The model does not fit in memory with these settings",
                 None,
             )
-        # Ready · <model> · context 256K[ · language only] · http://… (server.py:2023)
+        # Ready · <model> · context 256K[ · language only] · http://… (server.py:1831); a
+        # context that is no whole K, past 256K with YaRN too, reads "context 1,000,000".
         if line.startswith("Ready · "):
             parts = line.split(" · ")
             match = _CONTEXT.search(line)
@@ -376,14 +477,16 @@ class StartupParser:
                     language_only="language only" in lowered,
                 ),
             ]
-        if line.startswith("Loading · "):  # server.py:1962
+        if line.startswith("Loading · "):  # server.py:1762
             return [PhaseEvent("loading")]
-        if line.startswith("Chat template · "):  # server.py:1968
+        if line.startswith("Chat template · "):  # server.py:1773
             mode = template_mode(line)
             return [TemplateEvent(mode)] if mode else []
         # The weights are in; startup warmup follows, silent until "Ready" (a large
-        # MoE model at a long context can take a minute or more).
-        if _WEIGHTS_LOADED.search(line):  # RuntimeResources.mm:394
+        # MoE model at a long context can take a minute or more). A start whose
+        # streamed stores change after the first plan loads them again ("Weights
+        # loaded again in"), still within warming.
+        if _WEIGHTS_LOADED.search(line):  # RuntimeResources.mm:856
             return [PhaseEvent("warming")]
         # NativeRuntime.cpp:133 (idle release) and :373 (POST /v1/memory/release).
         if line.startswith(("Weights released after", "Weights released on request")):
@@ -392,7 +495,7 @@ class StartupParser:
         if restored:  # NativeRuntime.cpp:143
             return [WeightsEvent("restored", float(restored.group(1)))]
         taken = _TAKEN_BACK.search(line)
-        if taken:  # RuntimeResources.mm:564
+        if taken:  # RuntimeResources.mm:1179
             return [TakenBackEvent(*(int(g) for g in taken.groups()))]
         # Why the SSD cache, or only its persistence, is off this start
         # (RuntimeResources.mm "SSD cache off: <reason>; …", "Persistent cache off: …").
@@ -400,7 +503,16 @@ class StartupParser:
             return [NoticeEvent("disk_cache_off", line)]
         if line.startswith("Persistent cache off: "):
             return [NoticeEvent("persistent_cache_off", line)]
-        if line.startswith("Could not reach the Hub"):  # upstream.py:148/330
+        # RuntimeResources.mm:1167: the cache starts cold (the reason text varies).
+        if line.startswith("Persistent cache emptied: "):
+            return [NoticeEvent("persistent_cache_emptied", line)]
+        # RuntimeResources.mm reportIgnoredSetting and the spill's ignored options.
+        if _IGNORED_SETTING.match(line):
+            return [NoticeEvent("setting_ignored", line)]
+        # RuntimeResources.mm:1045-1049: a --max-context past the native window.
+        if line.startswith("YaRN is on: "):
+            return [NoticeEvent("yarn_on", line)]
+        if line.startswith("Could not reach the Hub"):  # install/upstream.py:490/499/527
             return [NoticeEvent("hub_unreachable", line)]
         if line.startswith("Warning: keeping the installed"):  # upstream.py _keeping_installation
             return [NoticeEvent("new_commit_not_installed", line.removeprefix("Warning: "))]

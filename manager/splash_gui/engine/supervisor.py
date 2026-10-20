@@ -316,6 +316,9 @@ class Supervisor:
             state_format=state_format,
             vision=self.vision,
             draft=self._draft(),
+            yarn_factor=st.yarn_factor(status) if status else None,
+            context_bound=st.context_bound(status) if status else None,  # type: ignore[arg-type]
+            verify_rows=st.verify_rows(status) if status else None,  # type: ignore[arg-type]
             status_schema_version=self.schema_version,
             schema_supported=self.schema_version in (None, st.SCHEMA_VERSION),
             transport=self.transport,
@@ -400,6 +403,28 @@ class Supervisor:
     def _flush_publish(self) -> None:
         if self._publish_pending:
             self._publish(force=True)
+
+    def _without_noop_fixes(self, error: EngineError) -> EngineError:
+        """Drops a suggestion whose patch only repeats the settings the refused start
+        already had, such as "SSD cache auto" when it is auto: applying it would
+        start the same way and fail again."""
+        if self.model is None:
+            return error
+        serve = effective_serve(self.app.settings.current, self.model)
+
+        def noop(patch: dict[str, object] | None) -> bool:
+            if not patch:
+                return False
+            for key, value in patch.items():
+                section, _, name = key.partition(".")
+                if section != "serve" or getattr(serve, name, object()) != value:
+                    return False
+            return True
+
+        kept = [s for s in error.suggestions if not noop(s.patch)]
+        if len(kept) == len(error.suggestions):
+            return error
+        return error.model_copy(update={"suggestions": kept})
 
     def _add_notice(self, kind: str, message: str, raw: str | None = None) -> None:
         notice = EngineNotice(kind=kind, message=message, raw=raw, ts=now_iso())  # type: ignore[arg-type]
@@ -742,7 +767,7 @@ class Supervisor:
             if self.state == "starting" and (
                 self.error is None or (self.error.kind == "other" and event.error.kind != "other")
             ):
-                self.error = event.error
+                self.error = self._without_noop_fixes(event.error)
                 self._publish(force=True)
         elif isinstance(event, NoticeEvent):
             self._add_notice(event.kind, event.message, event.message)

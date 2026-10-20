@@ -34,6 +34,7 @@ from .errors import APIError
 from .fake_shapes import CacheInfo, FakeJob, NativeResult
 from .latency import LatencyMetrics
 from .protocol import MAX_THINKING_END_TOKENS
+from .serve_options import MAX_YARN_CONTEXT_TOKENS
 
 KIB, MIB, GIB = 1 << 10, 1 << 20, 1 << 30
 STATUS_SCHEMA_VERSION = 6  # runtime/engine/Protocol.hpp kStatusSchemaVersion
@@ -50,6 +51,25 @@ AUTOMATIC_CACHE_DISK = 32 * (1 << 30)
 DISK_FLOOR = 10 * (1 << 30)
 # The mount point DiskVolume reports for the user's data volume.
 DATA_VOLUME = "/System/Volumes/Data"
+# A block-sparse (Flash-Next) target's KV on the SSD cache (1.4.0): the bytes of
+# slots a token takes (1,010,000 tokens take 13.5 GB, DEVELOPMENT.md "KV on the
+# SSD"), the index a spilled page keeps in memory, and the hot block cache's floor.
+SPILL_BYTES_PER_TOKEN = 13_366
+KV_INDEX_PAGE_BYTES = 24 * KIB
+SPILL_HOT_FLOOR = 390 * MIB
+# Streamed stores' memory where auto streams them (1.4.0): the PLE table's row
+# cache (at most 512 MiB) and the routed experts' arena.
+PLE_CACHE_BYTES = 512 * MIB
+EXPERT_ARENA_BYTES = 16 * GIB
+# What streams of each MoE target and each part's smallest store (invented
+# but consistent): its routed experts, one layer's of them at least, and
+# Flash-Next's PLE table (28.8 GB in IQ4_NL, DEVELOPMENT.md "PLE table
+# streaming"); model::kSsdReaders reads them.
+ROUTED_EXPERT_BYTES = {"Qwen3.6-35B-A3B": 17_920 * MIB, "Qwen3.8-Flash-Next": 30_000 * MIB}
+EXPERT_LAYERS = {"Qwen3.6-35B-A3B": 40, "Qwen3.8-Flash-Next": 48}
+PLE_TABLE_BYTES = 28_800_000_000
+PLE_STORE_FLOOR = 64 * MIB
+SSD_READERS = 32
 # The Neural Engine FFN split (1.3.0) as the real engine set it up for the 27B on
 # the user's M5 Pro (Evidence): its share,
 # least chunk and memory. The MoE has no dense FFN layers and never splits.
@@ -73,6 +93,12 @@ MODES = (
     "capacity_exhausted",
     "resource_timeout",
     "fail_midstream",
+    # 1.4.0: a long request's KV on the SSD cache (Engine.cpp admitSpill and
+    # the read-back of spilled KV), and a LENGTH end at the engine's own bound.
+    "kv_write_budget",
+    "kv_disk_quota",
+    "kv_unreadable",
+    "bounded",
 )
 PRESSURES = ("normal", "warning", "critical")
 TEMPLATES = ("native", "patched", "unsupported")
@@ -170,7 +196,19 @@ class FakeConfig:
     volume_available: int = 200 * GIB
     volume_size: int = 994 * GIB
     writes_gated: str = "no"  # no | budget | closed (Status.cpp writes_gated)
-    startup_failure: str = ""  # "" | budget | context | crash
+    # A Flash-Next target's requests whose prompt and min(max_tokens, 4096)
+    # tokens of output exceed this spill their KV to the SSD cache (1.4.0);
+    # None for the memory the plan leaves resident KV.
+    kv_spill_tokens: int | None = None
+    # Why a streamed expert load failed (Status.cpp streamed_experts.failure).
+    expert_failure: str = ""
+    # "" | budget | context | crash, or 1.4.0's configuration (a streamed
+    # store's size refused before the weights load) and unprepared (the
+    # server cannot hold the model's assembly).
+    startup_failure: str = ""
+    # The plan with the arenas gives a streamed part another store, so the
+    # weights load again (1.4.0's "Weights loaded again").
+    load_again: bool = False
     crash_code: int = 1
     listen_early: bool = False
     gpu_family: int = 10
@@ -205,9 +243,12 @@ class FakeConfig:
         config.volume_available = parse_size(env.get("FAKE_SPLASH_VOLUME_AVAILABLE"), config.volume_available)
         config.volume_size = parse_size(env.get("FAKE_SPLASH_VOLUME_SIZE"), config.volume_size)
         config.writes_gated = env.get("FAKE_SPLASH_WRITES_GATED", config.writes_gated)
+        if env.get("FAKE_SPLASH_KV_SPILL_TOKENS"):
+            config.kv_spill_tokens = int(env["FAKE_SPLASH_KV_SPILL_TOKENS"])
         config.startup_failure = env.get("FAKE_SPLASH_FAIL_STARTUP", "")
         config.crash_code = int(env.get("FAKE_SPLASH_CRASH_CODE", config.crash_code))
         config.listen_early = _env_bool("FAKE_SPLASH_LISTEN_EARLY", False)
+        config.load_again = _env_bool("FAKE_SPLASH_LOAD_AGAIN", False)
         return config
 
     def update(self, values: dict) -> None:
@@ -256,6 +297,12 @@ class ServeSettings:
     state_format: str = "fp32"
     thinking_token_budget: int | None = None
     thinking_end_text: str | None = None
+    # 1.4.0's streamed stores, as serve_options parses them: None for auto,
+    # "off", or bytes (--sparse-kv-memory has no off); and --verify-rows.
+    expert_memory: int | str | None = None
+    ple_memory: int | str | None = None
+    sparse_kv_memory: int | None = None
+    verify_rows: str = "auto"
 
     @property
     def cache_disk_quota(self) -> int:
@@ -267,11 +314,29 @@ class ServeSettings:
     def ane_split(self) -> bool:
         """Whether the Neural Engine takes part of the prefill FFN: a dense target
         without --disable-ane (AneFfnStartup.cpp decide)."""
-        return _family(self.model) == "Qwen3.8-27B" and not self.disable_ane
+        return _family(self.model) == "Qwen3.8-27B" and not _flash_next(self.model) and not self.disable_ane
 
 
 def _family(model: str) -> str:
     return "Qwen3.6-35B-A3B" if "35b-a3b" in model.lower() else "Qwen3.8-27B"
+
+
+def _flash_next(model: str) -> bool:
+    """Qwen3.8-Flash-Next (1.4.0): MoE, block-sparse attention whose KV can
+    spill to the SSD cache, and a PLE table that can stream from the SSD."""
+    return "flash-next" in model.lower()
+
+
+def _streamed_bytes(value: object, default: int) -> int:
+    """What --expert-memory or --ple-memory leaves a streamed store: 0 for
+    off, `default` for auto, else the size given."""
+    if value is None or value == "auto":
+        return default
+    if value == "off" or value == 0:
+        return 0
+    if isinstance(value, int):
+        return value
+    return parse_size(str(value), default)
 
 
 @dataclass
@@ -420,6 +485,63 @@ class MemoryPlan:
             automatic = min(automatic or config.auto_context, config.auto_context)
         self.automatic_context = automatic
         self.page_bytes = page
+        # 1.4.0: the streamed stores (--ple-memory, --expert-memory), a
+        # Flash-Next target's KV on the SSD cache, and what bounds the context
+        # (MemoryPlan.cpp ContextBounds). Auto streams Flash-Next's table and
+        # experts, which memory cannot hold beside its context; a 35B-A3B
+        # streams its experts only at a size given.
+        flash_next = _flash_next(settings.model)
+        expert_memory = getattr(settings, "expert_memory", None)
+        self.table_bytes = _streamed_bytes(getattr(settings, "ple_memory", None), PLE_CACHE_BYTES) if flash_next else 0
+        self.expert_bytes = (
+            _streamed_bytes(expert_memory, EXPERT_ARENA_BYTES)
+            if flash_next or (moe and expert_memory not in (None, "auto"))
+            else 0
+        )
+        self.spills = flash_next and settings.cache_disk_quota > 0
+        self.hot_bytes = 0
+        if self.spills:
+            self.hot_bytes = max(SPILL_HOT_FLOOR, _streamed_bytes(getattr(settings, "sparse_kv_memory", None), 0))
+        window = max(MAX_CONTEXT_TOKENS, settings.max_context or 0)
+        resident = min(window, max(0, self.breakdown.kv_capacity_tokens - SPECULATIVE_SCRATCH_TOKENS))
+        spilled = window if self.spills else 0
+        disk = spill_room(settings, config) // SPILL_BYTES_PER_TOKEN if self.spills else 0
+        context = min(window, max(resident, min(spilled, disk)))
+        bound = "model" if context == window else "memory" if context == resident or disk >= spilled else "disk"
+        self.window = window
+        self.resident_context = resident
+        self.context_bounds: dict[str, Any] = {
+            "window": window,
+            "resident": resident,
+            "spilled": spilled,
+            "disk": disk,
+            "bound": bound,
+        }
+        # YaRN past the native window (Status.cpp appendRopeScaling).
+        self.rope_scaling = (
+            {"type": "yarn", "factor": window / MAX_CONTEXT_TOKENS, "original_context_tokens": MAX_CONTEXT_TOKENS}
+            if window > MAX_CONTEXT_TOKENS
+            else None
+        )
+
+    def spill_plan(self) -> dict:
+        """MemoryPlan.cpp spillStatusJson: the floors a spill-capable plan keeps."""
+        floor_tokens = 2048
+        return {
+            "dense_pages": floor_tokens // KV_PAGE_TOKENS,
+            "window_pages": 64,
+            "group_pages": PREFILL_TOKEN_BUDGET // KV_PAGE_TOKENS,
+            "slot_bytes": SPILL_BYTES_PER_TOKEN * KV_PAGE_TOKENS,
+            "lane_slots": 8192,
+            "hot_floor_bytes": SPILL_HOT_FLOOR,
+            "hot_target_bytes": self.hot_bytes,
+            "hot_limit_bytes": max(self.hot_bytes, 4 * GIB),
+            "staging_buffers": 2,
+            "staging_bytes": 2 * 36 * KIB * 4096,
+            "index_runway_bytes": 64 * KV_INDEX_PAGE_BYTES,
+            "floor_tokens": floor_tokens,
+            "floor_bytes": floor_tokens // KV_PAGE_TOKENS * self.page_bytes,
+        }
 
     @staticmethod
     def lane_state_bytes(settings: ServeSettings) -> int:
@@ -430,6 +552,16 @@ class MemoryPlan:
     def status_json(self, valid: bool = True) -> dict:
         b = self.breakdown
         budget = asdict(b)
+        # EngineMemoryBreakdown::toStatusJson (1.4.0): the streamed table's cache,
+        # a spilled page's index, the spill plan (null in memory) and the KV a
+        # request may keep resident beside it, and the context's bounds.
+        budget["streamed_table_bytes"] = self.table_bytes
+        budget["kv_index_page_bytes"] = KV_INDEX_PAGE_BYTES if self.spills else 0
+        budget["kv_spill"] = self.spill_plan() if self.spills else None
+        budget["resident_kv_bytes"] = (
+            max(0, b.dynamic_budget_bytes - b.lane_state_bytes - self.hot_bytes) if self.spills else 0
+        )
+        budget["context_bounds"] = dict(self.context_bounds)
         if valid:
             return {
                 "valid": True,
@@ -449,7 +581,7 @@ class MemoryPlan:
                 # runtime/engine/MemoryPlan.cpp modelStatusJson
                 "model": {
                     "model_name": self.family,
-                    "maximum_context_tokens": MAX_CONTEXT_TOKENS,
+                    "maximum_context_tokens": self.window,
                     "attention_layers": self.attention_layers,
                     "kv_heads": self.kv_heads,
                     "head_dimension": HEAD_DIMENSION,
@@ -467,6 +599,7 @@ class MemoryPlan:
                         "shared_decode_bytes": b.shared_decode_bytes,
                         "pipeline_reserve_bytes": b.pipeline_reserve_bytes,
                         "runtime_overhead_reserve_bytes": b.runtime_overhead_reserve_bytes,
+                        "streamed_table_bytes": self.table_bytes,
                         "ane_ffn_bytes": b.ane_ffn_bytes,
                         "state_staging_bytes": b.state_staging_bytes,
                     },
@@ -571,6 +704,13 @@ class ResponseStore:
                 "hits": self.hits,
                 "misses": self.misses,
             }
+
+
+def spill_room(settings: ServeSettings, config: FakeConfig) -> int:
+    """The SSD cache's room for active KV: its quota, but no more than its volume
+    has past the floor it keeps free (DiskSpace.cpp volumeActiveLimitBytes)."""
+    floor = min(DISK_FLOOR, config.volume_size // 20)
+    return min(settings.cache_disk_quota, max(0, config.volume_available - floor))
 
 
 def _percentile(samples: deque, fraction: float) -> float:
@@ -708,6 +848,14 @@ class FakeEngine:
             "disk_read_bytes": 0,
             "durable": 0,
             "active_tokens": 0,
+            # kv_spill (1.4.0): requests by KV mode, refusals and bounded ends.
+            "spill_requests": 0,
+            "resident_requests": 0,
+            "refused_quota": 0,
+            "refused_write_budget": 0,
+            "bounded": 0,
+            "spilled_tokens": 0,
+            "kv_read_failures": 0,
             "max_tick_ms": 0.0,
             "oldest_wait_since": None,
         }
@@ -745,7 +893,15 @@ class FakeEngine:
         """Print the startup lines in the engine's order and settle the plan;
         raises StartupFailed with the lines already printed."""
         s, cfg = self.settings, self.config
-        print_status(f"Loading · {s.model}")  # server/server.py:1747
+        print_status(f"Loading · {s.model}")  # server/server.py:1762
+        if cfg.startup_failure == "unprepared":
+            # server.py:1766 assembly.hold (install/assembly.py:345-348, 1.4.0):
+            # the server holds the model's assembly itself; ModelError ends it.
+            from install import models as model_artifacts
+            from install import paths
+
+            selection = model_artifacts.Selection.of(paths.MODELS, s.model, language_only=s.language_only)
+            raise StartupFailed(f"{selection.link} names no model Splash prepared: prepare the model again")
         # server/server.py:1752 thinking_end_tokens (backend.py:51-74), before
         # the chat template line; it ends the start before any backend exists.
         if s.thinking_end_text is not None:
@@ -764,11 +920,24 @@ class FakeEngine:
             log_startup(
                 f"SSD cache off: its quota holds no state of {state_bytes // MIB} MiB; no state staging is set aside."
             )
+        # RuntimeResources.mm:808-820 (1.4.0): the streamed stores' settings,
+        # ignored or refused before the weights load.
+        self._report_ignored_stores()
+        if refusal := self._store_refusal():
+            # planRefusal (RuntimeResources.mm:333-335) at Configuration stage.
+            write_stderr_line(f"error: runtime bootstrap failed [resource_assembly/configuration]: {refusal}")
+            raise StartupFailed("native protocol reached EOF")
         time.sleep(max(0.0, cfg.load_seconds))
-        # runtime/engine/RuntimeResources.mm:385
+        # runtime/engine/RuntimeResources.mm:856-857
         log_startup(f"Weights loaded in {cfg.load_seconds:.2f} s.")
         plan = MemoryPlan(s, cfg, force_refusal=cfg.startup_failure == "budget")
         self.plan = plan
+        if cfg.load_again and not plan.refused:
+            # The plan with the arenas gives a part another store (1.4.0).
+            log_startup(f"Weights loaded again in {cfg.load_seconds:.2f} s.")
+        if not plan.refused:
+            self._report_streamed_stores(plan)
+            self._report_verify_rows()
         if plan.refused:
             # RuntimeResources.mm:421 (MemoryPlanning) wrapped by Bootstrap.mm:25,
             # printed by runtime/main.mm:429-431 printBootstrapError.
@@ -785,28 +954,54 @@ class FakeEngine:
             raise StartupFailed("native protocol reached EOF")
         log_startup(
             f"Kernel policy for GPU family {cfg.gpu_family} with {cfg.gpu_cores} cores."
-        )  # RuntimeResources.mm:452
-        # runtime/engine/AneFfnStartup.cpp decide() and logOutcome(); the MoE logs nothing.
+        )  # RuntimeResources.mm:1043-1044
+        if plan.rope_scaling is not None:
+            # RuntimeResources.mm:1045-1049: past the native window (1.4.0).
+            native = plan.rope_scaling["original_context_tokens"]
+            log_startup(
+                f"YaRN is on: the target's RoPE is scaled by {plan.rope_scaling['factor']:g} for "
+                f"{plan.context_bounds['window']} tokens of context, past the native window of {native}. "
+                "Static YaRN changes answers at every length, so pass a --max-context above "
+                f"{native} only when a request needs it."
+            )
+        # runtime/engine/AneFfnStartup.cpp decide() and logOutcome(); a MoE logs nothing.
         if s.ane_split:
             log_startup("Setting up the Neural Engine FFN split (splash serve --disable-ane keeps the FFN on the GPU).")
             log_startup(f"Neural Engine FFN split {ANE_SPLIT_REASON}.")
-        elif _family(s.model) == "Qwen3.8-27B":
+        elif _family(s.model) == "Qwen3.8-27B" and not _flash_next(s.model):
             log_startup(f"The GPU runs the prefill FFN alone, {ANE_OFF_GIVEN}.")
         if plan.breakdown.state_staging_bytes:
             self._open_disk_tier(plan)
+        self._report_spill(plan)
         automatic = plan.automatic_context
-        if (s.max_context is not None and s.max_context > automatic) or cfg.startup_failure == "context":
+        # An explicit --max-context reaches what the plan holds, past the native
+        # window with YaRN (1.4.0); auto never passes the native window.
+        bounds = plan.context_bounds
+        held = {"model": bounds["window"], "memory": bounds["resident"], "disk": bounds["disk"]}[bounds["bound"]]
+        held = min(held, MAX_YARN_CONTEXT_TOKENS)
+        if cfg.auto_context is not None:
+            held = min(held, cfg.auto_context)
+        held = max(held, automatic)
+        if (s.max_context is not None and s.max_context > held) or cfg.startup_failure == "context":
             requested = s.max_context or automatic + 1
+            allowed = held if s.max_context is not None else automatic
             budget = plan.breakdown
             capped = (
                 bool(budget.configured_memory_limit_bytes)
                 and budget.hard_budget_bytes + budget.working_set_margin_bytes == budget.configured_memory_limit_bytes
             )
-            # runtime/engine/Bootstrap.mm:274-279
+            bound = (
+                "the SSD cache's room for its KV"
+                if bounds["bound"] == "disk"
+                else "--max-memory"
+                if capped
+                else "this Mac's memory"
+            )
+            # runtime/engine/Bootstrap.mm:286-299
             write_stderr_line(
                 f"error: runtime bootstrap failed [model_creation]: --max-context {requested} exceeds the "
-                f"{automatic} tokens the model and {'--max-memory' if capped else "this Mac's memory"} allow; "
-                f"omit it or pass at most {automatic}\n" + budget.describe()
+                f"{allowed} tokens the model and {bound} allow; "
+                f"omit it or pass at most {allowed}\n" + budget.describe()
             )
             raise StartupFailed("native protocol reached EOF")
         # 1.3.2 dropped Bootstrap.mm's "may not hold" suggestion: the SSD cache
@@ -818,8 +1013,136 @@ class FakeEngine:
         self.ready = True
         self.last_request = time.monotonic()
 
+    # --- 1.4.0's streamed stores, verify rows and KV on the SSD cache -------
+    def _model_name(self) -> str:
+        """The loaded model's name in startup lines: its family."""
+        return "Qwen3.8-Flash-Next" if _flash_next(self.settings.model) else _family(self.settings.model)
+
+    def _streamable(self) -> tuple[int, int]:
+        """What streams of the target: its routed experts' and PLE table's bytes."""
+        name = self._model_name()
+        return ROUTED_EXPERT_BYTES.get(name, 0), PLE_TABLE_BYTES if name == "Qwen3.8-Flash-Next" else 0
+
+    def _report_ignored_stores(self) -> None:
+        """RuntimeResources.mm reportIgnoredSetting (lines 349-358): a size for a
+        part the model doesn't have, or one that holds all of it."""
+        experts, table = self._streamable()
+        for option, setting, total, what, loads in (
+            ("--ple-memory", self.settings.ple_memory, table, "PLE table", "loads with the weights"),
+            ("--expert-memory", self.settings.expert_memory, experts, "routed experts", "load with their layers"),
+        ):
+            if not isinstance(setting, int):
+                continue
+            if not total:
+                log_startup(f"{option} ignored: {self._model_name()} has no {what} to stream")
+            elif setting >= total:
+                log_startup(
+                    f"{option} ignored: its {setting // MIB} MiB hold all of the {what} "
+                    f"({total // MIB} MiB), which {loads}"
+                )
+
+    def _store_refusal(self) -> str | None:
+        """MemoryPlan.cpp resolve (lines 57-76) and the hot block cache's floor
+        (lines 196-208): a size below a part's smallest store."""
+        s = self.settings
+        experts, table = self._streamable()
+        expert_floor = experts // EXPERT_LAYERS.get(self._model_name(), 1) if experts else 0
+        if self.config.startup_failure == "configuration" and experts:
+            return f"--expert-memory of 256 MiB is less than its smallest store, {-(-expert_floor // MIB)} MiB"
+        for option, setting, total, floor in (
+            ("--ple-memory", s.ple_memory, table, PLE_STORE_FLOOR),
+            ("--expert-memory", s.expert_memory, experts, expert_floor),
+        ):
+            if isinstance(setting, int) and total and setting < total and setting < floor:
+                return f"{option} of {setting // MIB} MiB is less than its smallest store, {-(-floor // MIB)} MiB"
+        spills = _flash_next(s.model) and s.cache_disk_quota > 0
+        if spills and s.sparse_kv_memory is not None and s.sparse_kv_memory < SPILL_HOT_FLOOR:
+            return (
+                f"--sparse-kv-memory of {s.sparse_kv_memory // MIB} MiB is less than the hot block "
+                f"cache's floor, {SPILL_HOT_FLOOR // MIB} MiB"
+            )
+        return None
+
+    def _report_streamed_stores(self, plan: MemoryPlan) -> None:
+        """RuntimeResources.mm reportStreamedStores (lines 373-399)."""
+        s = self.settings
+        experts, table = self._streamable()
+
+        def automatic(setting: object, option: str) -> str:
+            if setting is not None:
+                return ""
+            return f", all that {option} auto leaves it beside the floors and the KV kept resident"
+
+        if plan.table_bytes:
+            rows = plan.table_bytes // (160 * 9 // 16)
+            log_startup(
+                f"Table per_layer_token_embd.weight streams from its file: {table // MIB} MiB stay on the SSD; "
+                f"row cache of {rows} rows in {plan.table_bytes // MIB} MiB"
+                f"{automatic(s.ple_memory, '--ple-memory')}; {SSD_READERS} readers."
+            )
+        elif table and s.ple_memory is None:
+            log_startup(
+                f"The PLE table loads with the weights: memory holds its {table // MIB} MiB (--ple-memory auto)."
+            )
+        if plan.expert_bytes and experts:
+            expert = 9 * MIB
+            count = 40 * 256
+            slots = min(count, plan.expert_bytes // expert)
+            log_startup(
+                f"Routed experts stream from their files: {slots} slots for {count} experts "
+                f"({slots * 100 // count}%) in {slots * expert // MIB} MiB"
+                f"{automatic(s.expert_memory, '--expert-memory')}."
+            )
+        elif experts and s.expert_memory is None:
+            log_startup(
+                f"Routed experts load with their layers: memory holds their {experts // MIB} MiB "
+                "(--expert-memory auto)."
+            )
+
+    def _report_verify_rows(self) -> None:
+        """RuntimeResources.mm reportVerifyRows (lines 403-411): a MoE target's
+        rows follow the verify budget unless --verify-rows all."""
+        name = self._model_name()
+        moe = name != "Qwen3.8-27B"
+        if self.settings.verify_rows == "all":
+            log_startup("Decode cycles verify every row of the draft's block (--verify-rows all).")
+        elif moe:
+            log_startup(
+                f"Decode cycles verify the rows the verify budget chooses (--verify-rows auto, as {name} is a "
+                "MoE target): greedy and seeded outputs can differ from run to run."
+            )
+        else:
+            log_startup(
+                f"Decode cycles verify every row of the draft's block (--verify-rows auto, as {name} is dense)."
+            )
+
+    def _report_spill(self, plan: MemoryPlan) -> None:
+        """RuntimeResources.mm reportSpill (lines 433-448) for a block-sparse
+        target, and the ignored --sparse-kv-memory (lines 1066-1072)."""
+        s = self.settings
+        bounds = plan.context_bounds
+        maximum = {"model": bounds["window"], "memory": bounds["resident"], "disk": bounds["disk"]}[bounds["bound"]]
+        sparse = _flash_next(s.model)
+        reason = "its attention is dense" if not sparse else "the SSD cache is off"
+        if sparse and plan.spills:
+            b = plan.breakdown
+            resident_kv = max(0, b.dynamic_budget_bytes - b.lane_state_bytes - plan.hot_bytes)
+            log_startup(
+                f"Long requests keep their KV on the SSD cache: {maximum} tokens of context (bound: "
+                f"{bounds['bound']}; window {bounds['window']}, resident {bounds['resident']}, spilled "
+                f"{bounds['spilled']}, disk {bounds['disk']}); a request whose KV fits {resident_kv // MIB} MiB "
+                f"stays in memory; hot block cache {plan.hot_bytes // MIB} MiB (floor {SPILL_HOT_FLOOR // MIB} "
+                f"MiB); history staging in 2 buffers; SSD room for active KV "
+                f"{gibibytes(spill_room(s, self.config))}."
+            )
+            return
+        if sparse:
+            log_startup(f"Long requests keep their KV in memory, {reason}: {maximum} tokens of context.")
+        if s.sparse_kv_memory is not None:
+            log_startup(f"--sparse-kv-memory ignored: {self._model_name()} keeps its KV in memory, {reason}.")
+
     def ready_line(self, address: str) -> str:
-        # server/server.py:2017-2023
+        # server/server.py:1825-1831
         context = self.max_context
         text = f"{context // 1024}K" if context % 1024 == 0 else f"{context:,}"
         mode = "" if self.vision else " · language only"
@@ -889,9 +1212,13 @@ class FakeEngine:
         quota = s.cache_disk_quota
         held = self.persistent.taken_back["bytes"] if self.persistent else 0
         self.disk_open = True
-        self.disk_limit = min(quota, room(held) // 4)
+        # DiskSpace.cpp (1.4.0): the automatic quota keeps a quarter of the
+        # volume's room; a size may take all of it.
+        self.disk_limit = min(quota, room(held) // 4 if automatic else room(held))
         if self.disk_limit < quota:
-            reason = f"a quarter of the {gibibytes(room(held))} its volume has"
+            # 1.4.0 holds a size as given while the volume keeps its floor.
+            share = "a quarter of the " if automatic else "the "
+            reason = f"{share}{gibibytes(room(held))} its volume has"
         else:
             reason = f"{'its automatic quota' if automatic else 'its quota'}, while its volume has room"
         if self.persistent:
@@ -914,15 +1241,11 @@ class FakeEngine:
         )
         if self.persistent:
             t = self.persistent.taken_back
-            # RuntimeResources.mm:768-773
+            # RuntimeResources.mm:1179-1182
             log_startup(
                 f"Persistent cache {self.persistent.directory}: took back {t['states']} restore points over "
                 f"{t['kv_blocks']} KV blocks ({t['bytes'] // MIB} MiB); left {t['left_behind']} copies behind."
-                + (
-                    " The last process did not stop cleanly: this one serves on probation for its first minute."
-                    if self.persistent.unclean
-                    else ""
-                )
+                + (" The last process did not stop cleanly." if self.persistent.unclean else "")
             )
 
     # --- modes ---------------------------------------------------------------
@@ -1128,9 +1451,13 @@ class FakeEngine:
     def _admit(self, job: FakeJob) -> int:
         """Track a request in service for /status active_requests (Status.cpp,
         1.3.2): its phase, prompt progress and output so far."""
+        spill = self.spills(job)
         with self.lock:
             self.request_ids += 1
+            if self.plan is not None and self.plan.spills:
+                self.c["spill_requests" if spill else "resident_requests"] += 1
             self.active[self.request_ids] = {
+                "kv_mode": "spill" if spill else "resident",
                 "phase": "queued",
                 "priority": job.priority,
                 "prompt_tokens": len(job.prompt_tokens),
@@ -1140,6 +1467,19 @@ class FakeEngine:
                 "received": time.monotonic(),
             }
             return self.request_ids
+
+    def resident_tokens(self) -> int:
+        """The tokens past which a Flash-Next request's KV spills."""
+        if self.config.kv_spill_tokens is not None:
+            return self.config.kv_spill_tokens
+        return self.plan.resident_context if self.plan else 0
+
+    def spills(self, job: FakeJob) -> bool:
+        """Engine.cpp admission (1.4.0): a request whose prompt and
+        min(max_tokens, 4096) tokens of output do not fit resident KV spills."""
+        if self.plan is None or not self.plan.spills:
+            return False
+        return len(job.prompt_tokens) + min(job.max_new_tokens, 4096) > self.resident_tokens()
 
     def _progress(self, request_id: int, **fields: object) -> None:
         with self.lock:
@@ -1219,6 +1559,36 @@ class FakeEngine:
                 raise APIError(
                     503, "memory did not become available within the resource wait limit", "resource_timeout"
                 )
+            # Engine.cpp admitSpill (1.4.0) and backend.py's answers to its ends.
+            if self.mode == "kv_write_budget":
+                with self.lock:
+                    self.c["refused_write_budget"] += 1
+                raise APIError(
+                    503,
+                    f"requests past {self.resident_tokens()} tokens keep their KV on the SSD cache, "
+                    "whose daily write budget (--max-cache-disk-writes) is spent",
+                    "kv_write_budget",
+                    3600,
+                )
+            if self.mode == "kv_disk_quota":
+                with self.lock:
+                    self.c["refused_quota"] += 1
+                needed = (len(job.prompt_tokens) + job.max_new_tokens) * SPILL_BYTES_PER_TOKEN
+                raise APIError(
+                    400,
+                    f"this request's KV needs needed_bytes={needed} of the SSD cache, which may hold "
+                    f"active_limit_bytes={self.spill_limit()} of active KV now "
+                    "(--max-cache-disk and the volume's free space)",
+                    "kv_disk_quota",
+                )
+            if self.mode == "kv_unreadable":
+                with self.lock:
+                    self.c["kv_read_failures"] += 1
+                raise APIError(
+                    503,
+                    "KV of an earlier part of the conversation could not be read from the SSD cache",
+                    "kv_unreadable",
+                )
             prompt = job.prompt_tokens
             matched = self._lookup(prompt, job.cache_salt)
             uncached = len(prompt) - matched
@@ -1275,6 +1645,11 @@ class FakeEngine:
                     filler = fake_text.reply_pieces("", None, job.max_new_tokens)
                     queue += [("content", p) for p in filler]
                 budget = job.max_new_tokens
+                # A bounded end (1.4.0): the engine stops short of max_tokens at
+                # what the SSD cache's quota or memory holds of the context.
+                bounded = self.mode == "bounded" and len(queue) > 1
+                if bounded:
+                    budget = min(budget, len(queue) // 2)
                 midstream_at = max(1, len(queue) // 2)
                 for position, item in enumerate(queue):
                     if self.mode == "fail_midstream" and position >= midstream_at:
@@ -1325,6 +1700,13 @@ class FakeEngine:
             self._publish(prompt + self._output_ids(job, len(produced)), job.cache_salt)
             result = self._result(job, reason, matched, len(produced), received, started, first_token_at)
             result.stop_sequence = stop_sequence
+            result.bounded = bounded and reason == "length"
+            if result.bounded:
+                with self.lock:
+                    self.c["bounded"] += 1
+            if self.spills(job):
+                with self.lock:
+                    self.c["spilled_tokens"] += len(prompt) + len(produced)
             outcome = "completed"
             yield ("done", result)
         except GeneratorExit:
@@ -1498,6 +1880,172 @@ class FakeEngine:
         self.persistent.close(states, blocks, blocks * self._page_bytes())
 
     # --- /status ---------------------------------------------------------------
+    def spill_limit(self) -> int:
+        """The SSD cache's room for active KV: all its volume has past the floor."""
+        if not self.disk_open:
+            return 0
+        return spill_room(self.settings, self.config)
+
+    def _streamed_table(self, c: dict) -> dict | None:
+        """Status.cpp appendStreamedTable: 16 rows a position, most of them hit."""
+        plan = self.plan
+        if plan is None or not plan.table_bytes:
+            return None
+        row = 160 * 9 // 16  # IQ4_NL rows of 160 values
+        uses = {}
+        for use, tokens in (("prefill", c["prefill_input_tokens"]), ("decode", c["decode_output_tokens"])):
+            requested = tokens * 16
+            unique = requested * 3 // 4
+            read = unique // 10
+            uses[use] = {
+                "stages": tokens // PREFILL_TOKEN_BUDGET + 1 if tokens else 0,
+                "requested_rows": requested,
+                "unique_rows": unique,
+                "hit_rows": unique - read,
+                "read_rows": read,
+                "hit_rate": (unique - read) / unique if unique else 0.0,
+                "stage_ms": _latency(0.4, tokens),
+            }
+        reads = uses["prefill"]["read_rows"] + uses["decode"]["read_rows"]
+        capacity = plan.table_bytes // row
+        return {
+            "table": "per_layer_token_embd.weight",
+            "table_bytes": 28_800_000_000,
+            "cache_bytes": plan.table_bytes,
+            "cache_capacity_rows": capacity,
+            "cached_rows": min(capacity, reads),
+            "evictions": max(0, reads - capacity),
+            **uses,
+            "read_bytes": reads * row,
+            "read_retries": 0,
+            "read_errors": 0,
+            "read_ms": _latency(0.08, reads),
+            "prefetch_requested_rows": 0,
+            "prefetch_read_rows": 0,
+            "prefetch_dropped_rows": 0,
+            "poisoned": False,
+            "failure": "",
+        }
+
+    def _streamed_experts(self, c: dict) -> dict | None:
+        """Status.cpp appendStreamedExperts: about 43 experts routed a decode
+        step, nine in ten of them resident."""
+        plan = self.plan
+        if plan is None or not plan.expert_bytes:
+            return None
+        expert = 9 * MIB
+        experts = 40 * 256
+        slots = min(experts, plan.expert_bytes // expert)
+        uses = {}
+        for use, steps in (
+            ("prefill", c["prefill_batches"]),
+            ("decode", c["decode_output_tokens"]),
+        ):
+            routed = steps * (2048 if use == "prefill" else 43)
+            read = routed // 10
+            uses[use] = {
+                "loads": steps * 40,
+                "routed": routed,
+                "read": read,
+                "prefetched": read // 2,
+                "read_ahead": 0,
+                "hit_rate": (routed - read) / routed if routed else 0.0,
+                "read_bytes": read * expert,
+                "host_steps": {
+                    "pickup_ms": _latency(0.05, steps),
+                    "work_ms": _latency(0.6, steps),
+                    "resume_ms": _latency(0.04, steps),
+                },
+            }
+        return {
+            "arena_bytes": slots * expert,
+            "staging_bytes": 43 * expert,
+            "slots": slots,
+            "experts": experts,
+            "resident": slots if c["decode_output_tokens"] else slots // 2,
+            **uses,
+            "failure": self.config.expert_failure,
+        }
+
+    def _kv_spill(self, c: dict, active_requests: list[dict]) -> dict:
+        """Status.cpp appendKvSpill: Spill requests' pages keep only their index
+        in memory once their copy on the SSD cache landed."""
+        spilled = c["spilled_tokens"] // KV_PAGE_TOKENS
+        held = sum(r["prompt_tokens"] + r["generated_tokens"] for r in active_requests if r.get("kv_mode") == "spill")
+        limit = self.spill_limit()
+        hot = self.plan.hot_bytes if self.plan else 0
+        return {
+            "requests": {
+                "spill": c["spill_requests"],
+                "resident": c["resident_requests"],
+                "converted": 0,
+                "bounded": c["bounded"],
+                "length_ends": c["bounded"],
+                "refused": {"quota": c["refused_quota"], "write_budget": c["refused_write_budget"], "closed": 0},
+                "waiting_quota": 0,
+            },
+            "pages": {
+                "index": spilled,
+                "index_bytes": spilled * KV_INDEX_PAGE_BYTES,
+                "spilled": spilled,
+                "spilled_bytes": spilled * KV_PAGE_TOKENS * SPILL_BYTES_PER_TOKEN,
+            },
+            "write_through": {
+                "pages": spilled,
+                "bytes": spilled * KV_PAGE_TOKENS * SPILL_BYTES_PER_TOKEN,
+                "in_flight": 0,
+                "failures": 0,
+                "paused": False,
+            },
+            "spill_moves": spilled,
+            "unspills": 0,
+            "rewrites": 0,
+            "restores": {"index_pages": 0, "whole_pages": 0, "ms": _latency(0.0, 0)},
+            "quota": {
+                "active_limit_bytes": limit,
+                "held_bytes": min(limit, held * SPILL_BYTES_PER_TOKEN),
+                "committed_bytes": min(limit, held * SPILL_BYTES_PER_TOKEN),
+                "revoked": 0,
+            },
+            "index_runway_bytes": 64 * KV_INDEX_PAGE_BYTES,
+            "block_cache": {
+                "bytes": hot,
+                "target_bytes": hot,
+                "floor_bytes": SPILL_HOT_FLOOR,
+                "slots_per_layer": 8192,
+                "lanes": MAX_BATCH_WIDTH,
+                "resolves": c["decode_output_tokens"],
+                "entries": c["decode_output_tokens"] * 64,
+                "paged": 0,
+                "hits": c["decode_output_tokens"] * 60,
+                "read": c["decode_output_tokens"] * 4,
+                "hit_rate": 15 / 16 if c["decode_output_tokens"] else 0.0,
+                "ghost_hits": 0,
+                "read_bytes": c["decode_output_tokens"] * 4 * 36 * KIB,
+                "read_failures": c["kv_read_failures"],
+                "resolve_ms": _latency(0.2, c["decode_output_tokens"]),
+                "read_ms": _latency(0.3, c["decode_output_tokens"]),
+                "host_steps": {
+                    "pickup_ms": _latency(0.05, c["decode_output_tokens"]),
+                    "work_ms": _latency(0.3, c["decode_output_tokens"]),
+                    "resume_ms": _latency(0.04, c["decode_output_tokens"]),
+                },
+            },
+            # A prefill streams each layer's history from the SSD into staging.
+            "history_stream": {
+                "commands": c["spill_requests"],
+                "contended_commands": 0,
+                "layers": c["spill_requests"] * 40,
+                "pages": spilled,
+                "bytes": spilled * 36 * KIB,
+                "staging_bytes": 2 * 36 * KIB * 4096,
+                "buffers": 2,
+                "read_ms": _latency(1.2, c["spill_requests"]),
+                "wait_ms": _latency(0.1, c["spill_requests"]),
+                "decode_gap_ms": _latency(0.0, 0),
+            },
+        }
+
     def status(self, server_info: dict) -> dict:
         s, cfg = self.settings, self.config
         plan = self.plan
@@ -1519,6 +2067,8 @@ class FakeEngine:
                     "prompt_processed": request["prompt_processed"],
                     "generated_tokens": request["generated_tokens"],
                     "max_new_tokens": request["max_new_tokens"],
+                    # Only where the target's KV can spill (1.4.0).
+                    **({"kv_mode": request["kv_mode"]} if plan is not None and plan.spills else {}),
                     "age_ms": int((now - request["received"]) * 1000),
                 }
                 for request_id, request in sorted(self.active.items())
@@ -1560,6 +2110,7 @@ class FakeEngine:
         gated = cfg.writes_gated if cfg.writes_gated in ("no", "budget", "closed") else "no"
         if s.max_cache_disk_writes and self.disk_open and c["disk_written_bytes"] > s.max_cache_disk_writes // 4:
             gated = "budget"
+        value_layout = "token_major" if _flash_next(s.model) else "dimension_major"
         status: dict = {
             "schema_version": STATUS_SCHEMA_VERSION,
             "ready": ready,
@@ -1582,8 +2133,13 @@ class FakeEngine:
                 "cache": {
                     "loaded_model_layout_sha256": hashlib.sha256(f"layout|{s.model}".encode()).hexdigest(),
                     "build_id": self.build_id,
-                    "dtype": "int8" if s.kv_format == "int8" else "bf16",
+                    # kv::storageFormatName (1.4.0) names the value layout too.
+                    "dtype": (
+                        ("q8s8_f32_scale_per_token_head" if s.kv_format == "int8" else "bf16")
+                        + f"_k_token_major_v_{value_layout}"
+                    ),
                     "block_tokens": KV_PAGE_TOKENS,
+                    "rope_scaling": plan.rope_scaling if plan else None,
                 },
                 "kv": {
                     "target_model_sha256": hashlib.sha256(f"target|{s.model}".encode()).hexdigest(),
@@ -1591,7 +2147,7 @@ class FakeEngine:
                     "quantization": "symmetric_int8" if s.kv_format == "int8" else "none",
                     "scale_type": "float32" if s.kv_format == "int8" else "none",
                     "key_layout": "token_major",
-                    "value_layout": "dimension_major",
+                    "value_layout": value_layout,
                 },
             },
             "memory_plan": plan.status_json() if plan else {"valid": False},
@@ -1627,6 +2183,10 @@ class FakeEngine:
                 "backend_peak_allocated_bytes": peak,
             },
             "weights": self.weights_status(),
+            # Status.cpp appendStreamedTable and appendStreamedExperts (1.4.0):
+            # null unless the store streams from the SSD.
+            "streamed_table": self._streamed_table(c),
+            "streamed_experts": self._streamed_experts(c),
             # Status.cpp appendAneFfn
             "ane_ffn": {
                 "state": "split" if s.ane_split else "off",
@@ -1689,6 +2249,8 @@ class FakeEngine:
                 "volume_available_bytes": cfg.volume_available if self.disk_open else 0,
                 "writes_gated": gated,
                 "write_budget_bytes": write_budget,
+                # 1.4.0: how long SSD writes waited for the reads a step needed.
+                "writes_deferred_ms": round(c["spilled_tokens"] * 0.002, 3),
                 "read_bytes": c["disk_read_bytes"],
                 "written_bytes": c["disk_written_bytes"],
                 "kv_blocks": disk_used // page if page else 0,
@@ -1740,6 +2302,14 @@ class FakeEngine:
                 "restore_skipped": 0,
                 "resets": 0,
             },
+            # Status.cpp (1.4.0): the rows decode cycles verify; a dense target
+            # verifies all of them.
+            "verify_rows": (
+                "all"
+                if getattr(s, "verify_rows", "auto") == "all"
+                or (_family(s.model) == "Qwen3.8-27B" and not _flash_next(s.model))
+                else "auto"
+            ),
             "model_timing": {
                 "scope": "model_lifetime",
                 "prefill": {
@@ -1766,6 +2336,7 @@ class FakeEngine:
             "images": {
                 "encodes": c["image_encodes"],
                 "embedding_reuses": 0,
+                "embedding_evictions": 0,
                 "arena_bytes": (64 * MIB if self.vision else 0),
                 "cached_bytes": 0,
                 "state_held_bytes": 0,
@@ -1816,6 +2387,9 @@ class FakeEngine:
             },
             "metal": {"healthy": metal_ok, "failure_reason": ""},
         }
+        if plan is not None and plan.spills:
+            # Written only for a target whose KV can spill (Status.cpp appendKvSpill).
+            status["kv_spill"] = self._kv_spill(c, active_requests)
         # server/backend.py NativeBackend.status
         transport_ready = self.transport_ready
         stopped = self.mode == "engine_failed"
@@ -1882,6 +2456,20 @@ class FakeEngine:
             "connections": self.connections.stats(),
         }
         return status
+
+
+def _latency(milliseconds: float, samples: int) -> dict:
+    """Status.cpp appendLatency, for `samples` steps of about `milliseconds` each."""
+    if not samples:
+        return {"p50": 0.0, "p95": 0.0, "p99": 0.0, "max": 0.0, "total": 0.0, "samples": 0}
+    return {
+        "p50": milliseconds,
+        "p95": round(milliseconds * 1.8, 6),
+        "p99": round(milliseconds * 2.5, 6),
+        "max": round(milliseconds * 3, 6),
+        "total": round(milliseconds * samples, 6),
+        "samples": samples,
+    }
 
 
 def _batch(width: int, rate: float) -> dict:

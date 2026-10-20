@@ -68,12 +68,21 @@ LEGACY = "incoai/Qwen3.6-35B-A3B-Splash"
 # The two repositories the acceptance checklist searches for.
 ACCEPT_8BIT = "mlx-community/Qwen3.8-27B-8bit"
 ACCEPT_GGUF = "unsloth/Qwen3.8-27B-GGUF"
-# NVFP4 safetensors checkpoints Splash 1.3.2 loads: NVIDIA's Model Optimizer one
+# NVFP4 safetensors checkpoints Splash loads: NVIDIA's Model Optimizer one
 # (in the curated catalog) and unsloth's compressed-tensors one. The real Hub tags
 # them `modelopt` and `compressed-tensors`, not `mlx`.
 MODELOPT_27B = "nvidia/Qwen3.8-27B-NVFP4"
 COMPRESSED_35B = "unsloth/Qwen3.6-35B-A3B-NVFP4"
 CHECKPOINT_TAGS = {MODELOPT_27B: "modelopt", COMPRESSED_35B: "compressed-tensors"}
+# Qwen3.8-Flash-Next, which loads from a GGUF only, every GGUF of it split into a
+# folder per variant: ISTA-DASLab's (Q2_0/ and IQ2_XS/, two parts each) and
+# unsloth's, which also keeps an MTP head at its root that Splash takes for :Q8_0
+# before the Q8_0/ folder. An MLX conversion of it, which Splash refuses.
+FLASH_NEXT_GGUF = "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF"
+FLASH_NEXT_UNSLOTH = "unsloth/Qwen3.8-Flash-Next-GGUF"
+FLASH_NEXT_MLX = "rapid-mlx/Qwen3.8-Flash-Next-4bit"
+# The variant the fake installer publishes for each GGUF repository it serves.
+INSTALLED_VARIANT = {FLASH_NEXT_GGUF: "Q2_0", FLASH_NEXT_UNSLOTH: "UD-Q2_K_XL"}
 
 _ROUTE_LOCK = threading.Lock()
 
@@ -90,7 +99,8 @@ def repository(repo_id: str, revision: str | None = None) -> tuple[models.Remote
     family = models.family_of(repo_id)
     if not family:
         raise ValueError("unknown fixture repository")
-    model = repo_id + ":UD-Q4_K_M" if "GGUF" in repo_id or repo_id.endswith("-gguf") else repo_id
+    gguf = "GGUF" in repo_id or repo_id.endswith("-gguf")
+    model = f"{repo_id}:{INSTALLED_VARIANT.get(repo_id, 'UD-Q4_K_M')}" if gguf else repo_id
     selection = models.Selection.of(
         models.paths.MODELS,
         model,
@@ -104,6 +114,8 @@ def repository(repo_id: str, revision: str | None = None) -> tuple[models.Remote
             repo, _, _, _ = models.target_repo(selection, family)
     if repo_id == ACCEPT_GGUF:
         repo.files += more_variants(repo)
+    elif repo_id in INSTALLED_VARIANT:
+        repo.files += more_folders(repo, repo_id)
     files = {f.name: f for f in repo.files}
     config = {
         "text_config": signatures.text_config(family),
@@ -169,6 +181,31 @@ def more_variants(repo: models.RemoteRepo) -> list[models.RemoteFile]:
     ]
     files.append(models.RemoteFile("imatrix_unsloth.gguf", 4096, True, b"GGUF", b"imatrix"))
     return files
+
+
+def more_folders(repo: models.RemoteRepo, repo_id: str) -> list[models.RemoteFile]:
+    """The Flash-Next repositories' other variant folders, sized like the installer's
+    own parts (IQ2_XS a little larger than Q2_0, as on the Hub), and unsloth's root
+    MTP head. Only the installer's variant downloads."""
+    base = [f for f in repo.files if "/" in f.name]
+    stem = re.sub(r"-gguf$", "", repo_id.split("/", 1)[1], flags=re.I)
+
+    def folder(variant: str, parts: int, scale: int) -> list[models.RemoteFile]:
+        return [
+            models.RemoteFile(
+                f"{variant}/{stem}-{variant}-{k:05d}-of-{parts:05d}.gguf",
+                base[0].size * scale // 100,
+                True,
+                base[0].header,
+                base[0].seed + f"{variant}/{k}".encode(),
+            )
+            for k in range(1, parts + 1)
+        ]
+
+    if repo_id == FLASH_NEXT_GGUF:
+        return folder("IQ2_XS", 2, 103)
+    head = models.RemoteFile(f"mtp-{stem}-Q8_0.gguf", 4096, True, base[0].header, b"mtp")
+    return [*folder("Q8_0", 3, 120), head]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -466,6 +503,9 @@ def _catalog() -> list[str]:
         ACCEPT_GGUF,
         MODELOPT_27B,
         COMPRESSED_35B,
+        FLASH_NEXT_GGUF,
+        FLASH_NEXT_UNSLOTH,
+        FLASH_NEXT_MLX,
     ]
 
 

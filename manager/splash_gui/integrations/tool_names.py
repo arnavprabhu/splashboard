@@ -1,13 +1,14 @@
 """Tool names a Splash model can take, and the originals back.
 
-Splash 1.3.2 takes a function tool whose name is 1 to 256 characters in NFC, without
-<, >, line breaks, lone surrogates or surrounding whitespace (`server/tool_schema.py`
-`is_tag_name`, lines 42-62, checked in `normalize_tools`, lines 896-898). A namespace
-tool's child goes by `<namespace>__<name>` (`server/api_shapes.py` `_namespace_alias`,
-lines 381-388), and that joined name must follow the same rule. Codex's names (at most
-128 characters for an MCP namespace plus tool name, codex-rs `codex-mcp/src/tools.rs`
-`MAX_TOOL_NAME_LENGTH`) all do, so in practice nothing is renamed; the router still
-guards against a connector name Splash would refuse.
+Splash (1.3.2 and later) takes a function tool whose name is 1 to 256 characters in NFC,
+without <, >, line breaks, lone surrogates or surrounding whitespace
+(`server/tool_schema.py` `is_tag_name`, lines 52-63 at 1.4.0, checked in `normalize_tools`,
+lines 1030-1031). A namespace tool's child goes by `<namespace>__<name>`
+(`server/api_shapes.py` `_namespace_alias`, lines 384-391), and that joined name must
+follow the same rule. Codex's names (at most 128 characters for an MCP namespace plus
+tool name, codex-rs `codex-mcp/src/tools.rs` `MAX_TOOL_NAME_LENGTH`) all do, so in
+practice nothing is renamed; the router still guards against a connector name Splash
+would refuse.
 
 For Splash models the router renames each such name to a valid alias before the request
 reaches the engine, and names every function call in the answer back before Codex sees

@@ -2,7 +2,7 @@
 
 These check the assumptions the rest of the suite takes on faith:
 
-  * the engine is 1.3.2 or a later 1.3.x, inside the supported range;
+  * the engine is 1.4.0 or a later 1.4.x, inside the supported range;
   * `install/serve_options.py` still matches the settings' option map, including that no
     option has appeared that we do not map;
   * `helpers/inspect_model.py` really runs under Splash's own bundled Python and
@@ -110,7 +110,7 @@ def test_the_installed_engine_is_in_the_supported_range() -> None:
 
     info = d.discover(env={"PATH": "/usr/bin:/bin"})
     assert info.found and info.source == "brew"
-    assert info.version is not None and info.version.startswith("1.3."), info.version
+    assert info.version is not None and info.version.startswith("1.4."), info.version
     assert info.support == "supported", info.version
     assert info.pkg is not None and info.pkg.resolve() == SPLASH_PKG.resolve()
     assert info.python is not None and info.python.exists()
@@ -125,6 +125,9 @@ def test_serve_options_still_match_appendix_a() -> None:
     options = EngineOptionsCache().get(discover(env={"PATH": "/usr/bin:/bin"}))
     assert options.available, options.errors
     assert options.unknown() == [], f"the option map is missing: {options.unknown()}"
+    flags = options.by_flag()
+    for flag in ("--expert-memory", "--ple-memory", "--sparse-kv-memory", "--verify-rows"):
+        assert flag in flags and flags[flag].known, flag
 
 
 @needs_engine
@@ -149,6 +152,7 @@ def test_the_bundle_carries_the_modules_the_helper_imports() -> None:
     """`helpers/inspect_model.py` imports these; a rename must fail here, not in use."""
     for module in (
         "install/families.py",
+        "install/gguf.py",
         "install/upstream.py",
         "install/hub.py",
         "install/models.py",

@@ -550,6 +550,14 @@ export type ErrorKind =
   | 'ignore_eos'
   | 'rejected'
   | 'sign_in'
+  // A long request's KV on the SSD cache (Qwen3.8-Flash-Next): the daily write budget is spent,
+  // the cache can't hold it, its earlier KV couldn't be read back, the cache takes no writes, or
+  // other long requests hold its room.
+  | 'kv_write_budget'
+  | 'kv_disk_quota'
+  | 'kv_unreadable'
+  | 'ssd_closed'
+  | 'ssd_wait'
   | 'generic';
 
 export interface ChatError {
@@ -563,6 +571,14 @@ export interface ChatError {
 }
 
 const LATER_SYSTEM = /does not accept system messages after the first/i;
+// capacity_exhausted and resource_timeout whose cause is the SSD cache, not memory.
+const SSD_CLOSED = /which takes no writes/i;
+const SSD_WAIT = /SSD cache's room for active KV/i;
+
+/** When a retry may succeed, as a clock time: "14:05". */
+export function retryClock(seconds: number, now: number = Date.now()): string {
+  return new Date(now + seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
 
 export function classifyError(err: unknown, ctx: { model?: string | null; active?: string | null } = {}): ChatError {
   const base = { detail: null as string | null, retryAfter: null as number | null, status: null as number | null };
@@ -578,6 +594,17 @@ export function classifyError(err: unknown, ctx: { model?: string | null; active
   if (code === 'model_switch_busy') return { ...common, kind: 'busy', title: t('chat.error.busy', { model: shortModel(ctx.active) || ctx.active || '—' }), body: t('chat.error.busy_body') };
   if (code === 'engine_recovering' || code === 'engine_unavailable') return { ...common, kind: 'recovering', title: t('chat.error.recovering'), body: t('chat.error.not_sent') };
   if (code === 'engine_failed') return { ...common, kind: 'failed', title: t('chat.error.failed'), body: null };
+  if (code === 'kv_write_budget')
+    return {
+      ...common,
+      kind: 'kv_write_budget',
+      title: t('chat.error.kv_write_budget'),
+      body: err.retryAfter ? t('chat.error.kv_write_budget_body', { time: retryClock(err.retryAfter) }) : t('chat.error.kv_write_budget_later'),
+    };
+  if (code === 'kv_disk_quota') return { ...common, kind: 'kv_disk_quota', title: t('chat.error.kv_disk_quota'), body: t('chat.error.kv_disk_quota_body') };
+  if (code === 'kv_unreadable') return { ...common, kind: 'kv_unreadable', title: t('chat.error.kv_unreadable'), body: t('chat.error.kv_unreadable_body') };
+  if (code === 'capacity_exhausted' && SSD_CLOSED.test(err.message)) return { ...common, kind: 'ssd_closed', title: t('chat.error.ssd_closed'), body: t('chat.error.ssd_closed_body') };
+  if (code === 'resource_timeout' && SSD_WAIT.test(err.message)) return { ...common, kind: 'ssd_wait', title: t('chat.error.ssd_wait'), body: t('chat.error.ssd_wait_body') };
   if (code === 'capacity_exhausted') return { ...common, kind: 'capacity', title: t('chat.error.capacity'), body: t('chat.error.capacity_body') };
   if (code === 'resource_timeout') return { ...common, kind: 'resource_timeout', title: t('chat.error.resource_timeout'), body: t('chat.error.resource_timeout_body') };
   if (status === 504 || code === 'request_timeout') return { ...common, kind: 'request_timeout', title: t('chat.error.request_timeout'), body: null };
@@ -595,9 +622,14 @@ export function classifyError(err: unknown, ctx: { model?: string | null; active
   return { ...common, kind: 'generic', title: t('chat.error.generic'), body: null };
 }
 
-/** Kinds that retry by themselves after `Retry-After` (at most 3 times). */
+/** Kinds that retry by themselves after `Retry-After` (at most `maxAutoRetries` times). KV that
+ * couldn't be read back from the SSD is computed again on a retry, so once is enough. */
 export function autoRetry(kind: ErrorKind): boolean {
-  return kind === 'busy' || kind === 'recovering' || kind === 'queue_full';
+  return kind === 'busy' || kind === 'recovering' || kind === 'queue_full' || kind === 'kv_unreadable';
 }
 
 export const MAX_AUTO_RETRIES = 3;
+
+export function maxAutoRetries(kind: ErrorKind): number {
+  return kind === 'kv_unreadable' ? 1 : MAX_AUTO_RETRIES;
+}

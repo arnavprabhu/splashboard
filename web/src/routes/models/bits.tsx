@@ -3,9 +3,10 @@ import { Tag } from '../../components/Tag';
 import { formatBytes } from '../../lib/format';
 import { t } from '../../strings/models';
 
-export type Fit = 'fits' | 'tight' | 'wont_fit' | null;
+export type Fit = 'fits' | 'tight' | 'streams' | 'wont_fit' | null;
 
-/** Fits · Tight · Won't fit. Won't fit is mute, never accent. */
+/** Fits · Tight · Streams from SSD · Won't fit. Streaming runs but slower, so it is ink, never
+ * accent; Won't fit is mute. */
 export function FitTag({ fit, needBytes, memoryBytes }: { fit: Fit; needBytes?: number | null; memoryBytes?: number | null }) {
   if (!fit) return null;
   if (fit === 'fits') return <Tag tone="ink">{t('models.fit.fits')}</Tag>;
@@ -14,6 +15,14 @@ export function FitTag({ fit, needBytes, memoryBytes }: { fit: Fit; needBytes?: 
     return (
       <Tag tone="ink" title={title}>
         {t('models.fit.tight')}
+      </Tag>
+    );
+  }
+  if (fit === 'streams') {
+    const title = memoryBytes ? t('models.fit.streams_help', { ram: formatBytes(memoryBytes) }) : undefined;
+    return (
+      <Tag tone="ink" title={title}>
+        {t('models.fit.streams')}
       </Tag>
     );
   }

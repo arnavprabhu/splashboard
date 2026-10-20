@@ -178,32 +178,32 @@ def releases(tag: str, body: str = "Notes") -> httpx.MockTransport:
 def test_check_finds_a_newer_release(app: FastAPI, client: TestClient) -> None:
     updates = app.state.manager.updates
     updates.find_brew = lambda: None
-    updates.transport = releases("v1.4.0", "## What's new")
+    updates.transport = releases("v1.4.1", "## What's new")
     info = client.post("/api/admin/engine/check-update").json()
-    assert info["available"] is True and info["version"] == "1.4.0"
+    assert info["available"] is True and info["version"] == "1.4.1"
     assert info["release_notes_md"] == "## What's new" and info["checked_at"]
-    assert client.get("/api/admin/versions").json()["engine_update"]["version"] == "1.4.0"
+    assert client.get("/api/admin/versions").json()["engine_update"]["version"] == "1.4.1"
     alerts = client.get("/api/admin/alerts").json()["alerts"]
     alert = next(a for a in alerts if a["condition"] == "update_available")
-    assert alert["severity"] == "info" and "1.4.0" in alert["title"]
+    assert alert["severity"] == "info" and "1.4.1" in alert["title"]
 
 
 def test_check_same_or_older_is_not_an_update(app: FastAPI, client: TestClient) -> None:
     updates = app.state.manager.updates
     updates.find_brew = lambda: None
-    updates.transport = releases("v1.3.2")
+    updates.transport = releases("v1.4.0")
     info = client.post("/api/admin/engine/check-update").json()
     assert info["available"] is False and info["version"] is None
 
 
 def test_check_prefers_brew_outdated(app: FastAPI, client: TestClient, tmp_path: Path) -> None:
-    outdated = {"formulae": [{"name": "splash", "current_version": "1.3.5"}]}
+    outdated = {"formulae": [{"name": "splash", "current_version": "1.4.5"}]}
     brew = write_script(tmp_path / "brew", f"echo '{json.dumps(outdated)}'\n")
     updates = app.state.manager.updates
     updates.find_brew = lambda: str(brew)
-    updates.transport = releases("v1.4.0")
+    updates.transport = releases("v1.4.1")
     info = client.post("/api/admin/engine/check-update").json()
-    assert info["version"] == "1.3.5", "brew knows what the tap actually ships"
+    assert info["version"] == "1.4.5", "brew knows what the tap actually ships"
 
 
 def test_check_offline_is_harmless(app: FastAPI, client: TestClient) -> None:
@@ -283,4 +283,4 @@ def test_install_runs_brew_install(app: FastAPI, client: TestClient, tmp_path: P
     job = wait_job(client, client.post("/api/admin/engine/install").json()["job_id"])
     assert job["state"] == "done", job
     assert log.read_text().strip() == "install incoai/tap/splash"
-    assert job["message"].startswith("Splash 1.3.2")
+    assert job["message"].startswith("Splash 1.4.0")

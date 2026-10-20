@@ -1271,6 +1271,15 @@ def test_gateway_routes_messages_to_the_active_model(harness_factory, fake_home,
         entry = models["data"][0]
         assert entry["type"] == "model" and entry["display_name"] == MODEL
         assert entry["anthropic_family_tier"] in ("fable", "opus", "sonnet", "haiku")
+        # Each slot reports the engine's context, which may pass 256K with YaRN.
+        assert entry["max_tokens"] == 262144
+        listed = h.state.proxy.models_list
+        h.state.proxy.models_list = lambda: {"data": [{"id": MODEL, "context_length": 1_000_000}]}
+        try:
+            contexts = {m["max_tokens"] for m in httpx.get(base + "/v1/models").json()["data"]}
+        finally:
+            h.state.proxy.models_list = listed
+        assert contexts == {1_000_000}
         reply = httpx.post(
             base + "/v1/messages",
             json={

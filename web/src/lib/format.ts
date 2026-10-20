@@ -131,9 +131,10 @@ export function formatDate(when: Date | number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-/** Context sizes: 131072 -> "128K", 1000 -> "1,000". */
+/** Context sizes: 131072 -> "128K", 1000000 -> "1M" (Splash's M is 1,000,000 tokens), 1000 -> "1,000". */
 export function formatTokens(tokens: Num): string {
   if (!isNum(tokens)) return DASH;
+  if (tokens >= 1_000_000 && tokens % 1_000_000 === 0) return `${tokens / 1_000_000}M`;
   if (tokens >= 1024 && tokens % 1024 === 0) return `${tokens / 1024}K`;
   return formatCount(tokens);
 }

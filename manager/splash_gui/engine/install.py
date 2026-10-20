@@ -3,16 +3,16 @@
 Splash's launcher runs the installer when the selection is missing, damaged or has
 moved to a new commit. For each repository with files to fetch it prints
 `Fetching N file(s), X GB, from REPO@REV12; cached files are reused.`
-(splash/install/hub.py:352 `Repository.download`, X = the uncached files' bytes / 1e9
-to two places) and then calls `snapshot_download` with four workers (hub.py:357-362),
+(splash/install/hub.py:363 `Repository.download`, X = the uncached files' bytes / 1e9
+to two places) and then calls `snapshot_download` with four workers (hub.py:368-373),
 so several partials grow at once. The draft's repository is fetched first and the
-target's after it (install/upstream.py `_install`: `_draft(...)` at :428 downloads the
-draft through `_draft_files` → `repo.download` at :586, before
-`repo.download(target.files)` at :435); a vision tower or projector lives in the
-target repository (upstream.py:159-161, :204-210), so it is part of the target's
-line. Each line starts a new tracker: progress is per repository,
-in the order Splash fetches them (`EngineView.install`). Splash prints no progress of
-its own, so the manager measures it from the Hub cache, as the Downloader does:
+target's after it (install/upstream.py `_install`: `_draft(...)` at :591 downloads the
+draft through `draft_files` → `repo.download` at :802, before
+`repo.download(target.files)` at :598); a vision tower or projector lives in the
+target repository, so it is part of the target's line. Each line starts a new
+tracker: progress is per repository, in the order Splash fetches them
+(`EngineView.install`). Splash prints no progress of its own, so the manager
+measures it from the Hub cache, as the Downloader does:
 bytes in the per-process `<etag>.<uuid8>.incomplete` partials this run
 created, plus blobs completed since the line.
 

@@ -63,7 +63,7 @@ def call(method, path, body=None):
 
 out = {}
 settings = {
-    "version": 3,
+    "version": 4,
     "global": {
         "server": {"host": "127.0.0.1", "port": port, "allowed_origins": ["*"]},
         "security": {"api_key_required": False, "admin_requires_key": False},

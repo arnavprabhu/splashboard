@@ -127,7 +127,9 @@ def _mean(values: list[float | None]) -> float | None:
 def truncated(request: dict[str, Any]) -> bool:
     """Whether a request generated fewer tokens than it asked for. Splash caps the
     output at the end of the context window the prompt leaves instead of refusing
-    it, and the benchmark ignores EOS, so only that cap stops one early."""
+    it, and from 1.4.0 may end it at its own bound, what the SSD cache's quota or
+    memory holds of the context; the benchmark ignores EOS, so only those stop one
+    early."""
     asked, got = request.get("max_tokens"), request.get("completion_tokens")
     return isinstance(asked, int) and isinstance(got, int) and got < asked
 

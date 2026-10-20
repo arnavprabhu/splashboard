@@ -20,9 +20,19 @@ Severity = Literal["error", "warning"]
 PERSISTENT_NEEDS_CACHE = "--persistent-cache needs the SSD cache --max-cache-disk 0 turns off"
 WRITES_NEED_CACHE = "--max-cache-disk-writes needs the SSD cache --max-cache-disk 0 turns off"
 STATE_BF16_TRADEOFF = "Results differ from fp32 in the last bits"
+# A context past the native window turns on YaRN (splash/DEVELOPMENT.md "Memory and
+# context"); a block-sparse model's context also follows the SSD cache's volume.
+YARN_TRADEOFF = (
+    "Past 256K Splash turns on YaRN, which is static: it changes answers at every "
+    "length, and each such context keeps its own persistent cache. A "
+    "Qwen3.8-Flash-Next model's context also follows the free space of the SSD "
+    "cache's disk"
+)
+# Splash ignores --sparse-kv-memory without the SSD cache, where no KV spills.
+SPARSE_KV_NEEDS_CACHE = "Ignored with the SSD cache off: no KV goes to the SSD"
 
 # One state's size: a quota below it leaves the SSD cache off (splash/DEVELOPMENT.md
-# "SSD cache", 1.3.2).
+# "SSD cache"). The docs give no size for Qwen3.8-Flash-Next's state.
 MIN_USEFUL_CACHE_DISK = {"Qwen3.6-35B-A3B": 64 * 1024**2, "Qwen3.8-27B": 153 * 1024**2}
 
 # Flags the GUI sets itself; `engine.extra_flags` may not repeat them.
@@ -44,6 +54,10 @@ MANAGED_FLAGS = frozenset(
         "--thinking-end-text",
         "--kv-format",
         "--state-format",
+        "--expert-memory",
+        "--ple-memory",
+        "--sparse-kv-memory",
+        "--verify-rows",
         "--max-memory",
         "--max-cache-disk",
         "--max-cache-disk-writes",
@@ -154,6 +168,15 @@ def validate_document(raw: Any, context: ValidationContext | None = None) -> Val
     )
 
 
+def _is_yarn(max_context: Any) -> bool:
+    """A context limit past the native window, which turns on YaRN."""
+    try:
+        tokens = p.parse_max_context(str(max_context))
+    except ValueError:
+        return False
+    return tokens is not None and tokens > p.MAX_CONTEXT_TOKENS
+
+
 def cross_field_issues(doc: SettingsDocument, context: ValidationContext) -> Iterable[Issue]:
     g = doc.global_
     serve = g.serve
@@ -192,6 +215,18 @@ def cross_field_issues(doc: SettingsDocument, context: ValidationContext) -> Ite
             STATE_BF16_TRADEOFF,
             severity="warning",
             code="tradeoff",
+        )
+
+    if _is_yarn(serve.max_context):
+        yield Issue(
+            ("global", "serve", "max_context"), YARN_TRADEOFF, severity="warning", code="yarn"
+        )
+    if cache_bytes == 0 and p.parse_sparse_kv_memory(serve.sparse_kv_memory) is not None:
+        yield Issue(
+            ("global", "serve", "sparse_kv_memory"),
+            SPARSE_KV_NEEDS_CACHE,
+            severity="warning",
+            code="ignored",
         )
 
     if not p.is_loopback_host(g.server.host):
@@ -306,4 +341,16 @@ def _model_issues(doc: SettingsDocument, model_id: str) -> Iterable[Issue]:
     if state.source == "model" and state.value == "bf16":
         yield Issue(
             (*base, "state_format"), STATE_BF16_TRADEOFF, severity="warning", code="tradeoff"
+        )
+    context = values["serve.max_context"]
+    if context.source == "model" and _is_yarn(context.value):
+        yield Issue((*base, "max_context"), YARN_TRADEOFF, severity="warning", code="yarn")
+    sparse = values["serve.sparse_kv_memory"]
+    if (
+        sparse.source == "model"
+        and p.parse_max_cache_disk(doc.global_.serve.max_cache_disk) == 0
+        and p.parse_sparse_kv_memory(str(sparse.value)) is not None
+    ):
+        yield Issue(
+            (*base, "sparse_kv_memory"), SPARSE_KV_NEEDS_CACHE, severity="warning", code="ignored"
         )

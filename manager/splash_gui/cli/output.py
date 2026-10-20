@@ -261,9 +261,11 @@ def fmt_ms(ms: Any) -> str:
 
 
 def fmt_tokens(tokens: Any) -> str:
-    """Context sizes: 131072 → `128K` (K = 1024)."""
+    """Context sizes: 131072 → `128K` (K = 1024), 1000000 → `1M`."""
     if not _num(tokens):
         return DASH
+    if tokens >= 1_000_000 and tokens % 1_000_000 == 0:
+        return f"{int(tokens) // 1_000_000}M"
     if tokens >= 1024 and tokens % 1024 == 0:
         return f"{int(tokens) // 1024}K"
     return fmt_count(tokens)

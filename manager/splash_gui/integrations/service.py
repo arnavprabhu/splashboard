@@ -73,6 +73,8 @@ SPLASH_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 # The input modalities Codex's model catalog accepts. It refuses the whole
 # catalog over any other, and Splash lists "pdf" for a vision model.
 CODEX_MODALITIES = ("text", "image", "audio")
+# The models' native window: the context a client is told when /v1/models gives none.
+DEFAULT_CONTEXT = 262144
 
 
 def _version_key(text: str | None) -> tuple[int, ...]:
@@ -560,8 +562,8 @@ class IntegrationsService:
                         "slug": model["id"],
                         "display_name": model["id"],
                         "description": "Splash local model",
-                        "context_window": model.get("context_length", 262144),
-                        "max_context_window": model.get("context_length", 262144),
+                        "context_window": model.get("context_length", DEFAULT_CONTEXT),
+                        "max_context_window": model.get("context_length", DEFAULT_CONTEXT),
                         "input_modalities": [
                             m
                             for m in model.get("input_modalities", ["text"])
@@ -861,13 +863,22 @@ class IntegrationsService:
         @app.get("/v1/models")
         def models() -> dict[str, Any]:
             slots = self.state.settings.current.global_.integrations.claude_desktop.slots
+            active = self.state.active_model()
+            # The engine's context for each name it serves (/v1/models context_length),
+            # which past 256K turns on YaRN, up to 1,010,000 tokens.
+            contexts = {
+                str(m.get("id")): m["context_length"]
+                for m in self.state.proxy.models_list()["data"]
+                if isinstance(m.get("context_length"), int)
+            }
+            fallback = contexts.get(active or "", DEFAULT_CONTEXT)
             entries = [
                 {
                     "id": slot,
                     "type": "model",
-                    "display_name": target or self.state.active_model() or "Splash",
+                    "display_name": target or active or "Splash",
                     "created_at": "2026-10-03T00:00:00Z",
-                    "max_tokens": 262144,
+                    "max_tokens": contexts.get(target or "", fallback),
                     "anthropic_family_tier": slot.split("-")[1],
                     "is_family_default": True,
                 }
@@ -1015,7 +1026,7 @@ class IntegrationsService:
         entry: dict[str, Any] = next((m for m in listing if m.get("id") == chosen), {})
         context = entry.get("context_length")
         if not isinstance(context, int) or context <= 0:
-            context = 262144
+            context = DEFAULT_CONTEXT
         engine = self.state.engine_cached()
         exact_ok = (
             client in ("claude", "codex", "opencode")

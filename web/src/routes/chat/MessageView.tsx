@@ -263,7 +263,7 @@ function MetaLine({ m, streaming }: { m: ChatMessage; streaming: boolean }) {
   if (!streaming && meta.finish_reason) {
     const key = `chat.meta.finish.${meta.finish_reason}` as 'chat.meta.finish.stop';
     const label = t(key);
-    items.push({ key: 'finish', text: label === key ? String(meta.finish_reason) : label, tip: t('chat.meta.tip.finish', { v: meta.finish_reason }) });
+    items.push({ key: 'finish', text: label === key ? String(meta.finish_reason) : label, tip: meta.finish_reason === 'length' ? t('chat.meta.tip.finish_length') : t('chat.meta.tip.finish', { v: meta.finish_reason }) });
   }
   if (meta.profile && meta.profile !== 'default') {
     items.push({ key: 'profile', text: meta.profile, tip: t('chat.meta.tip.profile', { v: meta.profile, id: meta.model ?? '' }) });

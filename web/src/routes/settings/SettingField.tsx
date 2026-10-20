@@ -24,7 +24,7 @@ import {
   type SettingSource,
 } from '../../components';
 import { formatBytes, formatPercent, formatTokens } from '../../lib/format';
-import { parseMaxContext, parseMaxMemory, type SizeKind } from '../../lib/size';
+import { MAX_CONTEXT_TOKENS, parseMaxContext, parseMaxMemory, type SizeKind } from '../../lib/size';
 import { t } from '../../strings/settings';
 import { deepEqual, UNSET, type FieldRef } from './form';
 import type { SettingsForm } from './state';
@@ -60,12 +60,28 @@ const SIZE_KIND: Readonly<Record<string, SizeKind>> = {
   'serve.max_cache_disk': 'max-cache-disk',
   'serve.max_cache_disk_writes': 'max-cache-disk-writes',
   'serve.max_request_size': 'request-size',
+  'serve.expert_memory': 'expert-memory',
+  'serve.ple_memory': 'ple-memory',
+  'serve.sparse_kv_memory': 'sparse-kv-memory',
+};
+
+/** The streamed stores' sizes, whose default is auto. */
+const STORE_KEYS: ReadonlySet<string> = new Set(['serve.expert_memory', 'serve.ple_memory', 'serve.sparse_kv_memory']);
+
+/** The streamed stores whose `off` loads the whole part (SizeInput shows it as 0). */
+const STORE_OFF_TEXT: Readonly<Record<string, Parameters<typeof t>[0]>> = {
+  'serve.expert_memory': 'settings.store_memory.experts_off',
+  'serve.ple_memory': 'settings.store_memory.ple_off',
 };
 
 /** Selects whose `null` value means "not set" (shown as the first option). */
 const NULLABLE_SELECT: ReadonlySet<string> = new Set(['serve.default_reasoning_effort']);
 
-const CONTEXT_TICKS = [4096, 8192, 16384, 32768, 65536, 131072, 262144];
+const CONTEXT_TICKS = [4096, 16384, 65536, 262144, 524288, 1000000];
+/** The slider's ends, as log2 of tokens: 4K, and the top step, which writes 1M. */
+const CONTEXT_LOG_MIN = 12;
+const CONTEXT_LOG_MAX = 20;
+const MILLION = 1000000;
 const GiB = 1024 ** 3;
 
 /** The source chip: saved values come from the effective view; edits compare with the default. */
@@ -129,13 +145,30 @@ export function memoryShare(bytes: number, memoryBytes: number | null | undefine
   return t('settings.memory.footnote', { pct: formatPercent(bytes / memoryBytes, 0), ram: formatBytes(memoryBytes, { digits: 0 }) });
 }
 
+/** A slider tick's label: 1M for a million tokens (Splash's M), 512K and so on below it. */
+export function contextTickLabel(tokens: number): string {
+  return tokens === MILLION ? '1M' : formatTokens(tokens);
+}
+
+/** A context's slider position (log2 of its tokens); a million or more sits at the top step. */
+export function contextToSlider(tokens: number): number {
+  return tokens >= MILLION ? CONTEXT_LOG_MAX : Math.log2(Math.min(MILLION, Math.max(4096, tokens)));
+}
+
+/** The --max-context a slider position writes: whole K below the top, and 1M (a million tokens,
+ * Splash's M) at the top step, which no whole K reaches within Splash's 1,010,000. */
+export function contextFromSlider(log: number): string {
+  if (log >= CONTEXT_LOG_MAX) return '1M';
+  return `${Math.round(2 ** log / 1024)}K`;
+}
+
 /** Auto + slider + text for `serve.max_context`. */
 function ContextControl({ id, describedBy, label, value, set, disabled }: { id: string; describedBy: string; label: string; value: unknown; set: (v: unknown) => void; disabled: boolean }) {
   const text = value === undefined || value === null ? 'auto' : String(value);
   const auto = text.trim().toLowerCase() === 'auto';
   const parsed = parseMaxContext(text);
   const tokens = parsed.ok && parsed.tokens ? parsed.tokens : 131072;
-  const log = Math.log2(Math.min(262144, Math.max(4096, tokens)));
+  const log = contextToSlider(tokens);
   const [draft, setDraft] = useState<string | null>(null);
   return (
     <div class="stack settings-auto" style={{ gap: '10px' }}>
@@ -152,16 +185,15 @@ function ContextControl({ id, describedBy, label, value, set, disabled }: { id: 
         <>
           <Slider
             label={label}
-            min={12}
-            max={18}
+            min={CONTEXT_LOG_MIN}
+            max={CONTEXT_LOG_MAX}
             step={0.5}
             value={log}
             disabled={disabled}
             valueText={formatTokens(tokens)}
-            ticks={CONTEXT_TICKS.map((v) => ({ value: Math.log2(v), label: formatTokens(v) }))}
+            ticks={CONTEXT_TICKS.map((v) => ({ value: contextToSlider(v), label: contextTickLabel(v) }))}
             onChange={(v) => {
-              const n = Math.round(2 ** v / 1024) * 1024;
-              const k = `${Math.round(n / 1024)}K`;
+              const k = contextFromSlider(v);
               setDraft(k);
               set(k);
             }}
@@ -180,6 +212,7 @@ function ContextControl({ id, describedBy, label, value, set, disabled }: { id: 
             }}
           />
           {parsed.ok && parsed.tokens !== null && <p class="meta tnum">{t('settings.context.footnote', { tokens: parsed.tokens.toLocaleString('en-US') })}</p>}
+          {parsed.ok && parsed.tokens !== null && parsed.tokens > MAX_CONTEXT_TOKENS && <p class="meta">{t('settings.context.yarn_note')}</p>}
         </>
       )}
       {auto && <p class="meta">{t('settings.context.auto_note')}</p>}
@@ -376,6 +409,9 @@ export function SettingField(props: SettingFieldProps) {
         if (field.key === 'serve.max_cache_disk') return <CacheDiskControl id={ids.id} describedBy={ids.describedBy} value={shown} set={set} disabled={disabled} />;
         if (field.key === 'serve.max_cache_disk_writes')
           return <SizeInput {...common} kind={kind} class="mono settings-short" value={String(shown ?? '0')} zeroText={t('settings.cache_disk.no_limit')} onChange={(v) => set(v)} />;
+        const offText = STORE_OFF_TEXT[field.key];
+        if (STORE_KEYS.has(field.key))
+          return <SizeInput {...common} kind={kind} class="mono settings-short" value={String(shown ?? 'auto')} zeroText={offText ? t(offText) : undefined} onChange={(v) => set(v)} />;
         return <SizeInput {...common} kind={kind} class="mono settings-short" value={String(shown ?? '')} onChange={(v) => set(v)} />;
       }
       case 'context':

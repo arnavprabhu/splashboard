@@ -2112,6 +2112,8 @@ export interface components {
             max_new_tokens?: number | null;
             /** Age Ms */
             age_ms?: number | null;
+            /** Kv Mode */
+            kv_mode?: ("resident" | "spill") | null;
         };
         /** AdvancedSettings */
         AdvancedSettings: {
@@ -2129,7 +2131,7 @@ export interface components {
              * Condition
              * @enum {string}
              */
-            condition: "engine_recovering" | "engine_failed" | "crash_loop" | "memory_critical" | "memory_warning" | "capacity_exhausted" | "resource_timeout" | "disk_tier_failures" | "write_behind_refused" | "disk_write_budget" | "queue_full" | "mask_timeout" | "download_failed" | "download_done" | "update_available" | "schema_unrecognized" | "unclean_integration_shutdown";
+            condition: "engine_recovering" | "engine_failed" | "crash_loop" | "memory_critical" | "memory_warning" | "capacity_exhausted" | "resource_timeout" | "disk_tier_failures" | "write_behind_refused" | "disk_write_budget" | "kv_disk_quota" | "expert_streaming_failed" | "queue_full" | "mask_timeout" | "download_failed" | "download_done" | "update_available" | "schema_unrecognized" | "unclean_integration_shutdown";
             /**
              * Severity
              * @enum {string}
@@ -2368,7 +2370,7 @@ export interface components {
              * Family
              * @enum {string}
              */
-            family: "Qwen3.8-27B" | "Qwen3.6-35B-A3B";
+            family: "Qwen3.8-27B" | "Qwen3.6-35B-A3B" | "Qwen3.8-Flash-Next";
             /**
              * Format
              * @enum {string}
@@ -2387,7 +2389,7 @@ export interface components {
             /** Memory Need Bytes */
             memory_need_bytes?: number | null;
             /** Fit */
-            fit?: ("fits" | "tight" | "wont_fit") | null;
+            fit?: ("fits" | "tight" | "streams" | "wont_fit") | null;
             /** Vision */
             vision?: boolean | null;
             /** License */
@@ -2417,7 +2419,7 @@ export interface components {
              * Family
              * @enum {string}
              */
-            family: "Qwen3.8-27B" | "Qwen3.6-35B-A3B";
+            family: "Qwen3.8-27B" | "Qwen3.6-35B-A3B" | "Qwen3.8-Flash-Next";
             /** Label */
             label: string;
             /** Groups */
@@ -2801,6 +2803,8 @@ export interface components {
             writes_gated?: ("no" | "budget" | "closed") | null;
             /** Write Budget Bytes */
             write_budget_bytes?: number | null;
+            /** Writes Deferred Ms */
+            writes_deferred_ms?: number | null;
         };
         /** DiskUsage */
         DiskUsage: {
@@ -3085,7 +3089,7 @@ export interface components {
             support: "supported" | "untested" | "too_old" | "unknown";
             /**
              * Supported Range
-             * @default >=1.3.2 <1.4.0
+             * @default >=1.4.0 <1.5.0
              */
             supported_range: string;
             /** Banner */
@@ -3151,7 +3155,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "disk_cache_off" | "persistent_cache_off" | "hub_unreachable" | "new_commit_not_installed" | "weights_restored" | "schema_unrecognized" | "other";
+            kind: "disk_cache_off" | "persistent_cache_off" | "hub_unreachable" | "new_commit_not_installed" | "weights_restored" | "schema_unrecognized" | "setting_ignored" | "yarn_on" | "persistent_cache_emptied" | "other";
             /** Message */
             message: string;
             /** Raw */
@@ -3218,7 +3222,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "lower_max_context" | "language_only" | "raise_max_memory" | "smaller_variant" | "enable_ssd_cache" | "add_hf_token" | "retry" | "go_offline" | "open_logs" | "restart_engine";
+            action: "lower_max_context" | "language_only" | "raise_max_memory" | "smaller_variant" | "enable_ssd_cache" | "add_hf_token" | "retry" | "go_offline" | "open_logs" | "restart_engine" | "reset_setting";
             /** Label */
             label: string;
             /** Patch */
@@ -3274,6 +3278,12 @@ export interface components {
             vision?: boolean | null;
             /** Draft */
             draft?: string | null;
+            /** Yarn Factor */
+            yarn_factor?: number | null;
+            /** Context Bound */
+            context_bound?: ("model" | "memory" | "disk") | null;
+            /** Verify Rows */
+            verify_rows?: ("auto" | "all") | null;
             /** Status Schema Version */
             status_schema_version?: number | null;
             /**
@@ -3372,6 +3382,27 @@ export interface components {
              * @enum {string}
              */
             state_format: "fp32" | "bf16";
+            /**
+             * Expert Memory
+             * @default auto
+             */
+            expert_memory: string;
+            /**
+             * Ple Memory
+             * @default auto
+             */
+            ple_memory: string;
+            /**
+             * Sparse Kv Memory
+             * @default auto
+             */
+            sparse_kv_memory: string;
+            /**
+             * Verify Rows
+             * @default auto
+             * @enum {string}
+             */
+            verify_rows: "auto" | "all";
             /**
              * Max Cache Disk
              * @default auto
@@ -3529,7 +3560,7 @@ export interface components {
              */
             kind: "model" | "draft";
             /** Family */
-            family?: ("Qwen3.8-27B" | "Qwen3.6-35B-A3B") | null;
+            family?: ("Qwen3.8-27B" | "Qwen3.6-35B-A3B" | "Qwen3.8-Flash-Next") | null;
         };
         /** ImportCandidates */
         ImportCandidates: {
@@ -3562,7 +3593,7 @@ export interface components {
              */
             badge: "compatible" | "text_only" | "incompatible" | "not_clef_accurate" | "checking";
             /** Family */
-            family?: ("Qwen3.8-27B" | "Qwen3.6-35B-A3B") | null;
+            family?: ("Qwen3.8-27B" | "Qwen3.6-35B-A3B" | "Qwen3.8-Flash-Next") | null;
             /** Format */
             format?: ("mlx" | "gguf" | "legacy") | null;
             /** Checkpoint */
@@ -3585,7 +3616,7 @@ export interface components {
             /** Memory Need Bytes */
             memory_need_bytes?: number | null;
             /** Fit */
-            fit?: ("fits" | "tight" | "wont_fit") | null;
+            fit?: ("fits" | "tight" | "streams" | "wont_fit") | null;
             /**
              * Cached
              * @default false
@@ -3605,7 +3636,7 @@ export interface components {
             /** Variant */
             variant?: string | null;
             /** Family */
-            family?: ("Qwen3.8-27B" | "Qwen3.6-35B-A3B") | null;
+            family?: ("Qwen3.8-27B" | "Qwen3.6-35B-A3B" | "Qwen3.8-Flash-Next") | null;
             /**
              * Format
              * @enum {string}
@@ -4159,7 +4190,7 @@ export interface components {
             /** Variant */
             variant?: string | null;
             /** Family */
-            family?: ("Qwen3.8-27B" | "Qwen3.6-35B-A3B") | null;
+            family?: ("Qwen3.8-27B" | "Qwen3.6-35B-A3B" | "Qwen3.8-Flash-Next") | null;
             /**
              * Format
              * @enum {string}
@@ -4301,6 +4332,17 @@ export interface components {
              * @enum {string}
              */
             state_format?: "fp32" | "bf16";
+            /** Expert Memory */
+            expert_memory?: string;
+            /** Ple Memory */
+            ple_memory?: string;
+            /** Sparse Kv Memory */
+            sparse_kv_memory?: string;
+            /**
+             * Verify Rows
+             * @enum {string}
+             */
+            verify_rows?: "auto" | "all";
             /** Max Context */
             max_context?: string;
             /** Decode Share */
@@ -4830,7 +4872,7 @@ export interface components {
         SettingsDocument: {
             /**
              * Version
-             * @default 3
+             * @default 4
              */
             version: number;
             global?: components["schemas"]["GlobalSettings"];
@@ -5494,7 +5536,7 @@ export interface components {
             /** Reason */
             reason?: string | null;
             /** Fit */
-            fit?: ("fits" | "tight" | "wont_fit") | null;
+            fit?: ("fits" | "tight" | "streams" | "wont_fit") | null;
             /**
              * Recommended
              * @default false
@@ -5684,7 +5726,7 @@ export interface components {
             /** Id */
             id: string;
             /** Kind */
-            kind: ("engine_recovering" | "engine_failed" | "crash_loop" | "memory_critical" | "memory_warning" | "capacity_exhausted" | "resource_timeout" | "disk_tier_failures" | "write_behind_refused" | "disk_write_budget" | "queue_full" | "mask_timeout" | "download_failed" | "download_done" | "update_available" | "schema_unrecognized" | "unclean_integration_shutdown") | "info";
+            kind: ("engine_recovering" | "engine_failed" | "crash_loop" | "memory_critical" | "memory_warning" | "capacity_exhausted" | "resource_timeout" | "disk_tier_failures" | "write_behind_refused" | "disk_write_budget" | "kv_disk_quota" | "expert_streaming_failed" | "queue_full" | "mask_timeout" | "download_failed" | "download_done" | "update_available" | "schema_unrecognized" | "unclean_integration_shutdown") | "info";
             /** Title */
             title: string;
             /** Body */

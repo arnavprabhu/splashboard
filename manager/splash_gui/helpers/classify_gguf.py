@@ -1,9 +1,11 @@
 """Run under Splash's bundled Python, never imported by the manager.
 
-Reads loose GGUF headers and says which model family each is, using Splash 1.3.0's
-own reader and the engine's `model-check` (`install/gguf.py`, `upstream.check_model`),
-the same steps `upstream._gguf_target` takes, so a file is accepted here exactly when
-`splash serve` would accept it. stdin: {"paths": [...]}; stdout:
+Reads loose GGUF headers and says which model family each is, using Splash's own
+reader and the engine's `model-check` (`install/gguf.py`, `upstream.check_model`),
+the same steps `upstream.gguf_target` takes, so a file is accepted here exactly when
+`splash serve` would accept it. A split GGUF is read as one model from all of its
+parts, in split order, as Splash merges them (`gguf.merged_split`). stdin:
+{"paths": [PATH | [PART, ...], ...]}; stdout, by the path or the first part:
 {path: {"family", "draft_repo", "architecture", "name"} | {"error"}}.
 """
 
@@ -17,7 +19,7 @@ from typing import Any
 def family_of(metadata: Any) -> Any:
     """The family the engine finds a GGUF to describe: the derived config and the
     scalar metadata are written to files and handed to the engine's `model-check`,
-    as `upstream._gguf_target` does (splash/install/upstream.py:179-204)."""
+    as `upstream.gguf_target` does."""
     from install import gguf, models, upstream  # type: ignore[import-not-found]
 
     with tempfile.TemporaryDirectory(prefix="splash-gui-classify-") as scratch:
@@ -28,11 +30,12 @@ def family_of(metadata: Any) -> Any:
         return upstream.check_model("gguf", "none", config, gguf_metadata=scalars)
 
 
-def classify(path: str) -> dict[str, object]:
+def classify(paths: list[str]) -> dict[str, object]:
     from install import gguf, models  # type: ignore[import-not-found,unused-ignore]
 
     try:
-        metadata = gguf.Metadata(path, tensors=True)
+        headers = [gguf.Metadata(path, tensors=True) for path in paths]
+        metadata = gguf.merged_split(headers) if len(headers) > 1 else headers[0]
         family = family_of(metadata)
         gguf.require_loadable(metadata)  # the same check `splash serve` makes (upstream.py)
     except models.ModelError as error:
@@ -48,11 +51,12 @@ def classify(path: str) -> dict[str, object]:
 def main() -> None:
     spec = json.load(sys.stdin)
     out = {}
-    for path in spec["paths"]:
+    for entry in spec["paths"]:
+        paths = [entry] if isinstance(entry, str) else list(entry)
         try:
-            out[path] = classify(path)
+            out[paths[0]] = classify(paths)
         except Exception as error:
-            out[path] = {"error": f"{type(error).__name__}: {error}"}
+            out[paths[0]] = {"error": f"{type(error).__name__}: {error}"}
     json.dump(out, sys.stdout)
 
 

@@ -116,7 +116,7 @@ def test_global_options_before_the_command_are_ours_not_the_engines(
     code, out, _ = run(capsys, "ls", "--json", "--port=8124")
     assert code == 0 and ports[-1] == 8124 and json.loads(out)[0]["id"] == MODEL
     code, out, _ = run(capsys, "--color", "never", "-q", "version", "--json")
-    assert code == 0 and json.loads(out)["engine"] == "1.3.2"
+    assert code == 0 and json.loads(out)["engine"] == "1.4.0"
     assert execs == []
 
 
@@ -494,7 +494,7 @@ def test_doctor_works_without_the_manager(
         cli_module,
         "discover",
         lambda *a, **k: EngineInfo(
-            found=True, cli=Path("/x/bin/splash"), version="1.3.2", support="supported"
+            found=True, cli=Path("/x/bin/splash"), version="1.4.0", support="supported"
         ),
     )
     real = cli_module.Client
@@ -507,7 +507,7 @@ def test_doctor_works_without_the_manager(
     code, out, _ = run(capsys, "doctor")
     assert code == 0
     assert "! Not running" in out and "Fix: splash start" in out
-    assert "✓ Splash 1.3.2 · /x/bin/splash" in out
+    assert "✓ Splash 1.4.0 · /x/bin/splash" in out
 
 
 # 5. config get with no key --------------------------------------------------------------
@@ -560,7 +560,7 @@ def test_version_is_human_readable_unless_json(
     make()
     code, out, _ = run(capsys, "version")
     assert code == 0 and not out.lstrip().startswith("{")
-    assert out.startswith(f"Splashboard {__version__} · manager {__version__} · Splash 1.3.2")
+    assert out.startswith(f"Splashboard {__version__} · manager {__version__} · Splash 1.4.0")
     code, out, _ = run(capsys, "version", "--json")
     assert set(json.loads(out)) == {"gui", "manager", "engine", "engine_path", "status_schema"}
 
@@ -589,7 +589,7 @@ def test_launch_print_never_loads_a_model(
         code, out, err = run(capsys, *argv)
         assert code == 0, err
         assert json.loads(calls[-1]["SPLASH_GUI_CLIENT_SPEC"])["model"] == MODEL
-        assert out.startswith("# splash launch claude --print  (Splash 1.3.2 launcher")
+        assert out.startswith("# splash launch claude --print  (Splash 1.4.0 launcher")
         assert "not loaded now" in out
     assert not [s for s in seen if s[0] != "GET"], seen
     assert h.engine()["state"] == "stopped"
@@ -740,6 +740,7 @@ def test_formatters_match_the_web() -> None:
     assert output.fmt_duration(7500) == "2 h 05 m"
     assert output.fmt_duration(3 * 86400 + 4 * 3600) == "3 d 4 h"
     assert output.fmt_tokens(131072) == "128K"
+    assert output.fmt_tokens(1_000_000) == "1M"
     assert output.fmt_tps(74.24) == "74.2 tok/s" and output.fmt_tps(3912) == "3,912 tok/s"
     assert output.fmt_ms(310) == "310 ms" and output.fmt_ms(1240) == "1.24 s"
     assert output.fmt_percent(0.875) == "87.5%"

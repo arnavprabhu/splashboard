@@ -174,7 +174,10 @@ describe('SizeInput', () => {
     const input = screen.getByRole('textbox') as HTMLInputElement;
     fireEvent.input(input, { target: { value: '0' } });
     expect(screen.getByText('Disabled')).toBeTruthy();
+    // A fraction before a unit is a size from Splash 1.4.0; a signed one is not.
     fireEvent.input(input, { target: { value: '1.5G' } });
+    expect(screen.getByText('= 1.5 GB')).toBeTruthy();
+    fireEvent.input(input, { target: { value: '-1G' } });
     expect(screen.getByText('use auto, 0 to disable, or a size such as 16G')).toBeTruthy();
     expect(input.getAttribute('aria-invalid')).toBe('true');
   });

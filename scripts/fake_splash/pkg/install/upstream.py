@@ -1,20 +1,23 @@
 # Derived from Splash (github.com/incoai/splash, Apache-2.0), modified by the Splashboard authors.
 # See LICENSE.splash and NOTICE in scripts/fake_splash.
-"""Small compatibility stand-in for splash/install/upstream.py (1.3.2).
+"""Small compatibility stand-in for splash/install/upstream.py (1.4.0).
 
 Mirrors its `Target`, `check_model` and the screening order of
 `inspect_target(repo, variant, language_only, scratch)`: a GGUF's variant must be
-selected and loadable, a safetensors checkpoint must be quantized in a format the
-kernels hold (MLX's, or NVFP4 or FP8 from Model Optimizer or compressed-tensors), and vision
-needs a usable projector. The real `check_model` runs the engine's `model-check`;
-the fake has no engine, so `signatures.check` stands in for it, and an unsupported
-config fails here rather than in the manager.
+selected (one root file, or a split GGUF's parts in a folder named after the
+variant) and loadable, a safetensors checkpoint must be quantized in a format the
+kernels hold (MLX's, or NVFP4 or FP8 from Model Optimizer or compressed-tensors) and
+be of a family that loads one, and vision needs a usable projector. The real
+`check_model` runs the engine's `model-check`; the fake has no engine, so
+`signatures.check` stands in for it, and an unsupported config fails here rather
+than in the manager.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,25 +38,33 @@ class Target:
 
 
 def check_model(target_format, vision_format, config, *, gguf_metadata=None, draft=None):
-    """The family the "engine" finds config (a path) to describe."""
-    return signatures.check(json.loads(Path(config).read_text()))
+    """The family the "engine" finds config (a path) to describe. A family that
+    loads from a GGUF only refuses any other target with the engine's words
+    (ModelDescriptor.mm describeSourceModel)."""
+    family = signatures.check(json.loads(Path(config).read_text()))
+    if target_format != "gguf" and family.name in signatures.GGUF_ONLY:
+        raise models.ModelError(f"{family.name} loads from a GGUF only")
+    return family
 
 
 def inspect_target(repo, variant, language_only, scratch):
-    if variant is not None or not any(n.endswith(".safetensors") for n in repo.files):
-        return _gguf_target(repo, variant, language_only, Path(scratch))
-    return _mlx_target(repo, language_only, Path(scratch))
+    try:
+        if variant is not None or not any(n.endswith(".safetensors") for n in repo.files):
+            return _gguf_target(repo, variant, language_only, Path(scratch))
+        return mlx_target(repo, language_only, Path(scratch))
+    except models.VisionError as error:
+        raise models.VisionError(f"{error}; use --language-only to serve text only") from None
 
 
 def select_vision(repo):
     """The one vision projector Splash can use, chosen by precision.
 
-    `splash/install/upstream.py select_vision` (1.3.1 on) keeps only a `clip` projector
+    `splash/install/upstream.py select_vision` keeps only a root `clip` projector
     whose tensors are BF16, F32 or F16, preferred in that order.
     """
     usable: dict[str, list[str]] = {"BF16": [], "F32": [], "F16": []}
     found: list[str] = []
-    for name in sorted(n for n in repo.files if "mmproj" in Path(n).stem.lower()):
+    for name in sorted(n for n in root_ggufs(repo.files) if projector_named(n)):
         precision = next((p for p in ("BF16", "F32", "F16") if p in name), None)
         found.append(f"{name} (clip: {precision or 'unknown'})")
         if precision in usable:
@@ -62,33 +73,39 @@ def select_vision(repo):
         if len(usable[precision]) == 1:
             return usable[precision][0]
         if len(usable[precision]) > 1:
-            raise models.ModelError(
-                f"several {precision} vision projectors, "
-                + ", ".join(usable[precision])
-                + ", describe no single tower; use --language-only to serve text only"
+            raise models.VisionError(
+                f"several {precision} vision projectors, " + ", ".join(usable[precision]) + ", describe no single tower"
             )
-    raise models.ModelError(
+    raise models.VisionError(
         "the GGUF repository has no BF16, F32 or F16 vision projector ("
         + ("; ".join(found) or "no GGUF named mmproj")
-        + "); use --language-only to serve text only"
+        + ")"
     )
+
+
+def root_ggufs(files):
+    """The GGUF files at a repository's root; a subfolder's count only as a split
+    GGUF's parts in its VARIANT/ folder (split_gguf)."""
+    return sorted(n for n in files if "/" not in n and n.endswith(".gguf"))
+
+
+def projector_named(name):
+    return "mmproj" in Path(name).stem.lower()
 
 
 def select_gguf(files, variant):
-    """The target GGUF among a repository's root files, and whether it was
-    taken by its -VARIANT ending from several (mirrors
-    splash/install/upstream.py select_gguf).
+    """The target GGUF among a repository's root files, as the list of its files
+    (one, or a split GGUF's parts, split_gguf), and whether it was taken by its
+    -VARIANT ending from several (mirrors splash/install/upstream.py select_gguf).
 
     :VARIANT names the file whose name is the model name all of them share, then
-    -VARIANT; failing that, the only file whose name ends in -VARIANT. Without
-    :VARIANT, the only target GGUF.
+    -VARIANT; failing that, the only file whose name ends in -VARIANT; failing that,
+    the split GGUF in a VARIANT/ folder. Without :VARIANT, the only target GGUF.
     """
-    candidates = sorted(
-        n for n in files if "/" not in n and n.endswith(".gguf") and "mmproj" not in Path(n).stem.lower()
-    )
+    candidates = [n for n in root_ggufs(files) if not projector_named(n)]
     if variant is None:
         if len(candidates) == 1:
-            return candidates[0], False
+            return [candidates[0]], False
         choice = "select a GGUF with OWNER/REPO:VARIANT"
     else:
         parts = [Path(name).stem.split("-") for name in candidates]
@@ -99,41 +116,86 @@ def select_gguf(files, variant):
             if "-".join(words[shared:]).lower() == variant.lower()
         ]
         if len(exact) == 1:
-            return exact[0], False
+            return [exact[0]], False
         ending = [n for n in candidates if Path(n).stem.lower().endswith("-" + variant.lower())]
         if len(ending) == 1:
-            return ending[0], len(candidates) > 1
+            return [ending[0]], len(candidates) > 1
         choice = "no single GGUF matches :" + variant
+        if split := split_gguf(files, variant):
+            return split, False
     listed = ", ".join(candidates) or "none"
     raise models.ModelError(f"{choice} (files in the repository root: {listed})")
 
 
+SPLIT_NAME = re.compile(r"-(\d{5})-of-(\d{5})\.gguf$")
+
+
+def split_gguf(files, variant):
+    """The parts of the split GGUF a repository keeps in a folder named after its
+    variant, in split order; None when there is no such folder."""
+    prefix = variant.lower() + "/"
+    names = [
+        n
+        for n in files
+        if n.lower().startswith(prefix) and n.count("/") == 1 and n.endswith(".gguf") and not projector_named(n)
+    ]
+    if not names:
+        return None
+    return split_order(names, f"the split GGUF in {variant}/")
+
+
+def split_order(names, split):
+    """names, the files of one split GGUF, in split order: each named
+    NAME-0000K-of-0000N.gguf, and every part from 1 to N present once."""
+    parts: dict[int, tuple[int, str]] = {}
+    for name in names:
+        match = SPLIT_NAME.search(name)
+        if not match:
+            raise models.ModelError(f"{name} is not one part of a split GGUF (NAME-0000K-of-0000N.gguf)")
+        number = int(match.group(1))
+        if number in parts:
+            raise models.ModelError(f"{parts[number][1]} and {name} are both part {number} of {split}")
+        parts[number] = (int(match.group(2)), name)
+    counts = {count for count, _ in parts.values()}
+    if len(counts) != 1 or sorted(parts) != list(range(1, counts.pop() + 1)):
+        raise models.ModelError(f"{split} is incomplete: " + ", ".join(sorted(names)))
+    return [parts[number][1] for number in sorted(parts)]
+
+
 def _gguf_target(repo, variant, language_only, scratch):
-    name, by_ending = select_gguf(repo.files, variant)
+    names, by_ending = select_gguf(repo.files, variant)
+    name = names[0] if len(names) == 1 else f"{len(names)} split files {names[0]} ..."
     if by_ending:
         print(
             f"No GGUF is named for :{variant} alone; using {name}, the only one whose name ends in -{variant}.",
             flush=True,
         )
+    return gguf_target(repo, names, scratch, language_only=language_only)
+
+
+def gguf_target(repo, names, scratch, *, language_only=False):
+    """The GGUF target whose files in repo are names, one or a split GGUF's parts
+    in split order, which side by side in target/ the native loader finds."""
     # The fake's GGUFs carry no real header: the repository's config.json stands
     # in for the config upstream.py derives from it (gguf.model_config).
     config, metadata = scratch / "config.json", scratch / "gguf-metadata.json"
     config.write_bytes(models.json_bytes(repo.json("config.json")))
     metadata.write_bytes(models.json_bytes({"unsigned": {}, "float": {}, "string": {}}))
-    time.sleep(_inspect_seconds(name))
-    if Path(name).stem.lower().startswith("imatrix"):
+    time.sleep(_inspect_seconds(names[0]))
+    stem = SPLIT_NAME.sub("", names[0]).removesuffix(".gguf")
+    if Path(stem).name.lower().startswith("imatrix"):
         # An importance matrix has no model metadata (real Splash, install/gguf.py).
         raise models.ModelError("missing or invalid GGUF metadata: general.architecture")
     family = check_model("gguf", "none", config, gguf_metadata=metadata)
-    # install/gguf.py require_loadable (1.3.2, lines 574-596) reads the tensor
-    # types; the fake's GGUFs have none, so the name stands in. Since 1.3.2 only a
-    # whole unquantized model is refused (UD-Q8_K_XL, with BF16 parts, loads).
-    if Path(name).stem.upper().endswith(("-BF16", "-F16", "-F32")):
+    # install/gguf.py require_loadable reads the tensor types; the fake's GGUFs have
+    # none, so the name stands in. Only a whole unquantized model is refused
+    # (UD-Q8_K_XL, with BF16 parts, loads).
+    if stem.upper().endswith(("-BF16", "-F16", "-F32")):
         raise models.ModelError(
             "this GGUF stores every projection and expert unquantized (BF16, F16 or F32): Splash loads quantized "
             "GGUFs, not whole-BF16 or F16 models; choose a quantized variant of the repository"
         )
-    files = {"target/" + name: name}
+    files = {"target/" + Path(part).name: part for part in names}
     vision_format = "none"
     if not language_only:
         projector = select_vision(repo)
@@ -146,11 +208,12 @@ def _inspect_seconds(name):
     """`FAKE_SPLASH_INSPECT_SECONDS`: how long reading one GGUF's header takes, e.g.
     `0.2`, or `0.2,UD-Q4_K_M=1` to make one variant slower than the rest."""
     seconds = 0.0
+    stem = SPLIT_NAME.sub("", Path(name).name).removesuffix(".gguf")
     for part in filter(None, os.environ.get("FAKE_SPLASH_INSPECT_SECONDS", "").split(",")):
         variant, _, value = part.rpartition("=")
         if not variant:
             seconds = float(value)
-        elif Path(name).stem.endswith("-" + variant):
+        elif stem.endswith("-" + variant):
             return float(value)
     return seconds
 
@@ -163,7 +226,7 @@ PROCESSOR_FILES = ("preprocessor_config.json", "processor_config.json")
 
 
 def _require_quantization(entry, label, module):
-    """ModelDescriptor.mm `requireMlxQuantization` (1.3.2) for one entry: an affine
+    """ModelDescriptor.mm `requireMlxQuantization` for one entry: an affine
     format the kernels hold, mxfp4 4-bit in groups of 32 or nvfp4 4-bit in groups of
     16. A module's entry that omits bits or group size takes its mode's default."""
     mode = entry.get("mode", "affine")
@@ -195,7 +258,7 @@ def _require_quantization(entry, label, module):
 
 def _require_quantization_config(quantization):
     """ModelDescriptor.mm `requireModelOptimizerQuantization` and
-    `requireCompressedTensorsQuantization` (1.3.2): a quantization_config of
+    `requireCompressedTensorsQuantization`: a quantization_config of
     quant_method modelopt holding NVFP4 (in groups of 16) or FP8, or of
     compressed-tensors whose groups hold NVFP4 or FP8. The fake checks the formats,
     not which modules each covers."""
@@ -240,7 +303,7 @@ def _require_quantization_config(quantization):
 
 
 def _require_modelopt_algorithm(entry, label):
-    """ModelDescriptor.mm `requireModelOptimizerQuantization`'s requireAlgorithm (1.3.2)."""
+    """ModelDescriptor.mm `requireModelOptimizerQuantization`'s requireAlgorithm."""
     algorithm = entry.get("quant_algo")
     if algorithm == "FP8":
         return
@@ -251,11 +314,11 @@ def _require_modelopt_algorithm(entry, label):
         raise models.ModelError(f"{label} is NVFP4 in groups of {group}; Model Optimizer NVFP4 loads in groups of 16")
 
 
-def _mlx_target(repo, language_only, scratch):
+def mlx_target(repo, language_only, scratch):
     config = scratch / "config.json"
     config.write_bytes(models.json_bytes(repo.json("config.json")))
     family = check_model("mlx-affine", "none", config)
-    # The engine model-check's wording (ModelDescriptor.mm requireQuantization, 1.3.2).
+    # The engine model-check's wording (ModelDescriptor.mm requireQuantization).
     config_json = repo.json("config.json")
     quant, quantization_config = config_json.get("quantization"), config_json.get("quantization_config")
     if isinstance(quant, dict):
@@ -277,8 +340,11 @@ def _mlx_target(repo, language_only, scratch):
     files = {name: name for name in sorted(repo.files)}
     files.setdefault("config.json", "config.json")
     if language_only:
-        # upstream.py `_mlx_target` (1.3.1 on): the processor config is read only when
-        # vision is on.
+        # upstream.py `mlx_target`: the processor config is read only when vision is on.
         for name in PROCESSOR_FILES:
             files.pop(name, None)
     return Target("mlx-affine", "none" if language_only else "safetensors", config, None, family, files)
+
+
+# The names before Splash 1.4.0 made them public, which this fake's older tests call.
+_mlx_target = mlx_target

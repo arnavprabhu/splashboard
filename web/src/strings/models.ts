@@ -33,6 +33,7 @@ export const modelsStrings = {
   "models.cancel.title": "Keep downloaded files for later?",
   "models.catalog.family.dense": "Qwen3.8-27B · Dense",
   "models.catalog.family.moe": "Qwen3.6-35B-A3B · Mixture of experts",
+  "models.catalog.family.flash_next": "Qwen3.8-Flash-Next · Mixture of experts",
   "models.changed": "Changed",
   "models.clef.body":
     "Splash does not use Clef’s joint schema head. Scores will differ from Cloudflare’s Clef.",
@@ -176,6 +177,9 @@ export const modelsStrings = {
     "Choose a supported model to download and run on this Mac.",
   "models.empty.title": "No models installed.",
   "models.fit.fits": "Fits",
+  "models.fit.streams": "Streams from SSD",
+  "models.fit.streams_help":
+    "Too large to load whole on {ram}: its experts stream from the SSD, which is slower.",
   "models.fit.tight": "Tight",
   "models.fit.tight_help": "Tight on {ram}: reduce the context or use language-only.",
   "models.fit.wont_fit": "Won’t fit",
@@ -215,6 +219,9 @@ export const modelsStrings = {
   "models.row.unique": "{size} unique",
   "models.row.used": "Last used {time}",
   "models.seed.dense_gguf": "Dense model with a choice of GGUF quantizations.",
+  "models.seed.flash_next_gguf":
+    "GGUF only · Q2_0 is about 66 GB in two files and streams from the SSD on a 64 GB Mac.",
+  "models.seed.flash_next_unsloth": "GGUF only · UD-IQ1_S to UD-Q6_K_XL and Q8_0, each in split files.",
   "models.seed.dense_mlx":
     "MLX 4-bit · about 21 GB including draft and vision.",
   "models.seed.dense_nvfp4": "NVIDIA’s NVFP4 checkpoint (Model Optimizer) · about 22 GB of weights.",
@@ -268,6 +275,7 @@ export const modelsStrings = {
   "models.variant.installed": "Installed",
   "models.variant.none": "No variants are available.",
   "models.variant.projector": "Vision projector",
+  "models.variant.parts": "{n} files",
   "models.variant.recommended": "Recommended",
   "models.variant.unsupported": "Unsupported: {reason}",
   "models.variant.unsupported_default":

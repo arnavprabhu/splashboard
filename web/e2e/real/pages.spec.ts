@@ -66,7 +66,7 @@ test.describe('pages against the real manager', () => {
     const field = page.locator('[data-key="serve.disable_ane"]');
     await expect(field.locator('.flag')).toHaveText('--disable-ane');
     await expect(field.getByText('GPU-only prefill')).toBeVisible();
-    await expect(field.getByText(/the 35B MoE always prefills on the GPU/)).toBeVisible();
+    await expect(field.getByText(/MoE models always prefill on the GPU/)).toBeVisible();
     await expect(page.locator('[data-key="serve.allow_idle_sleep"] .flag')).toHaveText('--allow-idle-sleep');
     await field.getByRole('switch').click();
     await page.getByRole('region', { name: 'Unsaved changes' }).getByRole('button', { name: /^Save/ }).click();

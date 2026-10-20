@@ -91,7 +91,10 @@ def native_status_paths() -> set[str]:
     status = (ENGINE / "Status.cpp").read_text()
     plan = (ENGINE / "MemoryPlan.cpp").read_text()
     audit = (ENGINE / "MemoryAudit.cpp").read_text()
-    breakdown = _literals(_body(plan, "std::string EngineMemoryBreakdown::toStatusJson() const"))
+    spill = _literals(_body(plan, "std::string spillStatusJson("))
+    breakdown = _literals(
+        _body(plan, "std::string EngineMemoryBreakdown::toStatusJson() const"), {"spillStatusJson(kvSpill)": spill}
+    )
     device = _literals(_body(plan, "std::string deviceStatusJson("))
     model = _literals(_body(plan, "std::string modelStatusJson("))
     plan_json = _literals(
@@ -99,14 +102,44 @@ def native_status_paths() -> set[str]:
         {"deviceStatusJson(device_)": device, "modelStatusJson(model_)": model, "breakdown_.toStatusJson()": breakdown},
     )
     audit_json = _literals(_body(audit, "std::string MemoryAuditResult::toStatusJson() const"))
-    batch = _literals(_body(status, "void appendBatch("))
-    body = re.sub(
-        r"appendBatch\(out, [^)]*\);",
-        'out << "' + batch.replace('"', '\\"') + '";',
-        _body(status, "std::string runtimeStatusJson("),
-    )
+    calls = {
+        name: _literals(_body(status, f"void {name}("))
+        for name in ("appendBatch", "appendLatency", "appendKvReads", "appendRopeScaling")
+    }
+
+    def inline(body: str) -> str:
+        """`body` with each call that writes nested JSON written as its text."""
+        for name, text in calls.items():
+            written = 'out << "' + text.replace('"', '\\"') + '";'
+            body = re.sub(rf"{name}\(out, [^;]*\);", lambda _, w=written: w, body)  # type: ignore[misc]
+        return body
+
+    # The streamed stores write one object per use, named from kStreamedUses;
+    # the prefill one stands for both.
+    for name in ("appendStreamedTable", "appendStreamedExperts", "appendKvSpill"):
+        body = inline(_body(status, f"void {name}(")).replace("kStreamedUses[use]", '"prefill"')
+        calls[name] = _literals(body)
+    body = inline(_body(status, "std::string runtimeStatusJson("))
     paths = _paths(_literals(body, {"plan.toStatusJson()": plan_json, "memoryAudit.toStatusJson()": audit_json}))
+    for path in list(paths):
+        if path.startswith(("streamed_table.prefill", "streamed_experts.prefill")):
+            paths.add(path.replace(".prefill", ".decode", 1))
     return paths | {f"warmup.{step}" for step in WARMUP_STEPS}
+
+
+# Groups the engine writes only for some targets: null unless the store streams
+# (streamed_table, streamed_experts, rope_scaling past the native window),
+# kv_spill and the plan's spill floors only where a target's KV can spill, and
+# active requests while in service. test_status_1_4_0.py checks them on a
+# Flash-Next target.
+CONDITIONAL = (
+    "active_requests.",
+    "streamed_table.",
+    "streamed_experts.",
+    "identity.cache.rope_scaling.",
+    "kv_spill",
+    "memory_plan.budget.kv_spill.",
+)
 
 
 def flatten(value: object, prefix: tuple[str, ...] = ()) -> set[str]:
@@ -143,6 +176,13 @@ def test_extractor_reads_the_engine_source():
         "disk.taken_back.left_behind",
         "metrics.current_decode_batch.tokens_per_second",
         "scheduler.decode_batches_by_width.b4",
+        "streamed_experts.decode.host_steps.work_ms.p99",
+        "streamed_table.prefill.stage_ms.samples",
+        "kv_spill.block_cache.read_failures",
+        "kv_spill.requests.refused.write_budget",
+        "memory_plan.budget.context_bounds.bound",
+        "memory_plan.budget.kv_spill.floor_tokens",
+        "identity.cache.rope_scaling.factor",
     ):
         assert path in paths, path
     assert len(paths) > 250
@@ -150,12 +190,14 @@ def test_extractor_reads_the_engine_source():
 
 @pytest.mark.skipif(not ENGINE.exists(), reason="no ./splash reference clone")
 def test_fake_status_has_every_native_key_path(status):
-    # An idle engine has no active requests; test_splash_1_3_2.py checks an
-    # active request's fields against the engine's.
-    expected = {p for p in native_status_paths() if not p.startswith("active_requests.")}
+    # An idle engine has no active requests and an in-memory target streams
+    # nothing; test_splash_1_3_2.py and test_status_1_4_0.py check those.
+    expected = {p for p in native_status_paths() if not p.startswith(CONDITIONAL)}
     missing = expected - flatten(status)
     assert not missing, sorted(missing)
     assert status["active_requests"] == []
+    assert status["streamed_table"] is status["streamed_experts"] is None
+    assert "kv_spill" not in status
 
 
 def test_fake_status_has_server_groups(status):

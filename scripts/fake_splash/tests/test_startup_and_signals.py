@@ -29,7 +29,7 @@ def run_cli(tmp_path, *args, env=None, timeout=30):
 
 def test_version_matches_real_wording(tmp_path):
     result = run_cli(tmp_path, "--version")
-    assert result.returncode == 0 and result.stdout == "Splash 1.3.2\n"
+    assert result.returncode == 0 and result.stdout == "Splash 1.4.0\n"
     if REAL_CLI.exists():
         real = subprocess.run([str(REAL_CLI), "--version"], capture_output=True, text=True, timeout=30)
         assert real.stdout == result.stdout
@@ -57,6 +57,10 @@ def test_serve_help_lists_every_real_flag(tmp_path):
         "--state-format",
         "--thinking-token-budget",
         "--thinking-end-text",
+        "--expert-memory",
+        "--ple-memory",
+        "--sparse-kv-memory",
+        "--verify-rows",
         "--max-context",
         "--decode-share",
         "--allowed-host",
@@ -90,7 +94,14 @@ def test_serve_help_lists_every_real_flag(tmp_path):
         (["--thinking-token-budget", "-1"], "must be a nonnegative integer"),
         (["--max-cache-disk", "5G", "--cache-dir", "/tmp/x"], "--cache-dir needs --persistent-cache"),
         (["--announce-served-name"], "--announce-served-name needs --served-model-name"),
-        (["--max-context", "300K"], "must be 'auto' or a token count up to 256K, such as 100K"),
+        (
+            ["--max-context", "1.5M"],
+            "must be 'auto' or a token count up to 1010000, such as 100K or 1M (K = 1024 tokens, M = 1000000 tokens)",
+        ),
+        (["--max-memory", "2.5"], "must be 'auto' or a positive byte count such as 32G or 2.5G"),
+        (["--expert-memory", "0"], "use auto, off, or a size such as 16G"),
+        (["--sparse-kv-memory", "off"], "use auto, or a size such as 1200M"),
+        (["--verify-rows", "some"], "invalid choice: 'some'"),
         (["--kv-format", "fp8"], "invalid choice: 'fp8'"),
     ],
 )
@@ -122,13 +133,22 @@ def test_startup_lines_in_order(make_engine):
     )
     err = fake.stderr
     assert re.match(TS + r"Weights loaded in \d+\.\d\d s\.$", err[0])
-    assert re.match(TS + r"Kernel policy for GPU family \d+ with \d+ cores\.$", err[1])
-    # RuntimeResources.mm reportDiskTier (1.3.2): the automatic SSD cache, on by default.
+    # RuntimeResources.mm reportStreamedStores and reportVerifyRows (1.4.0).
+    assert re.match(
+        TS + r"Routed experts load with their layers: memory holds their \d+ MiB \(--expert-memory auto\)\.$", err[1]
+    )
+    assert re.match(
+        TS + r"Decode cycles verify the rows the verify budget chooses \(--verify-rows auto, as Qwen3\.6-35B-A3B is a "
+        r"MoE target\): greedy and seeded outputs can differ from run to run\.$",
+        err[2],
+    )
+    assert re.match(TS + r"Kernel policy for GPU family \d+ with \d+ cores\.$", err[3])
+    # RuntimeResources.mm reportDiskTier: the automatic SSD cache, on by default.
     assert re.match(
         TS + r"SSD cache: up to 32\.0 GiB of temporary files in \S+ \(its automatic quota, while its volume has "
         r"room beyond the 10\.0 GiB it keeps free\); KV pages of 324 KiB and states of 96 MiB, a state's write "
         r"staging through 96 MiB of the memory plan; --max-cache-disk 0 turns it off\.$",
-        err[2],
+        err[4],
     )
     assert not any("may not hold" in line for line in err)
 
@@ -333,7 +353,7 @@ def test_second_sigint_skips_flush_and_marks_unclean(tmp_path, make_engine):
     assert first.process.wait(5) == 0
     assert time.monotonic() - started < 3
     second = make_engine(base=tmp_path, args=args)
-    second.wait_for_line("The last process did not stop cleanly: this one serves on probation for its first minute.")
+    second.wait_for_line(r"left \d+ copies behind\. The last process did not stop cleanly\.$")
 
 
 def test_cache_dir_in_use_by_another_process(tmp_path, make_engine):

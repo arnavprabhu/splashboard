@@ -4,7 +4,8 @@ The real splash/install/hub.py downloads snapshots through huggingface_hub and
 reads GGUF headers with range requests. The manager's helper
 (`splash_gui/helpers/inspect_model.py`) only needs the same surface:
 `Repository(name, revision, files)`, `json(name)` for metadata and `file(name)`
-for a local path it can hand to `models.read_json`.
+for a local path it can hand to `models.read_json`. Local files take Splash's
+`paths` (file name -> its path) and `Repository.local_files(name, paths)`.
 
 `HF_ENDPOINT` points at scripts/fake_splash/hub.py, which serves the same file
 sets the fake installer downloads.
@@ -28,10 +29,17 @@ def _endpoint() -> str:
 
 
 class Repository:
-    def __init__(self, name, revision, files, directory=None, sizes=None):
+    def __init__(self, name, revision, files, paths=None, *, sizes=None, unreachable_reason=None):
         self.name, self.revision, self.files = name, revision, set(files)
-        self.directory = Path(directory) if directory is not None else None
+        # Each file's local path, for local files; None for a Hub repository.
+        self.paths = {key: Path(value) for key, value in paths.items()} if paths is not None else None
         self.sizes = sizes or {}
+        self.unreachable_reason = unreachable_reason
+
+    @classmethod
+    def local_files(cls, name, paths):
+        """name, the local files paths maps each file name to, wherever each lies."""
+        return cls(name, None, set(paths), dict(paths))
 
     def _require(self, name):
         if name not in self.files:
@@ -62,8 +70,8 @@ class Repository:
     def open(self, name) -> IO[bytes]:
         """A binary stream of one file, as `upstream.inspect_target` expects."""
         self._require(name)
-        if self.directory is not None:
-            return (self.directory / name).open("rb")
+        if self.paths is not None:
+            return self.paths[name].open("rb")
         return io.BytesIO(self._fetch(name))
 
     def file(self, name):
@@ -74,8 +82,8 @@ class Repository:
         never writes outside SPLASH_GUI_FAKE_DATA.
         """
         self._require(name)
-        if self.directory is not None:
-            return self.directory / name
+        if self.paths is not None:
+            return self.paths[name]
         cache = paths.DATA / "helper" / self.name.replace("/", "--") / str(self.revision)
         cache.mkdir(parents=True, exist_ok=True)
         target = cache / name

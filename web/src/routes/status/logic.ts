@@ -92,22 +92,32 @@ export interface MetaInput {
   states?: string | null;
   vision?: boolean | null;
   draft?: string | null;
+  /** YaRN's factor past the native 256K window (`identity.cache.rope_scaling`). */
+  yarn?: number | null;
+  /** What sets the context: the model's window, memory, or the SSD cache's volume. */
+  bound?: string | null;
+  /** The rows decode cycles verify: auto, or all for reproducible MoE output. */
+  verify?: string | null;
   uptime?: string | null;
   version?: string | null;
   starting?: boolean;
 }
 
 /** Ordered meta items; missing ones are dropped, except CONTEXT while starting (shows —). */
-export type MetaKey = 'format' | 'context' | 'kv' | 'states' | 'vision' | 'draft' | 'uptime' | 'version';
+export type MetaKey = 'format' | 'context' | 'yarn' | 'bound' | 'kv' | 'states' | 'vision' | 'draft' | 'verify' | 'uptime' | 'version';
 
 export function metaKeys(m: MetaInput): MetaKey[] {
   const out: MetaKey[] = [];
   if (m.format) out.push('format');
   if (m.context != null || m.starting) out.push('context');
+  if (m.yarn != null && m.yarn > 1) out.push('yarn');
+  // The model's own window is the usual bound; only memory or the SSD is worth saying.
+  if (m.bound === 'memory' || m.bound === 'disk') out.push('bound');
   if (m.kv) out.push('kv');
   if (m.states) out.push('states');
   if (m.vision != null) out.push('vision');
   if (m.draft !== undefined) out.push('draft');
+  if (m.verify) out.push('verify');
   if (m.uptime) out.push('uptime');
   if (m.version) out.push('version');
   return out;
@@ -136,10 +146,18 @@ export const MODEL_SERVE_KEYS: ReadonlySet<string> = new Set([
   'served_model_names',
   'announce_served_name',
   'default_reasoning_effort',
+  'thinking_token_budget',
+  'thinking_end_text',
   'kv_format',
+  'state_format',
+  'expert_memory',
+  'ple_memory',
+  'sparse_kv_memory',
+  'verify_rows',
   'max_context',
   'decode_share',
   'max_image_pixels',
+  'disable_ane',
 ]);
 
 /**
@@ -456,10 +474,49 @@ export function activeRequests(sample: { active_requests?: ActiveRequest[] } | n
   return list.filter((r): r is ActiveRequest => isRecord(r) && typeof r.id === 'number' && typeof r.phase === 'string');
 }
 
+/** Where a request's KV is kept (`kv_mode`): only a target whose KV can spill to the SSD cache
+ * (Qwen3.8-Flash-Next) reports it. */
+export type KvMode = 'resident' | 'spill';
+
+export function kvModeOf(r: object): KvMode | null {
+  const mode = (r as { kv_mode?: unknown }).kv_mode;
+  return mode === 'resident' || mode === 'spill' ? mode : null;
+}
+
+/** The KV column shows only when some request reports where its KV is. */
+export function showsKvMode(rows: readonly object[]): boolean {
+  return rows.some((r) => kvModeOf(r) !== null);
+}
+
 /** Encoded share of the prompt (cached tokens count as encoded), 0..1, or null for none. */
 export function promptProgress(r: Pick<ActiveRequest, 'prompt_tokens' | 'prompt_processed'>): number | null {
   if (!r.prompt_tokens || r.prompt_tokens <= 0) return null;
   return Math.max(0, Math.min(1, (r.prompt_processed ?? 0) / r.prompt_tokens));
+}
+
+// ---------- SSD streaming ----------
+
+/** What streams from the SSD: routed experts (`streamed_experts`), Flash-Next's PLE table
+ * (`streamed_table`) and a Flash-Next target's KV (`kv_spill`). Each is null or absent when it
+ * does not stream; null when nothing does, which hides the band. */
+export interface Streaming {
+  experts: Record<string, unknown> | null;
+  table: Record<string, unknown> | null;
+  spill: Record<string, unknown> | null;
+}
+
+export function streamingOf(raw: unknown): Streaming | null {
+  const block = (path: string) => {
+    const v = rawGet(raw, path);
+    return isRecord(v) ? v : null;
+  };
+  const s: Streaming = { experts: block('streamed_experts'), table: block('streamed_table'), spill: block('kv_spill') };
+  return s.experts || s.table || s.spill ? s : null;
+}
+
+/** A spill-capable target refuses requests whose KV must spill while the write budget is spent. */
+export function spillTarget(raw: unknown): boolean {
+  return isRecord(rawGet(raw, 'kv_spill'));
 }
 
 /** Failure counters for the Cache band; any > 0 is accent. */

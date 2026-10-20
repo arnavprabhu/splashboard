@@ -124,6 +124,27 @@ ROWS: list[tuple[str, dict[str, Any], dict[str, Any] | None, list[str]]] = [
     ("--state-format", {"serve": {"state_format": "bf16"}}, None, ["--state-format", "bf16"]),
     ("--state-format model", {}, {"state_format": "bf16"}, ["--state-format", "bf16"]),
     ("--state-format default", {"serve": {"state_format": "fp32"}}, None, []),
+    ("--expert-memory", {"serve": {"expert_memory": "16G"}}, None, ["--expert-memory", "16G"]),
+    ("--expert-memory off", {}, {"expert_memory": "OFF"}, ["--expert-memory", "off"]),
+    ("--expert-memory auto", {"serve": {"expert_memory": "AUTO"}}, None, []),
+    ("--ple-memory", {}, {"ple_memory": "2.5G"}, ["--ple-memory", "2.5G"]),
+    ("--ple-memory off", {"serve": {"ple_memory": "off"}}, None, ["--ple-memory", "off"]),
+    (
+        "--sparse-kv-memory",
+        {"serve": {"sparse_kv_memory": "1200M"}},
+        None,
+        ["--sparse-kv-memory", "1200M"],
+    ),
+    (
+        "--sparse-kv-memory model auto",
+        {"serve": {"sparse_kv_memory": "2G"}},
+        {"sparse_kv_memory": "auto"},
+        [],
+    ),
+    ("--verify-rows", {"serve": {"verify_rows": "all"}}, None, ["--verify-rows", "all"]),
+    ("--verify-rows model", {}, {"verify_rows": "all"}, ["--verify-rows", "all"]),
+    ("--verify-rows auto", {"serve": {"verify_rows": "auto"}}, None, []),
+    ("--max-context 1M", {"serve": {"max_context": "1M"}}, None, ["--max-context", "1M"]),
     (
         "--thinking-token-budget global",
         {"serve": {"thinking_token_budget": 12000}},
@@ -356,6 +377,10 @@ def test_full_command_order_matches_spec(paths: Paths) -> None:
                 "kv_format": "bf16",
                 "state_format": "bf16",
                 "max_memory": "40G",
+                "expert_memory": "16G",
+                "ple_memory": "off",
+                "sparse_kv_memory": "1200M",
+                "verify_rows": "all",
                 "max_cache_disk": "32G",
                 "max_cache_disk_writes": "200G",
                 "persistent_cache": True,
@@ -392,6 +417,9 @@ def test_full_command_order_matches_spec(paths: Paths) -> None:
         "--kv-format",
         "--state-format",
         "--max-memory",
+        "--expert-memory",
+        "--ple-memory",
+        "--sparse-kv-memory",
         "--max-cache-disk",
         "--max-cache-disk-writes",
         "--persistent-cache",
@@ -404,6 +432,7 @@ def test_full_command_order_matches_spec(paths: Paths) -> None:
         "--queue-size",
         "--idle-release",
         "--disable-ane",
+        "--verify-rows",
         "--allow-idle-sleep",
     ]
 
@@ -479,11 +508,15 @@ def test_splash_launcher_accepts_our_argv(paths: Paths, tmp_path: Path) -> None:
                 "thinking_end_text": "\n\nConsidering the limited time, I answer now.\n</think>",
                 "kv_format": "bf16",
                 "state_format": "bf16",
-                "max_memory": "40G",
+                "max_memory": "27.5G",
+                "expert_memory": "16G",
+                "ple_memory": "off",
+                "sparse_kv_memory": "1.5G",
+                "verify_rows": "all",
                 "max_cache_disk": "32G",
                 "max_cache_disk_writes": "200G",
                 "persistent_cache": True,
-                "max_context": "100K",
+                "max_context": "1M",
                 "decode_share": 0,
                 "max_request_size": "256M",
                 "max_image_pixels": 65536,
@@ -523,14 +556,17 @@ def test_splash_launcher_accepts_our_argv(paths: Paths, tmp_path: Path) -> None:
     assert parsed["revision"] == "main"
     assert parsed["served_model_name"] == ["q", "-x"] and parsed["announce_served_name"]
     assert parsed["default_reasoning_effort"] == "low" and parsed["kv_format"] == "bf16"
-    assert parsed["max_memory"] == 40 * 1024**3 and parsed["max_cache_disk"] == 32 * 1024**3
+    assert parsed["max_memory"] == 27 * 1024**3 + 512 * 1024**2
+    assert parsed["max_cache_disk"] == 32 * 1024**3
+    assert parsed["expert_memory"] == 16 * 1024**3 and parsed["ple_memory"] == "off"
+    assert parsed["sparse_kv_memory"] == 1536 * 1024**2 and parsed["verify_rows"] == "all"
     assert parsed["state_format"] == "bf16" and parsed["max_cache_disk_writes"] == 200 * 1024**3
     assert parsed["thinking_token_budget"] == 12000
     assert (
         parsed["thinking_end_text"] == "\n\nConsidering the limited time, I answer now.\n</think>"
     )
     assert parsed["persistent_cache"] and parsed["cache_dir"] == str(paths.cache_dir)
-    assert parsed["max_context"] == 102400 and parsed["decode_share"] == 0.0
+    assert parsed["max_context"] == 1000000 and parsed["decode_share"] == 0.0
     assert parsed["max_request_size"] == 256 * 1024**2 and parsed["max_image_pixels"] == 65536
     assert parsed["request_timeout"] == 2.5 and parsed["queue_size"] == 8
     assert parsed["idle_release"] == float("inf")

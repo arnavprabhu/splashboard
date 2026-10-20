@@ -14,6 +14,11 @@ export const statusStrings = {
   // header meta
   'status.meta.label': 'Engine details',
   'status.meta.context': 'Context {v}',
+  'status.meta.yarn': 'YaRN ×{v}',
+  'status.meta.bound_memory': 'Context bound by memory',
+  'status.meta.bound_disk': 'Context bound by SSD cache space',
+  'status.meta.verify_auto': 'Verify rows auto',
+  'status.meta.verify_all': 'Verify rows all (reproducible)',
   'status.meta.kv': 'KV {v}',
   'status.meta.states': 'States {v}',
   'status.meta.vision_on': 'Vision on',

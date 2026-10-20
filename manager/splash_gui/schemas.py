@@ -95,6 +95,8 @@ SuggestionAction = Literal[
     "go_offline",
     "open_logs",
     "restart_engine",
+    # Puts back the setting the engine refused (its patch), such as a store size.
+    "reset_setting",
 ]
 
 
@@ -142,6 +144,12 @@ class EngineNotice(ApiModel):
         "new_commit_not_installed",
         "weights_restored",
         "schema_unrecognized",
+        # An explicit setting the engine had no use for this start
+        # ("--ple-memory ignored: …"), YaRN turned on past the native window,
+        # and a persistent cache that started empty.
+        "setting_ignored",
+        "yarn_on",
+        "persistent_cache_emptied",
         "other",
     ]
     message: str
@@ -198,6 +206,13 @@ class EngineView(ApiModel):
     state_format: str | None = None
     vision: bool | None = None
     draft: str | None = None
+    # YaRN's factor past the native window (`identity.cache.rope_scaling.factor`),
+    # what sets the context limit (`memory_plan.budget.context_bounds.bound`: the
+    # model's window, memory, or the SSD cache's volume) and the rows decode
+    # cycles verify (`verify_rows`: "all" makes MoE output reproducible).
+    yarn_factor: float | None = None
+    context_bound: Literal["model", "memory", "disk"] | None = None
+    verify_rows: Literal["auto", "all"] | None = None
     status_schema_version: int | None = None
     schema_supported: bool = True
     transport: TransportInfo | None = None
@@ -327,6 +342,8 @@ AlertCondition = Literal[
     "disk_tier_failures",
     "write_behind_refused",
     "disk_write_budget",
+    "kv_disk_quota",
+    "expert_streaming_failed",
     "queue_full",
     "mask_timeout",
     "download_failed",
@@ -554,6 +571,8 @@ class DiskMetrics(ApiModel):
     volume_available_bytes: int | None = None
     writes_gated: Literal["no", "budget", "closed"] | None = None
     write_budget_bytes: int | None = None
+    # How long SSD writes were held back for the reads a step waited for.
+    writes_deferred_ms: float | None = None
 
 
 class ActiveRequest(ApiModel):
@@ -569,6 +588,9 @@ class ActiveRequest(ApiModel):
     generated_tokens: int = 0
     max_new_tokens: int | None = None
     age_ms: float | None = None
+    # Where its KV is kept, only for a target whose KV can spill to the SSD
+    # cache (Qwen3.8-Flash-Next): "resident" in memory or "spill".
+    kv_mode: Literal["resident", "spill"] | None = None
 
 
 class StageLatency(ApiModel):
@@ -847,8 +869,10 @@ class ProfilesUpdate(ApiModel):
 # Models -------------------------------------------------------------------------
 
 ModelFormat = Literal["mlx", "gguf", "legacy"]
-Family = Literal["Qwen3.8-27B", "Qwen3.6-35B-A3B"]
-Fit = Literal["fits", "tight", "wont_fit"]
+Family = Literal["Qwen3.8-27B", "Qwen3.6-35B-A3B", "Qwen3.8-Flash-Next"]
+# "streams": too large to load whole, but a MoE model's routed experts (and
+# Flash-Next's PLE table) can stay on the SSD and stream from it, which is slower.
+Fit = Literal["fits", "tight", "streams", "wont_fit"]
 
 
 class DraftRef(ApiModel):

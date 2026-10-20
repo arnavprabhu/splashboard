@@ -83,8 +83,13 @@ def test_catalog_lists_no_splash_packages(hub_harness) -> None:
     assert not [r for r in rows if r.endswith("-Splash")]
     assert {r["format"] for r in rows.values()} == {"mlx", "gguf"}
     groups = {f["family"]: [g["format"] for g in f["groups"]] for f in payload["families"]}
-    # NVIDIA's NVFP4 checkpoint is a safetensors target ("mlx") in a group of its own.
-    assert groups == {"Qwen3.8-27B": ["mlx", "nvfp4", "gguf"], "Qwen3.6-35B-A3B": ["mlx", "gguf"]}
+    # NVIDIA's NVFP4 checkpoint is a safetensors target ("mlx") in a group of its own;
+    # Flash-Next loads from GGUFs only, so it has no MLX group.
+    assert groups == {
+        "Qwen3.8-27B": ["mlx", "nvfp4", "gguf"],
+        "Qwen3.6-35B-A3B": ["mlx", "gguf"],
+        "Qwen3.8-Flash-Next": ["gguf"],
+    }
 
 
 @pytest.mark.parametrize(
@@ -93,7 +98,11 @@ def test_catalog_lists_no_splash_packages(hub_harness) -> None:
         ("Qwen3.8-27B-UD-Q4_K_M.gguf", "UD-Q4_K_M"),
         ("Qwen3.8-27B-UD-Q8_K_XL-00001-of-00002.gguf", "UD-Q8_K_XL"),
         ("mmproj-BF16.gguf", None),
-        ("BF16/Qwen3.8-27B-BF16-00001-of-00002.gguf", None),
+        # A split GGUF in a folder named after its variant is that variant.
+        ("BF16/Qwen3.8-27B-BF16-00001-of-00002.gguf", "BF16"),
+        ("Q2_0/Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00002-of-00002.gguf", "Q2_0"),
+        ("a/b/Qwen3.8-27B-Q4_0.gguf", None),
+        ("mtp-Qwen3.8-Flash-Next-Q8_0.gguf", None),
         ("README.md", None),
     ],
 )
@@ -113,6 +122,12 @@ def test_variant_names(filename: str, expected: str | None) -> None:
         ("q4_k_m", ["q4_k_m.gguf", "q8_0.gguf"], "Hcompany/Holo4-27B-GGUF:q4_k_m"),
         # A variant that names another file is left for Splash to refuse.
         ("q8_0", ["q4_k_m.gguf"], "Hcompany/Holo4-27B-GGUF:q8_0"),
+        # A split GGUF in its variant's folder is always installed as :VARIANT.
+        (
+            "Q2_0",
+            ["Q2_0/M-Q2_0-00001-of-00002.gguf", "Q2_0/M-Q2_0-00002-of-00002.gguf"],
+            "Hcompany/Holo4-27B-GGUF:Q2_0",
+        ),
         # Safetensors beside it would make the bare ID an MLX model.
         ("q4_k_m", ["q4_k_m.gguf", "model.safetensors"], "Hcompany/Holo4-27B-GGUF:q4_k_m"),
         (None, ["q4_k_m.gguf"], "Hcompany/Holo4-27B-GGUF"),
@@ -127,16 +142,20 @@ def test_variant_pick_and_fit_rules() -> None:
         "Qwen3.8-27B-UD-IQ3_XXS.gguf": 11 * GIB,
         "Qwen3.8-27B-UD-Q4_K_M.gguf": 17 * GIB,
         "Qwen3.8-27B-Q6_K.gguf": 22 * GIB,
-        "Qwen3.8-27B-UD-Q8_K_XL-00001-of-00002.gguf": 15 * GIB,
-        "Qwen3.8-27B-UD-Q8_K_XL-00002-of-00002.gguf": 15 * GIB,
+        "UD-Q8_K_XL/Qwen3.8-27B-UD-Q8_K_XL-00001-of-00002.gguf": 15 * GIB,
+        "UD-Q8_K_XL/Qwen3.8-27B-UD-Q8_K_XL-00002-of-00002.gguf": 15 * GIB,
+        "Qwen3.8-27B-Q8_0-00001-of-00002.gguf": 15 * GIB,
+        "Qwen3.8-27B-Q8_0-00002-of-00002.gguf": 15 * GIB,
         "Qwen3.8-27B-BF16.gguf": 54 * GIB,
         "mmproj-F16.gguf": GIB,
         "mmproj-BF16.gguf": GIB,
     }
     variants = cat.gguf_variants("unsloth/Qwen3.8-27B-GGUF", files)
     by = {v.name: v for v in variants}
-    # Splash 1.3.2 loads UD-Q8_K_XL's BF16 tensors; a whole BF16 model stays refused.
+    # Splash loads UD-Q8_K_XL's BF16 tensors, and a split GGUF from its variant's
+    # folder; a whole BF16 model stays refused, and so do split parts at the root.
     assert by["UD-Q8_K_XL"].size == 30 * GIB and not by["UD-Q8_K_XL"].unloadable
+    assert by["Q8_0"].size == 30 * GIB and by["Q8_0"].unloadable == cat.ROOT_SPLIT
     assert by["BF16"].unloadable == cat.WHOLE_UNQUANTIZED and not by["UD-Q4_K_M"].unloadable
     assert cat.projector(files) == "mmproj-BF16.gguf", "BF16 preferred, F16 refused"
     big = cat.pick_variant(variants, 64 * GIB, True)
@@ -432,13 +451,16 @@ def test_quality_tiers_follow_the_bit_width_and_dash_what_splash_cannot_load() -
 
 def test_catalog_variants_carry_what_splash_cannot_load() -> None:
     """Every catalog variant had `loadable: null`, so the imatrix file and F16
-    were offered as downloads. UD-Q8_K_XL loads from Splash 1.3.2, so /inspect decides it."""
+    were offered as downloads. UD-Q8_K_XL loads, so /inspect decides it."""
     facts = cat.entry_facts("unsloth/Qwen3.8-27B-GGUF", "gguf", _Info(QWEN27_GGUF), 64 * GIB)
     by = {v["name"]: v for v in facts["variants"]}
     assert by["imatrix_unsloth"]["loadable"] is False
     assert by["imatrix_unsloth"]["reason"] == cat.NOT_A_MODEL
     assert by["UD-Q8_K_XL"]["loadable"] is None and by["UD-Q8_K_XL"]["reason"] is None
-    assert "mmproj-BF16" not in by and "BF16" not in by  # projector; BF16/ is a subfolder
+    assert "mmproj-BF16" not in by  # the projector is no variant
+    # BF16/ holds one part of two: listed, never offered.
+    assert by["BF16"]["loadable"] is False
+    assert by["BF16"]["reason"] == "the split GGUF in BF16/ is incomplete"
     assert by["UD-Q4_K_M"]["loadable"] is None, "the rest is checked by /inspect"
     assert facts["size_bytes"] != QWEN27_GGUF["imatrix_unsloth.gguf"]
     bonsai = cat.entry_facts(
@@ -559,3 +581,88 @@ def test_checkpoint_and_whole_unquantized_refusals_get_a_plain_line(
 
     expected = getattr(compat, plain, None) or getattr(cat, plain)
     assert compat.explain_refusal(engine) == (expected, engine)
+
+
+# --- Streaming from the SSD, and Qwen3.8-Flash-Next -------------------------------
+
+GB = 1000**3
+FLASH_NEXT_GGUF: dict[str, int | None] = {
+    "Q2_0/Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00001-of-00002.gguf": 37_620_000_000,
+    "Q2_0/Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00002-of-00002.gguf": 28_800_000_000,
+    "IQ2_XS/Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS-00001-of-00002.gguf": 38_700_000_000,
+    "IQ2_XS/Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS-00002-of-00002.gguf": 28_800_000_000,
+    "IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf": 55_000_000_000,
+    "IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf": 28_800_000_000,
+    "mmproj-Qwen3.8-Flash-Next-BF16.gguf": 900_000_000,
+}
+ISTA = "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF"
+
+
+def test_a_moe_model_too_large_to_load_whole_streams() -> None:
+    """A MoE model's routed experts, and Flash-Next's PLE table, can stay on the SSD:
+    a variant larger than memory "streams" when what stays resident fits. A dense
+    model never streams."""
+    flash = "Qwen3.8-Flash-Next"
+    q2 = 66_420_000_000
+    assert cat.fit_of(q2, 64 * GIB, vision=True, family=flash) == "streams"
+    assert cat.fit_of(q2, 128 * GIB, vision=True, family=flash) == "fits"
+    streamed = cat.streamed_need(flash, q2, vision=True)
+    assert streamed is not None
+    # The rest of the weights, one layer's experts and a PLE row cache of 512 MiB.
+    ple = 28_800_000_000
+    experts = int((q2 - ple) * 0.9)
+    resident = q2 - experts - ple + experts // 48 + 512 * 1024**2
+    assert streamed == cat.memory_need(resident, vision=True, family=flash)
+    assert cat.streamed_need("Qwen3.8-27B", q2, vision=True) is None
+    assert cat.fit_of(q2, 64 * GIB, vision=True, family="Qwen3.8-27B") == "wont_fit"
+    big_35b = 37 * GB
+    assert cat.fit_of(big_35b, 24 * GIB, vision=True, family="Qwen3.6-35B-A3B") == "streams"
+    assert cat.fit_of(big_35b, 8 * GIB, vision=True, family="Qwen3.6-35B-A3B") == "wont_fit"
+    assert cat.fit_for(10 * GIB, 64 * GIB, streamed=1) == "fits", "loading whole comes first"
+
+
+def test_the_recommendation_streams_only_when_nothing_fits_whole() -> None:
+    variants = cat.gguf_variants(ISTA, FLASH_NEXT_GGUF)
+    assert [v.name for v in variants] == ["Q2_0", "IQ2_XS", "IQ3_S"]
+    assert variants[0].size == 66_420_000_000 and not variants[0].unloadable
+    # On 64 GB nothing fits whole: the smallest that streams, which reads the least.
+    assert cat.default_variant(ISTA, variants, 64 * GIB, vision=True) == "Q2_0"
+    # With room for them whole, the largest that fits, as for any model.
+    assert cat.default_variant(ISTA, variants, 128 * GIB, vision=True) == "IQ3_S"
+    facts = cat.entry_facts(ISTA, "gguf", _Info(FLASH_NEXT_GGUF), 64 * GIB, "Qwen3.8-Flash-Next")
+    by = {v["name"]: v for v in facts["variants"]}
+    assert {v["fit"] for v in by.values()} == {"streams"}
+    assert by["Q2_0"]["recommended"] and facts["fit"] == "streams"
+    assert facts["recommended_variant"] == "Q2_0"
+    assert by["Q2_0"]["bits_per_weight"] == 2.0 and by["Q2_0"]["quality"] == "Compact"
+    # Without the family the catalog seed gives, the name's guess decides.
+    assert cat.family_guess(ISTA) == "Qwen3.8-Flash-Next"
+
+
+def test_flash_next_s_draft_kv_and_state_terms() -> None:
+    flash = "Qwen3.8-Flash-Next"
+    assert cat.DRAFT_REPOS[flash] == "incoai/Qwen3.8-Flash-Next-DFlash2"
+    assert (
+        cat.memory_need(0, vision=False, family=flash) - cat.memory_need(0, vision=False)
+        == 1_210_000_000 - cat.DRAFT_BYTES
+    )
+    # 12 attention layers of 2 KV heads of 256 in INT8, plus 768 bytes of indexer keys.
+    assert cat.kv_bytes(flash, 1) == 12 * 2 * 2 * (256 + 4) + 768
+    assert cat.kv_bytes(flash, 1, bf16=True) == 12 * 2 * 2 * 512 + 768
+    assert cat.state_staging_bytes(flash, 16 * GIB) == 113 * 1024**2
+    assert cat.FAMILY_LABELS[flash] == "Qwen3.8-Flash-Next MoE"
+    assert any(row[0] == flash for row in cat.SEED)
+
+
+def test_a_folder_a_root_variant_shadows_is_not_listed() -> None:
+    files: dict[str, int | None] = {
+        "M-Q8_0.gguf": 5,
+        "Q8_0/M-Q8_0-00001-of-00002.gguf": 7,
+        "Q8_0/M-Q8_0-00002-of-00002.gguf": 7,
+        "q4_0.gguf": 3,
+        "Q4_0/M-Q4_0-00001-of-00002.gguf": 4,
+        "Q4_0/M-Q4_0-00002-of-00002.gguf": 4,
+    }
+    by = {v.name: v for v in cat.gguf_variants("o/M-GGUF", files)}
+    assert by["Q8_0"].files == ["M-Q8_0.gguf"] and by["Q8_0"].size == 5
+    assert "Q4_0" not in by and by["q4_0"].files == ["q4_0.gguf"]

@@ -124,6 +124,12 @@ export default function IntegrationsPage() {
     return m;
   }, [entries]);
 
+  const contexts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const e of entries) if (typeof e.context_length === "number") m.set(e.id, e.context_length);
+    return m;
+  }, [entries]);
+
   return (
     <>
       <PageHeader
@@ -185,6 +191,7 @@ export default function IntegrationsPage() {
             local={local}
             options={options}
             roots={roots}
+            contexts={contexts}
             onChanged={(next) =>
               data.setData((prev) =>
                 prev ? { ...prev, desktop: prev.desktop.map((x) => (x.name === next.name ? next : x)) } : prev,
@@ -495,6 +502,7 @@ function DesktopRow({
   local,
   options,
   roots,
+  contexts,
   onChanged,
 }: {
   index: number;
@@ -502,6 +510,7 @@ function DesktopRow({
   local: boolean;
   options: { value: string; label: string }[];
   roots: ReadonlyMap<string, string>;
+  contexts: ReadonlyMap<string, number>;
   onChanged: (next: DesktopIntegration) => void;
 }) {
   const view = desktopView(app);
@@ -688,7 +697,7 @@ function DesktopRow({
       )}
       {app.name === "claude-desktop" && view !== "not_detected" && (
         <Disclosure summary={t("integrations.slots")}>
-          <SlotsEditor options={options} roots={roots} />
+          <SlotsEditor options={options} roots={roots} contexts={contexts} />
         </Disclosure>
       )}
       <Disclosure summary={t("integrations.desktop.changes")}>
@@ -805,7 +814,15 @@ function StepList({ name, kind, step }: { name: DesktopIntegration["name"]; kind
   );
 }
 
-function SlotsEditor({ options, roots }: { options: { value: string; label: string }[]; roots: ReadonlyMap<string, string> }) {
+function SlotsEditor({
+  options,
+  roots,
+  contexts,
+}: {
+  options: { value: string; label: string }[];
+  roots: ReadonlyMap<string, string>;
+  contexts: ReadonlyMap<string, number>;
+}) {
   const g = globalSettings();
   const stored = normaliseSlots(g.integrations?.claude_desktop?.slots);
   const [slots, setSlots] = useState<Slots>(stored);
@@ -864,7 +881,7 @@ function SlotsEditor({ options, roots }: { options: { value: string; label: stri
       <p class="meta">{t("integrations.slots.autoload")}</p>
       <Disclosure summary={t("integrations.slots.preview")}>
         <p class="meta">{t("integrations.slots.preview_note")}</p>
-        <CodeBlock code={JSON.stringify(gatewayModels(slots, active), null, 2)} label="GET /v1/models" />
+        <CodeBlock code={JSON.stringify(gatewayModels(slots, active, engine.value?.maximum_context_tokens ?? null, contexts), null, 2)} label="GET /v1/models" />
       </Disclosure>
       <div class="cluster" style={{ justifyContent: "space-between" }}>
         <Button

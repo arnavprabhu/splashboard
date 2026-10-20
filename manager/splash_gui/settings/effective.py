@@ -69,6 +69,9 @@ _COMPARE: dict[str, Any] = {
     "serve.max_context": p.parse_max_context,
     "serve.max_cache_disk": p.parse_max_cache_disk,
     "serve.max_cache_disk_writes": p.parse_max_cache_disk_writes,
+    "serve.expert_memory": p.parse_expert_memory,
+    "serve.ple_memory": p.parse_ple_memory,
+    "serve.sparse_kv_memory": p.parse_sparse_kv_memory,
     "serve.max_request_size": p.parse_request_size,
     "serve.idle_release": p.parse_idle_release,
 }
@@ -159,6 +162,10 @@ class EffectiveServe:
     max_cache_disk_writes: str = "0"
     thinking_token_budget: int | None = None
     thinking_end_text: str | None = None
+    expert_memory: str = "auto"
+    ple_memory: str = "auto"
+    sparse_kv_memory: str = "auto"
+    verify_rows: str = "auto"
 
 
 def effective_serve(doc: SettingsDocument, model_id: str) -> EffectiveServe:
@@ -193,6 +200,10 @@ def effective_serve(doc: SettingsDocument, model_id: str) -> EffectiveServe:
         max_cache_disk_writes=str(v("serve.max_cache_disk_writes")),
         thinking_token_budget=v("serve.thinking_token_budget"),
         thinking_end_text=v("serve.thinking_end_text"),
+        expert_memory=str(v("serve.expert_memory")),
+        ple_memory=str(v("serve.ple_memory")),
+        sparse_kv_memory=str(v("serve.sparse_kv_memory")),
+        verify_rows=str(v("serve.verify_rows")),
     )
 
 

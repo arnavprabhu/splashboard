@@ -23,7 +23,6 @@ import { StreamAccumulator, ensureCallIds, estimateTokens } from "./chat/accumul
 import { Composer } from "./chat/Composer";
 import { ConversationList } from "./chat/ConversationList";
 import {
-  MAX_AUTO_RETRIES,
   attachmentError,
   autoRetry,
   autoTitle,
@@ -31,6 +30,7 @@ import {
   classifyError,
   emptySampling,
   hasSamplingErrors,
+  maxAutoRetries,
   modelRows,
   outputBody,
   outputError,
@@ -599,7 +599,7 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
       next = { ...doc };
       show(next);
       const ce = classifyError(err, { model: doc.model, active });
-      const auto = autoRetry(ce.kind) && retries < MAX_AUTO_RETRIES;
+      const auto = autoRetry(ce.kind) && retries < maxAutoRetries(ce.kind);
       setError({ ...ce, request: body, retries, retryIn: auto ? (ce.retryAfter ?? (ce.kind === "queue_full" ? 1 : ce.kind === "busy" ? 10 : 5)) : null });
       return false;
     } finally {

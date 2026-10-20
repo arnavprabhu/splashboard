@@ -710,3 +710,29 @@ def test_state_format_comes_from_the_memory_plan(app: Any) -> None:
     sup.status = {"memory_plan": {"model": {"kv_format": "int8", "state_format": "bf16"}}}
     view = sup.view()
     assert view.state_format == "bf16"
+
+
+def test_yarn_context_bound_and_verify_rows_come_from_status(app: Any) -> None:
+    sup = app.state.manager.supervisor
+    sup.status = {
+        "identity": {
+            "cache": {
+                "rope_scaling": {
+                    "type": "yarn",
+                    "factor": 3.852844238,
+                    "original_context_tokens": 262144,
+                }
+            }
+        },
+        "memory_plan": {"budget": {"context_bounds": {"bound": "disk"}}},
+        "verify_rows": "all",
+    }
+    view = sup.view()
+    assert (view.yarn_factor, view.context_bound, view.verify_rows) == (3.852844238, "disk", "all")
+    sup.status = {
+        "identity": {"cache": {"rope_scaling": None}},
+        "memory_plan": {"budget": {"context_bounds": {"bound": "elsewhere"}}},
+        "verify_rows": "some",
+    }
+    view = sup.view()
+    assert (view.yarn_factor, view.context_bound, view.verify_rows) == (None, None, None)

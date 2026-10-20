@@ -109,7 +109,7 @@ def test_8bit_mlx_is_compatible(hub_harness):
     ],
 )
 def test_nvfp4_checkpoints_are_safetensors_targets_labelled_apart(hub_harness, repo, label):
-    """Splash 1.3.2 checks a Model Optimizer or compressed-tensors checkpoint as it
+    """Splash checks a Model Optimizer or compressed-tensors checkpoint as it
     does an MLX one; the label from the Hub's tags keeps it from showing as MLX."""
     harness = hub_harness()
     result = inspect(harness, repo)
@@ -257,7 +257,7 @@ def test_catalog_is_grouped_by_family_and_format(hub_harness):
     assert payload["families"], "the bundled catalog seed must not be empty"
     assert payload["memory_bytes"] > 0
     for family in payload["families"]:
-        assert family["family"] in ("Qwen3.8-27B", "Qwen3.6-35B-A3B")
+        assert family["family"] in ("Qwen3.8-27B", "Qwen3.6-35B-A3B", "Qwen3.8-Flash-Next")
         assert family["label"]
         groups = family["groups"]
         assert groups, "each family is grouped by format"
@@ -426,6 +426,64 @@ def test_variant_labels_resolve_with_splash_s_own_selector(tmp_path):
     assert json.loads(result.stdout) == ["Q4_0", "UD-Q4_K_M", "UD-Q4_K_XL", "imatrix_unsloth"]
 
 
+def test_a_lone_root_gguf_beside_split_folders_gets_a_variant_splash_resolves():
+    """With a split folder beside it, a lone root GGUF can't be asked for by the
+    bare ID, and its whole stem matches nothing: the label is the -VARIANT ending
+    Splash's `select_gguf` takes for it."""
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    reference = Path(__file__).resolve().parents[2] / "splash"
+    if not (reference / "install" / "upstream.py").exists():
+        pytest.skip("no Splash reference clone to resolve against")
+    helper = Path(__file__).resolve().parents[1] / "splash_gui" / "helpers"
+    files = [
+        "Model-Q4_K_M.gguf",
+        "mmproj-BF16.gguf",
+        "Q8_0/Model-Q8_0-00001-of-00002.gguf",
+        "Q8_0/Model-Q8_0-00002-of-00002.gguf",
+    ]
+    script = (
+        "import json, sys\n"
+        f"sys.path.insert(0, {str(helper)!r})\n"
+        "from install import upstream\n"
+        "from inspect_model import variant_label\n"
+        "files = json.loads(sys.argv[1])\n"
+        "label = variant_label('owner/Model-GGUF', files[0], [files[0]], upstream, files)\n"
+        "print(json.dumps([label, upstream.select_gguf(files, label)[0]]))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script, json.dumps(files)],
+        env={"PYTHONPATH": str(reference), "PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == ["Q4_K_M", ["Model-Q4_K_M.gguf"]]
+
+
+def test_an_mtp_head_inside_a_variant_folder_makes_splash_refuse_it():
+    """Splash's `split_gguf` leaves out only projectors, so an MTP head in Q8_0/
+    is a part that is no part; a folder of MTP heads alone is no variant."""
+    from splash_gui.models import catalog as cat
+
+    files: dict[str, int | None] = {
+        "Q8_0/Model-Q8_0-00001-of-00002.gguf": 10,
+        "Q8_0/Model-Q8_0-00002-of-00002.gguf": 10,
+        "Q8_0/mtp-Model-Q8_0.gguf": 1,
+        "MTP/mtp-Model-Q8_0.gguf": 1,
+        "Q4_0/Model-Q4_0-00001-of-00001.gguf": 5,
+    }
+    variants = {v.name: v for v in cat.gguf_variants("owner/Model-GGUF", files)}
+    assert set(variants) == {"Q8_0", "Q4_0"}
+    assert "mtp-Model-Q8_0.gguf" in (variants["Q8_0"].unloadable or "")
+    assert variants["Q4_0"].unloadable is None
+
+
 def test_a_one_gguf_repository_installs_an_id_splash_resolves():
     """Hcompany/Holo4-27B-GGUF has one GGUF, `q4_k_m.gguf`, whose variant the
     table names `q4_k_m`. Splash's `select_gguf` matches no :q4_k_m there, so the
@@ -445,7 +503,7 @@ def test_a_one_gguf_repository_installs_an_id_splash_resolves():
         "import json, sys\n"
         "from install import upstream\n"
         "files, variant = json.loads(sys.argv[1]), json.loads(sys.argv[2])\n"
-        "print(upstream.select_gguf(files, variant)[0])\n"
+        "print(upstream.select_gguf(files, variant)[0][0])\n"
     )
     for files, variant in [
         (["q4_k_m.gguf", "mmproj.f16.gguf"], "q4_k_m"),
@@ -697,3 +755,143 @@ def test_only_an_explicit_ssd_cache_size_costs_state_staging() -> None:
     base = cat.memory_need(16 * 1024**3, vision=False)
     staged = cat.memory_need(16 * 1024**3, vision=False, staging=153 * 1024**2)
     assert staged - base == 153 * 1024**2
+
+
+# --- Qwen3.8-Flash-Next: split GGUFs in variant folders, GGUF only ------------
+
+FLASH_NEXT = "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF"
+FLASH_NEXT_UNSLOTH = "unsloth/Qwen3.8-Flash-Next-GGUF"
+FLASH_NEXT_MLX = "rapid-mlx/Qwen3.8-Flash-Next-4bit"
+
+
+def test_a_split_repository_lists_each_variant_folder_with_its_parts(hub_harness):
+    """Every Flash-Next GGUF on the Hub is split into a folder named after its
+    variant; each folder is one variant, checked as :VARIANT, and its download
+    plan names every part."""
+    harness = hub_harness()
+    model = f"{FLASH_NEXT}:Q2_0"
+    result = inspect(harness, FLASH_NEXT)
+    assert result["compatible"] is True and result["family"] == "Qwen3.8-Flash-Next"
+    assert result["format"] == "gguf" and result["draft"] == "incoai/Qwen3.8-Flash-Next-DFlash2"
+    by = {v["name"]: v for v in result["variants"]}
+    assert set(by) == {"Q2_0", "IQ2_XS"}
+    assert by["Q2_0"]["files"] == [
+        "Q2_0/Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00001-of-00002.gguf",
+        "Q2_0/Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00002-of-00002.gguf",
+    ]
+    assert all(v["loadable"] is True for v in by.values())
+    listing = hub_module().repository(FLASH_NEXT)[1]
+    assert by["Q2_0"]["size_bytes"] == sum(listing[f].size for f in by["Q2_0"]["files"])
+    planned = inspect(harness, model)
+    names = [f["name"] for f in planned["download_plan"]["files"]]
+    assert by["Q2_0"]["files"][0] in names and by["Q2_0"]["files"][1] in names
+    assert "mmproj-BF16.gguf" in names and "mmproj-BF16.gguf" not in [
+        f["name"] for f in planned["language_only_plan"]["files"]
+    ]
+
+
+def test_a_root_mtp_head_is_no_variant_and_shadows_its_folder(hub_harness):
+    """unsloth keeps `mtp-Qwen3.8-Flash-Next-Q8_0.gguf` at its root, which Splash's
+    selection takes for :Q8_0 before the Q8_0/ folder: the head is never listed,
+    and the folder is reported unloadable with the file Splash would take."""
+    result = inspect(hub_harness(), FLASH_NEXT_UNSLOTH)
+    by = {v["name"]: v for v in result["variants"]}
+    assert set(by) == {"UD-Q2_K_XL", "Q8_0"}
+    assert by["UD-Q2_K_XL"]["loadable"] is True
+    assert by["Q8_0"]["loadable"] is False
+    assert by["Q8_0"]["reason"] == (
+        "Splash takes mtp-Qwen3.8-Flash-Next-Q8_0.gguf for :Q8_0, not the files in Q8_0/"
+    )
+    assert result["recommended_variant"] == "UD-Q2_K_XL"
+
+
+def test_a_flash_next_safetensors_checkpoint_is_refused_with_the_plain_line(hub_harness):
+    from splash_gui.models import compat
+
+    result = inspect(hub_harness(), FLASH_NEXT_MLX)
+    assert result["compatible"] is False and result["badge"] == "incompatible"
+    assert result["reason"] == compat.GGUF_ONLY
+    assert result["reason_detail"] == "Qwen3.8-Flash-Next loads from a GGUF only"
+
+
+def test_the_catalog_lists_flash_next_as_gguf_only(hub_harness):
+    harness = hub_harness()
+    harness.state.memory_bytes = lambda: 64 * 1024**3
+    catalog = harness.client.get("/api/admin/catalog").json()
+    family = next(f for f in catalog["families"] if f["family"] == "Qwen3.8-Flash-Next")
+    assert family["label"] == "Qwen3.8-Flash-Next MoE"
+    assert [g["format"] for g in family["groups"]] == ["gguf"]
+    rows = {e["id"]: e for g in family["groups"] for e in g["entries"]}
+    assert set(rows) == {FLASH_NEXT, FLASH_NEXT_UNSLOTH}
+    ista = rows[FLASH_NEXT]
+    assert {v["name"] for v in ista["variants"]} == {"Q2_0", "IQ2_XS"}
+    assert ista["download_bytes"], "the draft's size is known, so the total is"
+    unsloth = {v["name"]: v for v in rows[FLASH_NEXT_UNSLOTH]["variants"]}
+    assert unsloth["Q8_0"]["loadable"] is False and "mtp-" in unsloth["Q8_0"]["reason"]
+
+
+def test_the_catalog_s_selection_rules_match_splash_s(tmp_path):
+    """`catalog.root_choice` and the folder rule mirror `install/upstream.py
+    select_gguf`, checked against the Splash reference clone."""
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from splash_gui.models import catalog as cat
+
+    reference = Path(__file__).resolve().parents[2] / "splash"
+    if not (reference / "install" / "upstream.py").exists():
+        pytest.skip("no Splash reference clone to resolve against")
+    unsloth = [
+        "mtp-Qwen3.8-Flash-Next-Q8_0.gguf",
+        "mmproj-BF16.gguf",
+        "Q8_0/Qwen3.8-Flash-Next-Q8_0-00001-of-00002.gguf",
+        "Q8_0/Qwen3.8-Flash-Next-Q8_0-00002-of-00002.gguf",
+        "UD-Q2_K_XL/Qwen3.8-Flash-Next-UD-Q2_K_XL-00001-of-00002.gguf",
+        "UD-Q2_K_XL/Qwen3.8-Flash-Next-UD-Q2_K_XL-00002-of-00002.gguf",
+    ]
+    cases = [(unsloth, "Q8_0"), (unsloth, "UD-Q2_K_XL"), (unsloth[2:], "Q8_0")]
+    script = (
+        "import json, sys\n"
+        "from install import upstream\n"
+        "files, variant = json.loads(sys.argv[1]), sys.argv[2]\n"
+        "print(json.dumps(upstream.select_gguf(files, variant)[0]))\n"
+    )
+    for files, variant in cases:
+        result = subprocess.run(
+            [sys.executable, "-c", script, json.dumps(files), variant],
+            env={"PYTHONPATH": str(reference), "PATH": "/usr/bin:/bin"},
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        chosen = json.loads(result.stdout)
+        root = cat.root_choice(files, variant)
+        folder = sorted(f for f in files if f.startswith(variant + "/"))
+        assert chosen == ([root] if root else folder), (files, variant)
+        listed = {v.name: v for v in cat.gguf_variants(FLASH_NEXT_UNSLOTH, dict.fromkeys(files, 1))}
+        assert (listed[variant].unloadable is None) == (chosen == folder)
+
+
+def test_a_gguf_only_refusal_gets_a_plain_line():
+    from splash_gui.models import compat
+
+    reason, detail = compat.explain_refusal("Qwen3.8-Flash-Next loads from a GGUF only")
+    assert reason == compat.GGUF_ONLY and detail == "Qwen3.8-Flash-Next loads from a GGUF only"
+
+
+def test_a_split_repository_gets_time_for_every_part():
+    from splash_gui.models.service import inspect_timeout
+
+    files: dict[str, int | None] = {
+        f"{v}/M-{v}-{k:05d}-of-00003.gguf": 1 for v in ("Q2_0", "Q4_0") for k in (1, 2, 3)
+    }
+    files["mtp-M-Q8_0.gguf"] = 1
+    files["mmproj-BF16.gguf"] = 1
+    # Two variants, 4 s for the second, 2 s for each part beyond a variant's first.
+    assert inspect_timeout(files, None) == 20.0 + 4.0 + 2.0 * 4
+    assert inspect_timeout(files, "Q2_0") == 20.0 + 2.0 * 2
+    assert inspect_timeout({"a.gguf": 1, "b.gguf": 1}, None) == 24.0

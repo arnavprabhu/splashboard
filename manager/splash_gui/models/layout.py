@@ -1,7 +1,7 @@
 """Reading and pruning Splash's models directory.
 
-Splash (`install/models.py`, `assembly.py`, `hub.py`, 1.2.0) keeps, under its
-data directory's `models/`:
+Splash (`install/models.py`, `assembly.py`, `hub.py`; 1.2.0, unchanged at 1.4.0)
+keeps, under its data directory's `models/`:
 
 - **selection links**: `OWNER/REPO[:VARIANT]` for a model alone, or
   `.selections/<sha256 of [model, revision, language_only, draft_model]>`;
@@ -352,7 +352,8 @@ def _remove_empty_dirs(root: Path) -> None:
 
 def is_held(assembly: Path) -> bool:
     """install/assembly.py `is_held`: a server (ours, or a `splash serve` the user
-    runs in a terminal) holds the assembly's model.json lock."""
+    runs in a terminal) holds the assembly's model.json lock. From 1.4.0 the server
+    process (`server.server`) takes the hold itself, not the launcher."""
     try:
         with (assembly / "model.json").open("rb") as record:
             fcntl.flock(record, fcntl.LOCK_EX | fcntl.LOCK_NB)

@@ -5,7 +5,7 @@
  * table; Splash's are verbatim here because they are engine text.
  */
 
-import { parseMaxContext, parseMaxCacheDisk, parseMaxCacheDiskWrites, parseMaxMemory, parseRequestSize } from '../../lib/size';
+import { parseExpertMemory, parseMaxContext, parseMaxCacheDisk, parseMaxCacheDiskWrites, parseMaxMemory, parsePleMemory, parseRequestSize, parseSparseKvMemory } from '../../lib/size';
 import { t } from '../../strings/settings';
 
 /** The bits of a schema field the validators need. */
@@ -17,7 +17,7 @@ export interface FieldRule {
   label?: string;
 }
 
-// Splash's own messages (splash/server/serve_options.py, 1.3.2), shown verbatim.
+// Splash's own messages (splash/server/serve_options.py, 1.4.0), shown verbatim.
 export const SPLASH_MESSAGES = {
   decodeShare: 'must be a nonnegative number such as 0.5',
   imagePixels: (min: number, max: number) => `must be between ${min} and ${max} pixels`,
@@ -108,6 +108,13 @@ export function fieldError(rule: FieldRule, value: unknown): string | null {
     }
     case 'serve.max_cache_disk_writes': {
       const r = parseMaxCacheDiskWrites(s);
+      return r.ok ? null : r.error;
+    }
+    case 'serve.expert_memory':
+    case 'serve.ple_memory':
+    case 'serve.sparse_kv_memory': {
+      const parse = rule.key === 'serve.expert_memory' ? parseExpertMemory : rule.key === 'serve.ple_memory' ? parsePleMemory : parseSparseKvMemory;
+      const r = parse(s || 'auto');
       return r.ok ? null : r.error;
     }
     case 'serve.thinking_token_budget':

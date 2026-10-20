@@ -47,6 +47,12 @@ SEVERITY: dict[str, Severity] = {
     "write_behind_refused": "info",
     # The SSD cache's daily write budget (--max-cache-disk-writes) is spent for now.
     "disk_write_budget": "info",
+    # A long request's KV needs more of the SSD cache than it may hold now; a
+    # retry fails the same way until the cache has more room.
+    "kv_disk_quota": "warn",
+    # A routed expert could not be read from the SSD: every later request fails
+    # until the engine restarts.
+    "expert_streaming_failed": "critical",
     "queue_full": "warn",
     "mask_timeout": "info",
     "download_failed": "warn",
@@ -65,6 +71,8 @@ NOTIFICATION_SETTING: dict[str, str] = {
     "update_available": "update_available",
     "disk_tier_failures": "disk_cache_errors",
     "write_behind_refused": "disk_cache_errors",
+    "kv_disk_quota": "disk_cache_errors",
+    "expert_streaming_failed": "engine_failed",
 }
 # Conditions that are banner-only. A spent write budget is routine (it refills
 # through the day), so it never notifies.

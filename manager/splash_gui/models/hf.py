@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 DEFAULT_ENDPOINT = "https://huggingface.co"
 TIMEOUT_S = 15.0
 # The Hub filters on these tags (`filter=` ANDs, so one request per tag): MLX and
-# GGUF repositories, and the NVFP4 and FP8 checkpoints Splash 1.3.2 loads, which
+# GGUF repositories, and the NVFP4 and FP8 checkpoints Splash loads, which
 # the Hub tags by their quantization library (nvidia/Qwen3.8-27B-NVFP4 `modelopt`,
 # unsloth/Qwen3.8-27B-NVFP4 `compressed-tensors`; checked on the Hub 2026-10-14).
 SEARCH_TAGS = ("mlx", "gguf", "modelopt", "compressed-tensors")

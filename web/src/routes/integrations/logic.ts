@@ -297,16 +297,24 @@ export function stepViews(steps: readonly Step[], current: Step | null | undefin
 /**
  * What the Claude Desktop gateway answers on `/v1/models` for the current slots
  * (manager/splash_gui/integrations/service.py `models`): one entry per slot, named after its
- * target, else the active model, else "Splash". Computed here because the gateway listens on
- * its own loopback port without CORS, and only while connected.
+ * target, else the active model, else "Splash", with that target's context from `/v1/models`
+ * (past 256K with YaRN, up to 1,010,000 tokens), else the active engine's, the native window when
+ * neither is known. Computed here because the gateway listens on its own loopback port without
+ * CORS, and only while connected.
  */
-export function gatewayModels(slots: Slots, active: string | null): Record<string, unknown> {
+export function gatewayModels(
+  slots: Slots,
+  active: string | null,
+  context: number | null = null,
+  contexts: ReadonlyMap<string, number> = new Map(),
+): Record<string, unknown> {
+  const fallback = contexts.get(active ?? '') ?? context ?? 262144;
   const entries = Object.entries(slots).map(([slot, target]) => ({
     id: slot,
     type: 'model',
     display_name: target || active || 'Splash',
     created_at: '2026-10-03T00:00:00Z',
-    max_tokens: 262144,
+    max_tokens: (target ? contexts.get(target) : undefined) ?? fallback,
     anthropic_family_tier: slot.split('-')[1] ?? null,
     is_family_default: true,
   }));

@@ -42,6 +42,27 @@ struct NotificationMapperTests {
         #expect(NotificationMapper.map(n, settings: s) == nil)
     }
 
+    @Test func ssdCacheQuotaUsesDiskCacheErrorsToggleAndOpensCacheSettings() throws {
+        let n = NotificationPayload(id: "q", kind: "kv_disk_quota", title: "A request needs more SSD cache", body: "x")
+        let m = try #require(NotificationMapper.map(n, settings: AppSettings()))
+        #expect(m.openPath == "/admin/settings/cache")
+        #expect(m.interruption == .active)
+        var s = AppSettings()
+        s.notifications["disk_cache_errors"] = false
+        #expect(NotificationMapper.map(n, settings: s) == nil)
+    }
+
+    @Test func failedExpertStreamingIsCriticalAndOpensLogs() throws {
+        var s = AppSettings()
+        s.notifications["engine_failed"] = false
+        let n = NotificationPayload(id: "e", kind: "expert_streaming_failed", title: "Reading the model's experts failed", body: "x")
+        #expect(NotificationMapper.toggleKey(for: n.kind) == "engine_failed")
+        let m = try #require(NotificationMapper.map(n, settings: s))
+        #expect(m.interruption == .timeSensitive)
+        #expect(m.openPath == "/admin/logs")
+        #expect(NotificationMapper.map(n, settings: s, criticalBypassesToggle: false) == nil)
+    }
+
     @Test func untoggledKindsAlwaysDelivered() {
         var s = AppSettings()
         for k in s.notifications.keys { s.notifications[k] = false }

@@ -11,8 +11,9 @@ item (`{"call_id", "status", "execution", "tools": [<namespace or function specs
 `input`. It never adds the found tools to `tools`: the model's server is expected to
 read them from that history item (`core/tests/suite/search_tool.rs` L554-830).
 
-Splash 1.3.2 takes function and namespace tools and message, reasoning, function_call and
-function_call_output items only (`server/api_shapes.py` L362-367, L402-425). So, for a
+Splash (1.3.2 and later) takes function and namespace tools and message, reasoning,
+function_call and function_call_output items only (`server/api_shapes.py` L365-370,
+L405-430 at 1.4.0). So, for a
 Splash model, the router:
 
 - turns the `tool_search` tool into a plain function tool of the same name;

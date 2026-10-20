@@ -119,17 +119,30 @@ def inspect_timeout(
     """The helper gets 20 s. Screening a GGUF variant reads its whole
     metadata block (several MB, the tokenizer included) over range requests, so
     a full variant table of a 27-file repository measured ~37 s on 2026-10-04;
-    allow 20 s plus 4 s per variant beyond the first, up to 150 s. `count`
-    is how many variants this run checks when the others are stored. A
-    safetensors repository gets `SAFETENSORS_TIMEOUT_S`."""
+    allow 20 s plus 4 s per variant beyond the first, up to 150 s. A split GGUF
+    variant reads every part's header, so each part beyond a variant's first adds
+    2 s. `count` is how many variants this run checks when the others are stored.
+    A safetensors repository gets `SAFETENSORS_TIMEOUT_S`."""
+    # One per root GGUF and one per variant folder, as the helper lists them.
+    rows: dict[str, int] = {}
+    for name in files:
+        if not name.endswith(".gguf") or name.count("/") > 1 or cat.is_projector(name):
+            continue
+        if cat.is_mtp_head(name):
+            continue
+        key = name.split("/", 1)[0] + "/" if "/" in name else name
+        rows[key] = rows.get(key, 0) + 1
+    parts = max(rows.values(), default=1)
     if variant is not None:
-        return 20.0
-    roots = [n for n in files if "/" not in n and n.endswith(".gguf") and not cat.is_projector(n)]
-    if not roots and any(n.endswith(".safetensors") for n in files):
+        return 20.0 + 2.0 * (parts - 1)
+    if not rows and any(n.endswith(".safetensors") for n in files):
         return SAFETENSORS_TIMEOUT_S
+    extra = sum(rows.values()) - len(rows)
     if count is None:
-        count = len(roots)
-    return min(150.0, 20.0 + 4.0 * max(0, count - 1))
+        count = len(rows)
+    elif rows:
+        extra = extra * min(count, len(rows)) // len(rows)
+    return min(150.0, 20.0 + 4.0 * max(0, count - 1) + 2.0 * extra)
 
 
 # A config.json larger than this is not read for the checkpoint label (a Model
@@ -702,10 +715,21 @@ class Models:
         # the catalog and in the recommendation (`cat.default_variant`).
         projector = cat.projector(repo.files)
         repo_vision = projector is not None
+        # The family Splash found, else the name's guess: it decides whether a variant
+        # too large to load whole can stream its experts from the SSD.
+        family = next(
+            (r["family"] for r in results.values() if r.get("compatible") and r.get("family")),
+            cat.family_guess(repo_id),
+        )
         variants = []
         for item in table or []:
             result = fresh.get(item["name"])
-            need = cat.memory_need(item.get("size_bytes") or 0, vision=repo_vision)
+            fit = cat.fit_of(
+                item.get("size_bytes") or 0,
+                memory,
+                vision=repo_vision,
+                family=(result or {}).get("family") or family,
+            )
             variants.append(
                 VariantOut.model_validate(
                     {
@@ -713,7 +737,7 @@ class Models:
                         "quality": cat.quality_tier(item["name"], item.get("files")),
                         "loadable": result["compatible"] if result else None,
                         "reason": result.get("reason") if result else None,
-                        "fit": cat.fit_for(need, memory),
+                        "fit": fit,
                     }
                 )
             )
@@ -736,6 +760,7 @@ class Models:
             vision=repo_vision,
             preset_model=self.preset_pick(),
             refused=refused,
+            family=family,
         )
         recommended = next((v for v in variants if v.name == pick and v.loadable), None)
         if recommended:
@@ -753,8 +778,20 @@ class Models:
             if selected
             else 0
         )
+        selected_family = selected.get("family") if selected else None
         selection_need = (
-            cat.memory_need(target, vision=bool(selected["vision"])) if selected else None
+            cat.memory_need(target, vision=bool(selected["vision"]), family=selected_family)
+            if selected
+            else None
+        )
+        selection_fit = (
+            cat.fit_for(
+                selection_need,
+                memory,
+                cat.streamed_need(selected_family, target, vision=bool(selected["vision"])),
+            )
+            if selected and selection_need is not None
+            else None
         )
         if selected and done:
             self.file_sets[model] = selected["files"]
@@ -794,7 +831,7 @@ class Models:
                 "reason": reason,
                 "reason_detail": reason_detail,
                 "memory_need_bytes": selection_need,
-                "fit": cat.fit_for(selection_need, memory) if selection_need is not None else None,
+                "fit": selection_fit,
                 "cached": cached,
                 "checked_at": iso(
                     datetime.fromtimestamp(checked, UTC) if checked and done else None
@@ -1007,7 +1044,7 @@ class Models:
                 for (fam, repo, kind, notes, perf), info in zip(rows, infos, strict=True):
                     if fam != family or kind != fmt:
                         continue
-                    facts = cat.entry_facts(repo, kind, info, memory)
+                    facts = cat.entry_facts(repo, kind, info, memory, fam)
                     if facts:
                         refreshed = iso()
                     variants = facts.pop("variants", None)
@@ -1020,6 +1057,7 @@ class Models:
                             memory,
                             vision=info is not None and cat.projector(info.files) is not None,
                             preset_model=pick_model,
+                            family=fam,
                         )
                         if kind == "gguf"
                         else None
@@ -1066,14 +1104,14 @@ class Models:
                         )
                     )
                 labels = {"mlx": "MLX", "nvfp4": "NVFP4", "gguf": "GGUF"}
-                # The NVFP4 group only where the seed has rows.
-                if entries or fmt != "nvfp4":
+                # A group only where the seed has rows: Flash-Next loads from GGUFs only.
+                if entries:
                     groups.append(CatalogGroup(format=fmt, label=labels[fmt], entries=entries))
             families.append(
                 CatalogFamily.model_validate(
                     {
                         "family": family,
-                        "label": f"{family} {'dense' if '27B' in family else 'MoE'}",
+                        "label": cat.FAMILY_LABELS.get(family, family),
                         "groups": groups,
                     }
                 )
@@ -1095,7 +1133,7 @@ def planned_files(
     draft: Any,
 ) -> list[PlannedFile]:
     """The expected size: the target's selected files, then the draft's
-    `config.json` and `model.safetensors*` (install/upstream.py `_draft_files`), each
+    `config.json` and `model.safetensors*` (install/upstream.py `draft_files`), each
     marked present when its blob is already in the models directory. `/inspect`'s
     `download_plan` and the catalog's `download_bytes` both come from here."""
 

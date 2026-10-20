@@ -11,7 +11,7 @@ import type { PanelTab } from './SidePanel';
 
 export type ChatErrorState = ChatError & { request?: unknown; retries: number; retryIn: number | null };
 
-const RETRYABLE = ['unreachable', 'recovering', 'busy', 'queue_full', 'resource_timeout', 'request_timeout', 'mask_timeout', 'generic', 'capacity'];
+const RETRYABLE = ['unreachable', 'recovering', 'busy', 'queue_full', 'resource_timeout', 'request_timeout', 'mask_timeout', 'generic', 'capacity', 'kv_unreadable', 'ssd_wait'];
 
 export interface ErrorBannerProps {
   error: ChatErrorState;
@@ -54,7 +54,7 @@ export function ErrorBanner({ error, onRetry, onSwitchWhenIdle, onOpenTab, onTur
               {t('chat.action.switch_idle')}
             </Button>
           )}
-          {error.kind === 'failed' && (
+          {(error.kind === 'failed' || error.kind === 'ssd_closed') && (
             <Button
               size="s"
               variant="solid"
@@ -78,6 +78,11 @@ export function ErrorBanner({ error, onRetry, onSwitchWhenIdle, onOpenTab, onTur
           {(error.kind === 'capacity' || error.kind === 'resource_timeout') && (
             <Link href="/settings/memory" class="btn" data-variant="text" data-size="s">
               {t('chat.action.memory')}
+            </Link>
+          )}
+          {(error.kind === 'kv_write_budget' || error.kind === 'kv_disk_quota') && (
+            <Link href="/settings/cache" class="btn" data-variant="text" data-size="s">
+              {t('chat.action.cache')}
             </Link>
           )}
           {error.kind === 'queue_full' && (

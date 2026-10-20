@@ -24,13 +24,13 @@ SHIM_MARKER = "SPLASH_GUI_SHIM"
 # The `splash` script pip and uv install for this package (`[project.scripts]`). It is our
 # CLI too, so it is never the engine: taking it would make the CLI exec itself forever.
 ENTRY_POINT_MARKER = "from splash_gui.cli import"
-# 1.3.2 is the first with the automatic SSD cache the settings default to, memory
-# release on request, thinking budgets and the engine's own tool-name rule, which
-# the Codex and Claude integrations rely on.
-SUPPORTED_MIN = (1, 3, 2)
-SUPPORTED_BELOW = (1, 4, 0)
-SUPPORTED_RANGE = ">=1.3.2 <1.4.0"
-# The lowest supported version as people read it, "1.3.2".
+# 1.4.0 is the first with the expert, PLE and sparse KV memory options, --verify-rows
+# and contexts past 256K that the settings pass, and the first to load
+# Qwen3.8-Flash-Next and split GGUFs.
+SUPPORTED_MIN = (1, 4, 0)
+SUPPORTED_BELOW = (1, 5, 0)
+SUPPORTED_RANGE = ">=1.4.0 <1.5.0"
+# The lowest supported version as people read it, "1.4.0".
 SUPPORTED_MIN_TEXT = ".".join(map(str, SUPPORTED_MIN))
 BREW_TIMEOUT_S = 10
 VERSION_TIMEOUT_S = 15

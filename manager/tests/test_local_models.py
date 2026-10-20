@@ -1018,3 +1018,129 @@ async def test_replacing_a_local_file_keeps_its_draft(
     assert all(blob.is_file() for blob in blobs), "the draft's blobs are kept"
     assert not h.state.downloads.active_model(DRAFT), "and the draft is not queued again"
     assert local.last["a.gguf"]["draft"] == DRAFT
+
+
+# --- Split GGUFs: every part, one model ------------------------------------------
+
+FLASH = "Qwen3.8-Flash-Next-Q2_0"
+FLASH_PARTS = [f"{FLASH}-0000{k}-of-00002.gguf" for k in (1, 2)]
+FLASH_ID = "local/Qwen3.8-Flash-Next-Q2_0-GGUF:Q2_0"
+FLASH_VERDICT = {"family": "Qwen3.8-Flash-Next", "draft_repo": "incoai/Qwen3.8-Flash-Next-DFlash2"}
+
+
+def test_a_split_gguf_s_parts_are_one_candidate(rig: Rig) -> None:
+    first = rig.gguf(FLASH_PARTS[0], b"GGUF" + b"\0" * 10)
+    rig.gguf(FLASH_PARTS[1], b"GGUF" + b"\0" * 20)
+    rig.gguf("other.gguf")
+    [item, other] = rig.local.candidates()
+    assert other.path.name == "other.gguf" and other.parts == []
+    assert item.path == first and [p.path.name for p in item.parts] == FLASH_PARTS
+    assert item.size == 14 + 24 and item.stem == FLASH
+    assert item.model == FLASH_ID and item.complete
+    assert item.keys == [key_of(rig.dir / name) for name in FLASH_PARTS]
+    assert list(item.links()) == [f"Q2_0/{name}" for name in FLASH_PARTS]
+
+
+async def test_a_split_gguf_waits_for_every_part_then_registers_as_its_variant(
+    rig: Rig,
+) -> None:
+    rig.verdicts[FLASH_PARTS[0]] = FLASH_VERDICT
+    rig.gguf(FLASH_PARTS[0])
+    assert await rig.settle() == []
+    assert rig.local.last[FLASH_PARTS[0]] == {"waiting": "parts"}
+    assert rig.classified == [], "an incomplete split GGUF is not read"
+    rig.gguf(FLASH_PARTS[1], b"GGUF-two")
+    assert await rig.settle() == [FLASH_ID]
+    assert rig.classified == [[FLASH_PARTS[0]]], "one entry for every part"
+    [(model, revision, language_only)] = rig.prepared
+    assert (model, language_only) == (FLASH_ID, True)
+    snapshot = repo_folder(rig.dir, FLASH_ID.split(":")[0]) / "snapshots" / revision
+    for name in FLASH_PARTS:
+        link = snapshot / "Q2_0" / name
+        assert link.is_symlink() and link.resolve() == (rig.dir / name).resolve()
+        assert not link.readlink().is_absolute(), "links are relative"
+    assert rig.drafts == [FLASH_VERDICT["draft_repo"]]
+    assert rig.local.last[FLASH_PARTS[0]]["model"] == FLASH_ID
+    # Registered: the next passes leave it alone.
+    assert await rig.local.scan() == [] and len(rig.classified) == 1
+
+
+async def test_deleting_a_split_gguf_tombstones_every_part(rig: Rig) -> None:
+    rig.verdicts[FLASH_PARTS[0]] = FLASH_VERDICT
+    for name in FLASH_PARTS:
+        rig.gguf(name)
+    assert await rig.settle() == [FLASH_ID]
+    assert rig.local.sources(FLASH_ID) == [rig.dir / name for name in FLASH_PARTS]
+    rig.local.forget(FLASH_ID)
+    assert rig.local.ignored() == {key_of(rig.dir / name) for name in FLASH_PARTS}
+    assert await rig.local.scan(retry=True) == []
+    assert len(rig.classified) == 1, "a forgotten split GGUF is not read again"
+
+
+async def test_a_base_named_projector_pairs_with_a_split_gguf(rig: Rig) -> None:
+    rig.verdicts[FLASH_PARTS[0]] = FLASH_VERDICT
+    for name in FLASH_PARTS:
+        rig.gguf(name)
+    rig.gguf("mmproj-Qwen3.8-Flash-Next-BF16.gguf")
+    rig.gguf("unrelated.gguf")  # a second model: the projector pairs by name only
+    assert FLASH_ID in await rig.settle()
+    assert rig.local.last[FLASH_PARTS[0]]["language_only"] is False
+    assert local_module.projector_base(Path("mmproj-Qwen3.8-Flash-Next-BF16.gguf")) == (
+        "Qwen3.8-Flash-Next"
+    )
+    assert local_module.projector_base(Path("m-mmproj-F16.gguf")) == ""
+
+
+async def test_a_family_without_a_released_draft_alerts(rig: Rig) -> None:
+    from splash_gui.models.catalog import NO_DRAFT
+
+    rig.gguf("a.gguf")
+    rig.verdicts["a.gguf"] = {"family": "Qwen3.8-Flash-Next", "draft_repo": None}
+    assert await rig.settle() == []
+    [alert] = rig.alerts.raised
+    assert alert["message"] == NO_DRAFT and rig.drafts == []
+
+
+def test_the_classifier_reads_a_split_gguf_s_parts_as_one(tmp_path: Path) -> None:
+    """classify_gguf.py merges a split GGUF's headers in split order (Splash's
+    `gguf.merged_split`) and answers under the first part; stubbed Splash modules."""
+    pkg = tmp_path / "pkg" / "install"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "models.py").write_text(
+        "import json\n"
+        "class ModelError(RuntimeError):\n    pass\n"
+        "def json_bytes(value):\n    return json.dumps(value).encode()\n"
+    )
+    (pkg / "gguf.py").write_text(
+        "class Metadata:\n"
+        "    def __init__(self, path, tensors=False):\n"
+        "        self.values = {'general.architecture': 'qwen4exp', 'path': path}\n"
+        "def merged_split(headers):\n"
+        "    first = headers[0]\n"
+        "    first.values['general.name'] = '+'.join(h.values['path'] for h in headers)\n"
+        "    return first\n"
+        "def model_config(metadata):\n    return {}\n"
+        "def scalar_metadata(metadata):\n    return {}\n"
+        "def require_loadable(metadata):\n    pass\n"
+    )
+    (pkg / "upstream.py").write_text(
+        "class Family:\n    name = 'Qwen3.8-Flash-Next'\n    draft_repo = 'd/D'\n"
+        "def check_model(*args, **kwargs):\n    return Family()\n"
+    )
+    done = subprocess.run(
+        [sys.executable, str(HELPER)],
+        input=json.dumps({"paths": [["p1", "p2"], "one"]}),
+        capture_output=True,
+        text=True,
+        env={"PYTHONPATH": str(tmp_path / "pkg"), "PATH": "/usr/bin:/bin"},
+        check=True,
+    )
+    out = json.loads(done.stdout)
+    assert out["p1"] == {
+        "family": "Qwen3.8-Flash-Next",
+        "draft_repo": "d/D",
+        "architecture": "qwen4exp",
+        "name": "p1+p2",
+    }
+    assert out["one"]["name"] is None, "one file is read alone"

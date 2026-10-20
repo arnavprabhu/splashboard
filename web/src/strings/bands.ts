@@ -1,6 +1,6 @@
-/** Strings for the lower Status bands: Memory, Cache, Scheduler, Latency and
- * Claude Code. Keys start with "bands.". They load with the lazily loaded bands, not with the
- * Status route's first paint. Common keys come from ./en. */
+/** Strings for the lower Status bands: Active requests, Memory, SSD streaming, Neural Engine,
+ * Cache, Scheduler, Latency and Claude Code. Keys start with "bands.". They load with the lazily
+ * loaded bands, not with the Status route's first paint. Common keys come from ./en. */
 import { en } from './en';
 import { makeT } from './index';
 
@@ -26,6 +26,9 @@ export const bandsStrings = {
   'bands.active.prompt_v': '{d} / {n} · {p}',
   'bands.active.output': 'Output',
   'bands.active.output_v': '{g} / {m}',
+  'bands.active.kv': 'KV',
+  'bands.active.kv.resident': 'RAM',
+  'bands.active.kv.spill': 'SSD',
   'bands.active.age': 'Age',
   'bands.memory.label': 'Memory',
   'bands.memory.meter': 'Memory charged of limit',
@@ -65,6 +68,22 @@ export const bandsStrings = {
   'bands.memory.release_hint': 'Frees the weights now; the next request restores them.',
   'bands.memory.released_toast': 'Memory released. The next request restores the weights.',
   'bands.memory.release_failed': 'Could not release memory',
+  'bands.stream.label': 'SSD streaming',
+  'bands.stream.experts': 'Experts',
+  'bands.stream.experts_v': '{r} resident in {s} slots of {e}',
+  'bands.stream.experts_meta': 'decode hit rate {h} · read {b} · arena {a}',
+  'bands.stream.table': 'PLE table',
+  'bands.stream.table_v': '{c} cache of a {t} table',
+  'bands.stream.table_meta': 'decode hit rate {h} · read {b} · {e} read errors',
+  'bands.stream.table_poisoned': 'a read failed',
+  'bands.stream.failed': 'failed: {reason}',
+  'bands.stream.kv': 'KV on the SSD',
+  'bands.stream.kv_requests': 'requests {s} spilled · {r} in memory',
+  'bands.stream.kv_quota': 'spilled {b} · holds {h} of {l} for active KV',
+  'bands.stream.kv_hits': 'block cache hit rate {h} · {b}',
+  'bands.stream.kv_refused': 'refused {q} quota · {w} write budget · {c} closed · {b} ended at the bound',
+  'bands.stream.kv_failures': '{w} write failures · {r} read failures',
+  'bands.stream.explainer': 'What memory can’t hold is read from the SSD as steps need it: slower, but the model and long contexts fit. After an expert read fails, every request fails until the engine restarts.',
   'bands.ane.label': 'Neural Engine',
   'bands.ane.state': 'Prefill split',
   'bands.ane.state.split': 'Split',
@@ -98,6 +117,8 @@ export const bandsStrings = {
   'bands.cache.writes.budget_left': 'writes open · write budget {b} left',
   'bands.cache.writes.budget_spent': 'write budget spent · reusable states wait for it',
   'bands.cache.writes.closed': 'stopped taking writes this session',
+  'bands.cache.writes.long_refused': 'long requests are refused until it refills',
+  'bands.cache.deferred': 'writes held {v} for reads',
   'bands.cache.kv_blocks': 'KV blocks {n} ({b})',
   'bands.cache.demotions': 'demotions {n} · refused {r} · pending pages {p}',
   'bands.cache.restores': 'restores {n}',

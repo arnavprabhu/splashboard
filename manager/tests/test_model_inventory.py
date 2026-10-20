@@ -534,3 +534,25 @@ def test_an_installed_splash_package_can_be_deleted(harness_factory) -> None:
     response = h.client.delete("/api/admin/models/incoai/Qwen3.6-35B-A3B-Splash")
     assert response.status_code == 200, response.text
     assert not link.exists() and not link.is_symlink()
+
+
+def test_an_installed_model_of_each_family_is_listed(
+    harness_factory: Callable[..., EngineHarness],
+) -> None:
+    """Every family Splash serves validates in the inventory, Qwen3.8-Flash-Next's
+    split GGUF included: its parts lie side by side in the assembly's target/."""
+    flash = "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF:Q2_0"
+    h = harness_factory(installed=(MODEL, MODEL_27B, flash))
+    listing = h.client.get("/api/admin/models")
+    assert listing.status_code == 200, listing.text
+    by = {m["id"]: m for m in listing.json()["models"]}
+    assert {by[m]["family"] for m in by} == {"Qwen3.6-35B-A3B", "Qwen3.8-27B", "Qwen3.8-Flash-Next"}
+    row = by[flash]
+    assert row["format"] == "gguf" and row["variant"] == "Q2_0" and row["status"] == "ready"
+    assert row["draft"]["repo_id"] == "incoai/Qwen3.8-Flash-Next-DFlash2"
+    detail = h.client.get(f"/api/admin/models/{flash}").json()
+    parts = sorted(f["path"] for f in detail["files"] if f["path"].startswith("target/"))
+    assert parts == [
+        "target/Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00001-of-00002.gguf",
+        "target/Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00002-of-00002.gguf",
+    ]

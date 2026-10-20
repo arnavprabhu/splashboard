@@ -84,6 +84,8 @@ export function StatusHeader({ engine: e, models, modelsFailed, persistentCache 
   const hasModels = models ? models.length > 0 : modelsFailed ? false : null;
   const view = viewOf(e?.view);
   const restoring = view.weights_restoring === true && group === 'live';
+  // Reported by managers for Splash 1.4.0 on.
+  const context = view as { yarn_factor?: number | null; context_bound?: string | null; verify_rows?: string | null };
 
   const meta = {
     format: formatLabel(installed),
@@ -92,6 +94,9 @@ export function StatusHeader({ engine: e, models, modelsFailed, persistentCache 
     states: view.state_format ?? null,
     vision: e?.vision ?? null,
     draft: showModel ? (e?.draft ?? (installed?.draft?.repo_id ? installed.draft.repo_id : null)) : undefined,
+    yarn: context.yarn_factor ?? null,
+    bound: context.context_bound ?? null,
+    verify: context.verify_rows ?? null,
     uptime: group === 'live' && uptime !== null ? formatDuration(uptime) : null,
     version: e?.engine_version ?? null,
     starting: group === 'starting',
@@ -99,6 +104,9 @@ export function StatusHeader({ engine: e, models, modelsFailed, persistentCache 
   const metaText: Record<string, string> = {
     format: meta.format ?? '',
     context: t('status.meta.context', { v: meta.context != null ? formatTokens(meta.context) : DASH }),
+    yarn: t('status.meta.yarn', { v: meta.yarn != null ? meta.yarn.toFixed(2) : '' }),
+    bound: t(meta.bound === 'disk' ? 'status.meta.bound_disk' : 'status.meta.bound_memory'),
+    verify: t(meta.verify === 'all' ? 'status.meta.verify_all' : 'status.meta.verify_auto'),
     kv: t('status.meta.kv', { v: meta.kv ?? '' }),
     states: t('status.meta.states', { v: meta.states ?? '' }),
     vision: t(meta.vision ? 'status.meta.vision_on' : 'status.meta.vision_off'),

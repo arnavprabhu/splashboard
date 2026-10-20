@@ -391,10 +391,11 @@ class FakeHandler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Expose-Headers", "Retry-After, WWW-Authenticate")
         super().end_headers()
 
-    def _send(self, status: int, data: bytes, content_type: str) -> None:
+    def _send(self, status: int, data: bytes, content_type: str, retry_after: int = 1) -> None:
         self.send_response(status)
         if status in RETRY_STATUSES:
-            self.send_header("Retry-After", "1")
+            # server.py _send (1.4.0): the seconds the error invites a wait.
+            self.send_header("Retry-After", str(retry_after))
         if status == 401:
             self.send_header("WWW-Authenticate", "Bearer")
         self.send_header("Content-Type", content_type)
@@ -410,13 +411,13 @@ class FakeHandler(BaseHTTPRequestHandler):
         if self._record is not None:
             self._record["status"] = status
 
-    def _json(self, status: int, payload: object) -> None:
-        self._send(status, json_codec.encode(payload), "application/json")
+    def _json(self, status: int, payload: object, retry_after: int = 1) -> None:
+        self._send(status, json_codec.encode(payload), "application/json", retry_after)
 
     def _error(self, error: APIError) -> tuple[int, str]:
         """server/server.py _safe_error: the path's API answers (errors.py dialects)."""
         status, code, payload = self.errors.answer(error)
-        self._json(status, payload)
+        self._json(status, payload, error.retry_after)
         return status, code
 
     def _log_api_error(self, code: str) -> None:
@@ -1993,6 +1994,10 @@ def settings_from_args(args) -> ServeSettings:
         state_format=args.state_format,
         thinking_token_budget=args.thinking_token_budget,
         thinking_end_text=args.thinking_end_text,
+        expert_memory=args.expert_memory,
+        ple_memory=args.ple_memory,
+        sparse_kv_memory=args.sparse_kv_memory,
+        verify_rows=args.verify_rows,
     )
 
 

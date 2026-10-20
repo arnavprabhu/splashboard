@@ -24,11 +24,12 @@ from pydantic import (
 
 from . import parsers as p
 
-SETTINGS_VERSION = 3
+SETTINGS_VERSION = 4
 
 Theme = Literal["light", "dark", "system"]
 KvFormat = Literal["int8", "bf16"]
 StateFormat = Literal["fp32", "bf16"]
+VerifyRows = Literal["auto", "all"]
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 Priority = Literal["foreground", "normal", "background"]
 SwitchWhenBusy = Literal["reject", "wait"]
@@ -158,6 +159,11 @@ class GlobalServeSettings(_Strict):
     max_context: SizeText = "auto"
     kv_format: KvFormat = "int8"
     state_format: StateFormat = "fp32"
+    # The streamed stores' RAM: auto, off (not for sparse KV) or a size, as typed.
+    expert_memory: SizeText = "auto"
+    ple_memory: SizeText = "auto"
+    sparse_kv_memory: SizeText = "auto"
+    verify_rows: VerifyRows = "auto"
     max_cache_disk: SizeText = "auto"
     # --max-cache-disk-writes: a daily write budget; "0" is Splash's default, no limit.
     max_cache_disk_writes: SizeText = "0"
@@ -192,6 +198,24 @@ class GlobalServeSettings(_Strict):
     @classmethod
     def _max_cache_disk(cls, value: str) -> str:
         p.parse_max_cache_disk(value)
+        return value
+
+    @field_validator("expert_memory")
+    @classmethod
+    def _expert_memory(cls, value: str) -> str:
+        p.parse_expert_memory(value)
+        return value
+
+    @field_validator("ple_memory")
+    @classmethod
+    def _ple_memory(cls, value: str) -> str:
+        p.parse_ple_memory(value)
+        return value
+
+    @field_validator("sparse_kv_memory")
+    @classmethod
+    def _sparse_kv_memory(cls, value: str) -> str:
+        p.parse_sparse_kv_memory(value)
         return value
 
     @field_validator("max_cache_disk_writes")
@@ -497,6 +521,10 @@ class ModelServeOverrides(_Sparse):
     thinking_end_text: Annotated[str | None, BeforeValidator(_end_text)] = None
     kv_format: KvFormat = "int8"
     state_format: StateFormat = "fp32"
+    expert_memory: SizeText = "auto"
+    ple_memory: SizeText = "auto"
+    sparse_kv_memory: SizeText = "auto"
+    verify_rows: VerifyRows = "auto"
     max_context: SizeText = "auto"
     decode_share: float = p.DEFAULT_DECODE_SHARE
     max_image_pixels: int = p.MAX_IMAGE_PIXELS
@@ -536,6 +564,24 @@ class ModelServeOverrides(_Sparse):
     @classmethod
     def _max_context(cls, value: str) -> str:
         p.parse_max_context(value)
+        return value
+
+    @field_validator("expert_memory")
+    @classmethod
+    def _expert_memory(cls, value: str) -> str:
+        p.parse_expert_memory(value)
+        return value
+
+    @field_validator("ple_memory")
+    @classmethod
+    def _ple_memory(cls, value: str) -> str:
+        p.parse_ple_memory(value)
+        return value
+
+    @field_validator("sparse_kv_memory")
+    @classmethod
+    def _sparse_kv_memory(cls, value: str) -> str:
+        p.parse_sparse_kv_memory(value)
         return value
 
     @field_validator("decode_share")

@@ -109,3 +109,28 @@ def test_spent_write_budget_is_an_info_banner() -> None:
     assert SEVERITY["disk_write_budget"] == "info"
     assert "disk_write_budget" in BANNER_ONLY
     assert "disk_write_budget" not in NOTIFICATION_SETTING
+
+
+def test_ssd_cache_quota_refusals_notify_under_disk_cache_errors(app: FastAPI) -> None:
+    """A long request the SSD cache cannot hold fails the same way on a retry, so
+    it notifies, unless the disk cache errors toggle is off."""
+    assert SEVERITY["kv_disk_quota"] == "warn"
+    assert NOTIFICATION_SETTING["kv_disk_quota"] == "disk_cache_errors"
+    alerts, published, _ = center(app)
+    alerts.raise_alert("kv_disk_quota", "needs more SSD cache", source="proxy")
+    assert [d.kind for e, d in published if e == "notification"] == ["kv_disk_quota"]
+    store = app.state.manager.settings
+    document = store.current.model_dump(mode="json", by_alias=True)
+    document["global"]["notifications"]["disk_cache_errors"] = False
+    assert store.save(document)[0].ok
+    alerts.clear_condition("kv_disk_quota")
+    published.clear()
+    alerts.raise_alert("kv_disk_quota", "needs more SSD cache again", source="proxy")
+    assert alerts.active("kv_disk_quota")
+    assert not [d for e, d in published if e == "notification"]
+
+
+def test_a_failed_expert_store_is_critical() -> None:
+    assert SEVERITY["expert_streaming_failed"] == "critical"
+    assert NOTIFICATION_SETTING["expert_streaming_failed"] == "engine_failed"
+    assert "expert_streaming_failed" not in BANNER_ONLY

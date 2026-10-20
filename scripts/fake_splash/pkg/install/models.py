@@ -76,7 +76,12 @@ class ModelError(RuntimeError):
     pass
 
 
-# --- From splash/install/models.py (1.3.2) ----------------------------------
+class VisionError(ModelError):
+    """A refusal of the model's vision alone, which serving text only avoids
+    (splash/install/models.py, 1.4.0)."""
+
+
+# --- From splash/install/models.py (1.4.0) ----------------------------------
 # Splash packages, the prebuilt format that predated upstream loading, are no
 # longer loaded: each package format names the MLX model of its family.
 PACKAGE_REPLACEMENTS = {
@@ -124,7 +129,7 @@ def is_safe_path(name: str) -> bool:
     return bool(name) and not name.startswith("/") and ".." not in name.split("/")
 
 
-# install/models.py MAX_JSON_BYTES (1.3.2): a Model Optimizer shard index names
+# install/models.py MAX_JSON_BYTES (1.4.0): a Model Optimizer shard index names
 # every routed expert's tensors, 14 MB.
 MAX_JSON_BYTES = 64 << 20
 
@@ -293,7 +298,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--draft-model",
         type=parse_draft_model,
-        help="override the automatically selected DFlash2 repository or local directory",
+        help="the DFlash2 draft's repository or local directory, in place of the "
+        "family's released one (required for a family without one)",
     )
     parser.add_argument(
         "--language-only",
@@ -333,6 +339,8 @@ def family_of(repo_id: str):
     GGUF header; the fake decides from the repository name."""
     name = repo_id.lower()
     by_name = {family.name: family for family in _families()}
+    if "flash-next" in name:
+        return by_name["Qwen3.8-Flash-Next"]
     if "35b-a3b" in name:
         return by_name["Qwen3.6-35B-A3B"]
     if "27b" in name:
@@ -417,6 +425,11 @@ def _commit(repo_id: str, revision: str | None) -> str:
     return hashlib.sha1(f"{repo_id}@{revision or 'main'}#{salt}".encode(), usedforsecurity=False).hexdigest()
 
 
+# Families whose GGUFs the fake publishes split, with the number of parts: as every
+# Qwen3.8-Flash-Next GGUF on the Hub is, VARIANT/MODEL-VARIANT-0000K-of-00002.gguf.
+SPLIT_FAMILIES = {"Qwen3.8-Flash-Next": 2}
+
+
 def _text_config(family) -> dict:
     from . import signatures
 
@@ -436,9 +449,22 @@ def target_repo(selection: Selection, family) -> tuple[RemoteRepo, dict[str, str
         # Publishers name variants after the model, without the repo's own
         # "-GGUF" suffix in any casing (prism-ml ships "-gguf" lower case).
         base = re.sub(r"-gguf$", "", selection.repo_id.split("/", 1)[1], flags=re.I)
-        weights = f"{base}-{selection.variant}.gguf"
-        repo.files.append(RemoteFile(weights, shard_bytes, True, b"GGUF\x03\x00\x00\x00", seed + b"/w" + changed))
-        assembly["target/" + weights] = weights
+        if family.name in SPLIT_FAMILIES:
+            # Every Flash-Next GGUF on the Hub is split, its parts in a folder named
+            # after the variant, which upstream.py `split_gguf` installs side by side.
+            parts = SPLIT_FAMILIES[family.name]
+            names = [
+                f"{selection.variant}/{base}-{selection.variant}-{k:05d}-of-{parts:05d}.gguf"
+                for k in range(1, parts + 1)
+            ]
+            selected = f"{parts} split files {names[0]} ..."
+        else:
+            names = [f"{base}-{selection.variant}.gguf"]
+            selected = names[0]
+        for index, weights in enumerate(names):
+            part_seed = seed + b"/w" + (changed if index == 0 else b"") + (f"/{index}".encode() if index else b"")
+            repo.files.append(RemoteFile(weights, shard_bytes, True, b"GGUF\x03\x00\x00\x00", part_seed))
+            assembly["target/" + Path(weights).name] = weights
         vision_format = "none"
         if not selection.language_only:
             # Splash only accepts a clip projector whose tensors are BF16 or F32;
@@ -454,7 +480,7 @@ def target_repo(selection: Selection, family) -> tuple[RemoteRepo, dict[str, str
             repo.files.append(mmproj)
             assembly["vision/mmproj.gguf"] = mmproj.name
             vision_format = "gguf"
-        print(f"Selected {weights} from {repo.name}.", flush=True)
+        print(f"Selected {selected} from {repo.name}.", flush=True)
         return repo, assembly, "gguf", vision_format
     shards = max(1, int(os.environ.get("FAKE_SPLASH_DL_SHARDS", "2")))
     names = [f"model-{i:05d}-of-{shards:05d}.safetensors" for i in range(1, shards + 1)]
@@ -496,6 +522,9 @@ def draft_repo(selection: Selection, family) -> RemoteRepo:
     from . import signatures
 
     name = selection.draft_model or family.draft_repo
+    if name is None:
+        # upstream.py `_resolve_draft` for a family no draft is released for.
+        raise ModelError(f"no DFlash2 draft is released for {family.name}; name one with --draft-model")
     repo = RemoteRepo(name, _commit(name, None))
     repo.files += [
         _json_file("config.json", signatures.draft_config(family)),
@@ -770,6 +799,10 @@ def _install(selection: Selection, family: Any, mode: str, context: str) -> None
     the assembly at the selection link."""
     if mode == "incompatible":
         raise ModelError(f"{context}: {incompatible_message()}")
+    if selection.variant is None and family.name in SPLIT_FAMILIES:
+        # The fake publishes such a family as GGUFs only; a repository read as
+        # safetensors gets the engine's refusal (ModelDescriptor.mm describeSourceModel).
+        raise ModelError(f"{context}: {family.name} loads from a GGUF only")
     # upstream.py inspect_target ("Selected ...") runs only when installing.
     target, assembly_paths, target_format, vision_format = target_repo(selection, family)
     draft = draft_repo(selection, family)

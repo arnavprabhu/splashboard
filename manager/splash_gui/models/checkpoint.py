@@ -1,7 +1,7 @@
 """Which kind of safetensors checkpoint a repository holds.
 
-Splash 1.3.2 loads three kinds of safetensors checkpoint as one target
-(install/upstream.py `_mlx_target`, recorded as `target_format` "mlx-affine"):
+Splash loads three kinds of safetensors checkpoint as one target
+(install/upstream.py `mlx_target`, recorded as `target_format` "mlx-affine"):
 MLX's own (a config.json `quantization` object), and NVFP4 or FP8 weights from
 NVIDIA's Model Optimizer or llm-compressor's compressed-tensors (a
 `quantization_config` whose `quant_method` is "modelopt" or "compressed-tensors",

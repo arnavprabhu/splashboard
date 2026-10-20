@@ -12,7 +12,8 @@ from __future__ import annotations
 from . import families, models
 
 # The text_config fields that identify each family's target, as an MLX config
-# states them (the 1.2.0 families.py signatures).
+# states them (the 1.2.0 families.py signatures; Qwen3.8-Flash-Next's from
+# runtime/model/Qwen4Exp.hpp, its config derived from a GGUF header).
 TEXT: dict[str, tuple[tuple[str, object], ...]] = {
     "Qwen3.8-27B": (
         ("model_type", "qwen3_5_text"),
@@ -36,7 +37,22 @@ TEXT: dict[str, tuple[tuple[str, object], ...]] = {
         ("num_experts", 256),
         ("num_experts_per_tok", 8),
     ),
+    "Qwen3.8-Flash-Next": (
+        ("model_type", "qwen4_exp_text"),
+        ("max_position_embeddings", 262144),
+        ("hidden_size", 2560),
+        ("num_hidden_layers", 48),
+        ("vocab_size", 248320),
+        ("num_attention_heads", 24),
+        ("num_key_value_heads", 2),
+        ("head_dim", 256),
+        ("num_experts", 512),
+        ("num_experts_per_tok", 10),
+    ),
 }
+# The families whose layout loads no safetensors checkpoint, only a GGUF
+# (Qwen4Exp.hpp `loadsSafetensors = false`).
+GGUF_ONLY = frozenset({"Qwen3.8-Flash-Next"})
 
 # The fields every DFlash2 draft states alike.
 _DFLASH2 = (
@@ -64,6 +80,14 @@ DRAFT: dict[str, tuple[tuple[str, object], ...]] = {
         ("vocab_size", 248320),
         ("intermediate_size", 6144),
     ),
+    # incoai/Qwen3.8-Flash-Next-DFlash2's config.json (Hub, 2026-10-20).
+    "Qwen3.8-Flash-Next": (
+        *_DFLASH2,
+        ("num_hidden_layers", 5),
+        ("hidden_size", 2560),
+        ("vocab_size", 248320),
+        ("intermediate_size", 7680),
+    ),
 }
 
 
@@ -78,7 +102,7 @@ def draft_config(family: families.ModelFamily) -> dict:
 def check(config: object) -> families.ModelFamily:
     """The family config describes, or the engine's refusal
     (ModelDescriptor.mm unsupportedModel: "no supported model has this architecture
-    (...); supported: Qwen3.8-27B, Qwen3.6-35B-A3B")."""
+    (...); supported: " and every family)."""
     supported = ", ".join(f.name for f in families.FAMILIES)
     text = config.get("text_config") if isinstance(config, dict) else None
     if not isinstance(text, dict):

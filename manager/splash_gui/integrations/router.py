@@ -102,7 +102,7 @@ async def codex(request: Request, path: str) -> Response:
 
 
 # Splash runs function tools (and namespaces of them) only; it refuses the rest with a
-# 400 (server/api_shapes.py normalize_responses_tools, 1.3.2). Codex adds OpenAI's
+# 400 (server/api_shapes.py normalize_responses_tools, 1.3.2+). Codex adds OpenAI's
 # hosted `web_search` to every request unless it is turned off, and turning it off in
 # config.toml would turn it off for the app's own models too.
 LOCAL_TOOL_TYPES = ("function", "namespace")

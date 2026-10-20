@@ -1,7 +1,8 @@
 # Derived from Splash (github.com/incoai/splash, Apache-2.0), modified by the Splashboard authors.
 # See LICENSE.splash and NOTICE in scripts/fake_splash.
 """Response and stream-chunk shapes, copied from splash/server/api_shapes.py
-(1.2.0, lines 982-1255; unchanged in substance through 1.3.2) with the
+(1.2.0, lines 982-1255; unchanged in substance through 1.4.0, which adds a
+bounded LENGTH end to anthropic_stop) with the
 tool-policy and thinking-codec objects replaced by plain fields of FakeJob.
 Keep these in step with the engine."""
 
@@ -45,6 +46,9 @@ class NativeResult:
     drafted_tokens: int = 0
     accepted_draft_tokens: int = 0
     draft_cycles: int = 0
+    # server/backend.py NativeResult (1.4.0): a LENGTH end the engine set at its
+    # own bound, the SSD cache's quota or memory, before max_tokens.
+    bounded: bool = False
 
     @functools.cached_property
     def metrics(self) -> dict:
@@ -317,7 +321,9 @@ def anthropic_stop(result, tool_calls, output_clamped_to_context):
     if tool_calls and result.reason != "length":
         return "tool_use"
     if result.reason == "length":
-        if output_clamped_to_context:
+        # The context, not max_tokens, ended it: max_tokens was lowered to what
+        # the context leaves, or the engine ended it at what it holds.
+        if output_clamped_to_context or result.bounded:
             return "model_context_window_exceeded"
         return "max_tokens"
     if result.stop_sequence is not None:

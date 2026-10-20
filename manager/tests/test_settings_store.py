@@ -253,7 +253,8 @@ def test_v2_moves_ssd_cache_off_to_auto_once(paths: Paths) -> None:
     store = SettingsStore(paths)
     assert store.load().global_.serve.max_cache_disk == "auto"
     on_disk = json.loads(paths.settings_file.read_text())
-    assert on_disk["version"] == 3 and on_disk["global"]["serve"]["max_cache_disk"] == "auto"
+    assert on_disk["version"] == SETTINGS_VERSION
+    assert on_disk["global"]["serve"]["max_cache_disk"] == "auto"
     raw = store.current.to_json_dict()
     raw["global"]["serve"]["max_cache_disk"] = "0"
     result, _ = store.save(raw)
@@ -265,7 +266,7 @@ def test_v2_moves_ssd_cache_off_to_auto_once(paths: Paths) -> None:
     number, _ = migrate({"version": 2, "global": {"serve": {"max_cache_disk": 0}}})
     assert number["global"]["serve"]["max_cache_disk"] == "auto"
     bare, _ = migrate({"version": 2, "global": {}})
-    assert bare == {"version": 3, "global": {}}
+    assert bare == {"version": SETTINGS_VERSION, "global": {}}
 
 
 def test_repair_drops_only_bad_values(paths: Paths) -> None:
@@ -502,3 +503,46 @@ def test_v2_moves_extra_flags_that_are_now_settings() -> None:
     data, _ = migrate(bad)
     assert data["global"]["engine"]["extra_flags"] == [{"flag": "--state-format", "value": "fp16"}]
     assert "state_format" not in data["global"].get("serve", {})
+
+
+def test_v3_moves_the_streamed_store_and_verify_flags_into_settings(paths: Paths) -> None:
+    """A Splashboard that ran a newer Splash as untested could pass --expert-memory,
+    --ple-memory, --sparse-kv-memory and --verify-rows only as extra flags. They move
+    into their settings, abbreviations and `--flag=value` too; a value the setting
+    refuses stays, and validation then names it."""
+    v3 = {
+        "version": 3,
+        "global": {
+            "engine": {
+                "extra_flags": [
+                    {"flag": "--expert-mem", "value": "16G"},
+                    {"flag": "--ple-memory=off"},
+                    {"flag": "--sparse-kv-memory", "value": "1200M"},
+                    {"flag": "--verify-rows", "value": "all"},
+                    {"flag": "--some-new-flag"},
+                ]
+            }
+        },
+    }
+    paths.settings_file.write_text(json.dumps(v3))
+    store = SettingsStore(paths)
+    serve = store.load().global_.serve
+    assert (serve.expert_memory, serve.ple_memory, serve.sparse_kv_memory) == (
+        "16G",
+        "off",
+        "1200M",
+    )
+    assert serve.verify_rows == "all"
+    assert store.current.global_.engine.extra_flags[0].flag == "--some-new-flag"
+    assert len(store.current.global_.engine.extra_flags) == 1
+    assert json.loads(paths.settings_file.read_text())["version"] == SETTINGS_VERSION == 4
+
+    refused = [
+        {"flag": "--sparse-kv-memory", "value": "off"},
+        {"flag": "--verify-rows", "value": "some"},
+    ]
+    data, _ = migrate({"version": 3, "global": {"engine": {"extra_flags": list(refused)}}})
+    assert data["global"]["engine"]["extra_flags"] == refused
+    assert "sparse_kv_memory" not in data["global"].get("serve", {})
+    result = validate_document(data)
+    assert {i.code for i in result.errors} == {"managed_flag"}

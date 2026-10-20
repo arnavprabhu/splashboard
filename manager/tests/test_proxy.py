@@ -988,3 +988,60 @@ def test_the_managers_own_systemone_errors_answer_as_splash_does(harness_factory
     )
     assert chat.status_code == 400
     assert chat.json()["error"]["message"] == "request body must be an object"
+
+
+def test_ssd_cache_refusals_raise_their_alerts(h_ready: EngineHarness) -> None:
+    """A long request's KV on the SSD cache (Qwen3.8-Flash-Next): each refusal
+    raises its alert by code, or by message on Messages, whose errors carry
+    none; capacity and timeout refusals with an SSD cause say so."""
+    pipeline = h_ready.state.proxy
+    alerts = h_ready.state.alerts
+    pipeline._alerts(
+        400, "kv_disk_quota", "this request's KV needs needed_bytes=1 of the SSD cache"
+    )
+    alert = alerts.get("kv_disk_quota")
+    assert alert is not None and "Settings › Cache" in alert.message
+    pipeline._alerts(
+        503,
+        "overloaded_error",
+        "requests past 10 tokens keep their KV on the SSD cache, whose daily write budget "
+        "(--max-cache-disk-writes) is spent",
+    )
+    budget = alerts.get("disk_write_budget")
+    assert budget is not None and "long requests" in budget.title and budget.severity == "info"
+    pipeline._alerts(
+        503, "kv_unreadable", "KV of an earlier part of the conversation could not be read"
+    )
+    assert alerts.get("disk_tier_failures:read").title == "SSD cache read failed"
+    pipeline._alerts(
+        400,
+        "capacity_exhausted",
+        "the request does not fit in the memory this server may use (requests past 10 "
+        "tokens keep their KV on the SSD cache, which takes no writes)",
+    )
+    assert (
+        alerts.get("capacity_exhausted").title == "Request refused: the SSD cache takes no writes"
+    )
+    pipeline._alerts(400, "capacity_exhausted", "the request does not fit in the memory")
+    assert "not enough memory" in alerts.get("capacity_exhausted").title
+    pipeline._alerts(
+        503,
+        "resource_timeout",
+        "the SSD cache's room for active KV did not become available within the resource wait "
+        "limit: other long requests hold it",
+    )
+    assert "room in the SSD cache" in alerts.get("resource_timeout").title
+
+
+def test_a_long_retry_after_passes_through(h_ready: EngineHarness) -> None:
+    """kv_write_budget: the engine invites a retry once the SSD write budget
+    refills, possibly hours away, and the proxy forwards its Retry-After."""
+    h = h_ready
+    h.fake("POST", "/_fake/mode", {"mode": "kv_write_budget"})
+    response = h.client.post("/v1/chat/completions", json={"model": MODEL, **CHAT})
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "kv_write_budget"
+    assert response.headers["retry-after"] == "3600"
+    assert h.state.alerts.active("disk_write_budget")
+    row = usage_row(h, response.headers["x-splash-request-id"])
+    assert row["error_code"] == "kv_write_budget"

@@ -70,3 +70,12 @@ describe('Hub search finds NVFP4 and FP8 checkpoints', () => {
     expect(all.filter((r) => matchesFilter(r, 'gguf'))).toEqual([gguf]);
   });
 });
+
+describe('the offline catalog seed', () => {
+  it('lists Qwen3.8-Flash-Next with GGUF repositories only', () => {
+    const family = catalogSeed().families.find((f) => f.family === 'Qwen3.8-Flash-Next');
+    expect(family?.label).toBe('Qwen3.8-Flash-Next · Mixture of experts');
+    expect(family?.groups.map((g) => g.format)).toEqual(['gguf']);
+    expect(family?.groups[0]?.entries.map((e) => e.id)).toEqual(['ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF', 'unsloth/Qwen3.8-Flash-Next-GGUF']);
+  });
+});
