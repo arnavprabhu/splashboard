@@ -1,6 +1,6 @@
 # Derived from Splash (github.com/incoai/splash, Apache-2.0), modified by the Splashboard authors.
 # See LICENSE.splash and NOTICE in scripts/fake_splash.
-"""Small compatibility stand-in for splash/install/upstream.py (1.4.0).
+"""Small compatibility stand-in for splash/install/upstream.py (1.4.1).
 
 Mirrors its `Target`, `check_model` and the screening order of
 `inspect_target(repo, variant, language_only, scratch)`: a GGUF's variant must be
@@ -197,7 +197,8 @@ def gguf_target(repo, names, scratch, *, language_only=False):
         )
     files = {"target/" + Path(part).name: part for part in names}
     vision_format = "none"
-    if not language_only:
+    # A family without a vision tower (Flint) serves text only and reads no projector.
+    if not language_only and family.vision:
         projector = select_vision(repo)
         files["vision/mmproj.gguf"] = projector
         vision_format = "gguf"

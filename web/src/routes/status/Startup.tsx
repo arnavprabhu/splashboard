@@ -80,6 +80,7 @@ export function StartupBand({ engine: e }: { engine: EngineSummary }) {
   const lines = (view.log_tail ?? []).slice(-12);
   const install = installOf(e);
   const hub = (view.notices ?? []).filter((n) => n.kind === 'hub_unreachable' || n.kind === 'new_commit_not_installed');
+  const waiting = (view.notices ?? []).filter((n) => n.kind === 'memory_wait').slice(-1);
   return (
     <Section label={t('status.startup.label')} id="status-startup">
       <div class="stack">
@@ -87,6 +88,11 @@ export function StartupBand({ engine: e }: { engine: EngineSummary }) {
           {t(phase === 'installing' ? 'status.startup.installing' : phase === 'warming' ? 'status.startup.warming' : 'status.startup.loading').replace(/…$/, '')}
         </p>
         {install && <Install install={install} />}
+        {waiting.map((n) => (
+          <Banner key={n.ts + n.kind} tone="info" title={t('status.banner.memory_wait')}>
+            <code class="mono">{n.message}</code>
+          </Banner>
+        ))}
         {hub.map((n) => (
           <Banner key={n.ts + n.kind} tone="info" title={t('status.banner.hub')}>
             <code class="mono">{n.message}</code>

@@ -280,7 +280,11 @@ def main() -> None:
         reason = None
         try:
             target = inspect_target(choice, False, scratch)
-            vision = True
+            # A family without a vision tower (Flint, Splash 1.4.1) passes the full
+            # check with no vision at all: it serves text only.
+            vision = getattr(target, "vision_format", "gguf") != "none"
+            if not vision:
+                reason = f"{target.family.name} has no vision tower; it serves text only"
             language_files = sorted(
                 path for key, path in target.files.items() if key.startswith("target/")
             ) or sorted(set(target.files.values()))

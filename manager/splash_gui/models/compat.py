@@ -12,8 +12,8 @@ unquantized; Splash loads quantized projections". A checkpoint without any of
 them (BF16 weights) gets "this model requires an MLX checkpoint (...), an NVFP4 or
 FP8 checkpoint of Model Optimizer or compressed-tensors, or a supported GGUF". A
 GGUF whose projections and experts are all BF16, F16 or F32 is refused by the
-installer (`install/gguf.py` `require_loadable`). Qwen3.8-Flash-Next loads from a
-GGUF only: any safetensors checkpoint of it gets "Qwen3.8-Flash-Next loads from a
+installer (`install/gguf.py` `require_loadable`). Qwen3.8-Flash-Next and Flint load
+from a GGUF only: any safetensors checkpoint of either gets "<family> loads from a
 GGUF only" (`ModelDescriptor.mm` `describeSourceModel`).
 Every place that shows a verdict (the `/inspect` reason, a refused download, a
 failed load) leads with one plain line and keeps the engine's words as the detail.
@@ -36,7 +36,7 @@ CHECKPOINT_QUANTIZATION = (
     "are NVFP4 (in groups of 16) or FP8."
 )
 GGUF_ONLY = (
-    "Splash runs Qwen3.8-Flash-Next from GGUF files only; its MLX and other "
+    "Splash runs {family} from GGUF files only; its MLX and other "
     "safetensors versions don't load. Choose a GGUF of it."
 )
 CHECKPOINT_UNQUANTIZED = (
@@ -65,7 +65,7 @@ _CHECKPOINT_QUANTIZATION = re.compile(
     r"| must be (?:an object|an array|a non-empty object|a string|a whole number))",
     re.IGNORECASE,
 )
-_GGUF_ONLY = re.compile(r"\bloads from a gguf only\b", re.IGNORECASE)
+_GGUF_ONLY = re.compile(r"(?:^|[\s:])(\S+) loads from a gguf only\b", re.IGNORECASE)
 _GGUF_UNQUANTIZED = re.compile(
     r"stores every projection and expert unquantized \(bf16, f16 or f32\)", re.IGNORECASE
 )
@@ -76,8 +76,9 @@ def explain_refusal(reason: str | None) -> tuple[str | None, str | None]:
     refusal is one we can say more simply, else `(reason, None)` unchanged."""
     if not reason:
         return reason, None
+    if only := _GGUF_ONLY.search(reason):
+        return GGUF_ONLY.format(family=only.group(1)), reason
     for pattern, plain in (
-        (_GGUF_ONLY, GGUF_ONLY),
         (_MLX_UNQUANTIZED, MLX_UNQUANTIZED),
         (_CHECKPOINT_UNQUANTIZED, CHECKPOINT_UNQUANTIZED),
         (_CHECKPOINT_QUANTIZATION, CHECKPOINT_QUANTIZATION),

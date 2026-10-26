@@ -34,6 +34,8 @@ export const modelsStrings = {
   "models.catalog.family.dense": "Qwen3.8-27B · Dense",
   "models.catalog.family.moe": "Qwen3.6-35B-A3B · Mixture of experts",
   "models.catalog.family.flash_next": "Qwen3.8-Flash-Next · Mixture of experts",
+  "models.catalog.family.flint": "Flint · Mixture of experts",
+  "models.catalog.family.ornith": "Ornith-1.5-122B · Mixture of experts",
   "models.changed": "Changed",
   "models.clef.body":
     "Splash does not use Clef’s joint schema head. Scores will differ from Cloudflare’s Clef.",
@@ -222,6 +224,11 @@ export const modelsStrings = {
   "models.seed.flash_next_gguf":
     "GGUF only · Q2_0 is about 66 GB in two files and streams from the SSD on a 64 GB Mac.",
   "models.seed.flash_next_unsloth": "GGUF only · UD-IQ1_S to UD-Q6_K_XL and Q8_0, each in split files.",
+  "models.seed.flash_next_coder": "GGUF only · tuned for coding, half its experts pruned · IQ1_M, about 58 GB.",
+  "models.seed.flint_gguf":
+    "Text only · faster than Qwen3.6-35B-A3B, between it and the 27B in intelligence; how well it does depends a lot on your use.",
+  "models.seed.ornith_gguf": "Qwen3.5-122B-A10B fine-tune with vision · UD-IQ1_M to Q8_0; larger variants stream their experts.",
+  "models.seed.ornith_mlx": "MLX 4-bit with its vision tower · about 70 GB of weights.",
   "models.seed.dense_mlx":
     "MLX 4-bit · about 21 GB including draft and vision.",
   "models.seed.dense_nvfp4": "NVIDIA’s NVFP4 checkpoint (Model Optimizer) · about 22 GB of weights.",

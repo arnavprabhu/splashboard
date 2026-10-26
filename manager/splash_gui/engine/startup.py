@@ -1,6 +1,6 @@
 """Engine output lines → structured events.
 
-Every pattern below is a line Splash prints (1.4.0 unless noted); the source is
+Every pattern below is a line Splash prints (1.4.1 unless noted); the source is
 noted beside each. Matching is lenient (case-insensitive substrings where possible), the
 `HH:MM:SS ` prefix Splash's `print_status` and `logStartup` add is optional, and
 the raw text is always kept by the caller. Lines the parser does not know
@@ -39,13 +39,26 @@ _STORE_SETTINGS = {
     "--ple-memory": ("serve.ple_memory", "PLE table memory"),
     "--sparse-kv-memory": ("serve.sparse_kv_memory", "Sparse KV memory"),
 }
-_REFUSED_SETTING = re.compile(r"\]:\s*(--(?:expert|ple|sparse-kv)-memory)\b(.*)$")
+# From 1.4.1 the server ends the start with the same reason (runtime/main.mm
+# reportStartFailure): "Error · --expert-memory of …".
+_REFUSED_SETTING = re.compile(
+    r"(?:\]:|^error · )\s*(--(?:expert|ple|sparse-kv)-memory)\b(.*)$", re.IGNORECASE
+)
 # Options a start had no use for (RuntimeResources.mm reportIgnoredSetting and the
 # KV spill's "--sparse-kv-memory ignored: …").
 _IGNORED_SETTING = re.compile(r"^--[a-z-]+ ignored: ")
 # server.py holds the model's assembly itself and stops on a ModelError
 # (install/assembly.py `hold`).
-_UNPREPARED = ("names no model splash prepared", "is not a model directory splash prepared")
+_UNPREPARED = (
+    "names no model splash prepared",
+    "is not a model directory splash prepared",
+    # 1.4.1 server.py main: an assembly without the family record this release reads.
+    "is not prepared as a model of a family this release serves",
+)
+# A context past the family's window, refused as the engine reads its arguments
+# (runtime/engine/NativeArguments.cpp servedFor, 1.4.1): "MAX_CONTEXT: Flint serves at
+# most 262144 tokens of context". Flint's full layers have no RoPE for YaRN to stretch.
+_SERVES_AT_MOST = re.compile(r"(\S+) serves at most (\d+) tokens of context")
 
 Phase = Literal["installing", "loading", "warming"]
 TemplateMode = Literal["native", "patched", "unsupported"]
@@ -59,6 +72,7 @@ NoticeKind = Literal[
     "setting_ignored",
     "yarn_on",
     "persistent_cache_emptied",
+    "memory_wait",
     "other",
 ]
 
@@ -204,7 +218,7 @@ def _store_setting_error(text: str) -> EngineError | None:
     refused = _REFUSED_SETTING.search(text)
     if refused is None:
         return None
-    key, label = _STORE_SETTINGS[refused.group(1)]
+    key, label = _STORE_SETTINGS[refused.group(1).lower()]
     message = f"{refused.group(1)}{refused.group(2)}".strip()
     return EngineError(
         kind="other",
@@ -226,6 +240,23 @@ def classify_error(text: str) -> EngineError | None:
     message = re.sub(r"^(error:\s*|error · )", "", text, flags=re.IGNORECASE).strip()
     if setting := _store_setting_error(text):
         return setting
+    if served := _SERVES_AT_MOST.search(text):
+        family, cap = served.group(1), int(served.group(2))
+        return EngineError(
+            kind="other",
+            code="invalid_setting",
+            message=f"Settings · Context limit (serve.max_context): {family} serves at most "
+            f"{cap:,} tokens of context",
+            raw=[text],
+            suggestions=[
+                EngineSuggestion(
+                    action="lower_max_context",
+                    label=f"Use a context of {cap:,} tokens",
+                    patch={"serve.max_context": str(cap)},
+                ),
+                EngineSuggestion(action="open_logs", label="Open logs"),
+            ],
+        )
     if (
         "set hf_token or run 'hf auth login'" in lowered
         or "cannot access gated repo" in lowered
@@ -259,6 +290,9 @@ def classify_error(text: str) -> EngineError | None:
         or "unsupported gguf" in lowered
         or "input rotation is not one splash runs" in lowered
         or "has no vision tower" in lowered
+        # upstream.py (1.4.1): a refusal of the vision alone, such as missing tower
+        # shards, names --language-only.
+        or "use --language-only to serve text only" in lowered
         or "splash needs apple gpu family" in lowered
     ):
         suggestions = []
@@ -512,6 +546,9 @@ class StartupParser:
         # RuntimeResources.mm:1045-1049: a --max-context past the native window.
         if line.startswith("YaRN is on: "):
             return [NoticeEvent("yarn_on", line)]
+        # runtime/main.mm runNative: a start macOS refuses memory waits for it, up to 30 s.
+        if line.startswith("Waiting for sufficient available memory to start"):
+            return [NoticeEvent("memory_wait", line)]
         if line.startswith("Could not reach the Hub"):  # install/upstream.py:490/499/527
             return [NoticeEvent("hub_unreachable", line)]
         if line.startswith("Warning: keeping the installed"):  # upstream.py _keeping_installation

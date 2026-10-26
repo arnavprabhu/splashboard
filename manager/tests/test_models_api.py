@@ -84,10 +84,12 @@ def test_catalog_lists_no_splash_packages(hub_harness) -> None:
     assert {r["format"] for r in rows.values()} == {"mlx", "gguf"}
     groups = {f["family"]: [g["format"] for g in f["groups"]] for f in payload["families"]}
     # NVIDIA's NVFP4 checkpoint is a safetensors target ("mlx") in a group of its own;
-    # Flash-Next loads from GGUFs only, so it has no MLX group.
+    # Flash-Next and Flint load from GGUFs only, so they have no MLX group.
     assert groups == {
         "Qwen3.8-27B": ["mlx", "nvfp4", "gguf"],
         "Qwen3.6-35B-A3B": ["mlx", "gguf"],
+        "Flint": ["gguf"],
+        "Qwen3.5-122B-A10B": ["mlx", "gguf"],
         "Qwen3.8-Flash-Next": ["gguf"],
     }
 

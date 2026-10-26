@@ -13,7 +13,9 @@ from . import families, models
 
 # The text_config fields that identify each family's target, as an MLX config
 # states them (the 1.2.0 families.py signatures; Qwen3.8-Flash-Next's from
-# runtime/model/Qwen4Exp.hpp, its config derived from a GGUF header).
+# runtime/model/Qwen4Exp.hpp, its config derived from a GGUF header;
+# Qwen3.5-122B-A10B's from Qwen3_6Moe.hpp kQwen3_5_122BLayout and Flint's from
+# Flint.hpp, 1.4.1). Flint's config is flat: these keys sit at its top level.
 TEXT: dict[str, tuple[tuple[str, object], ...]] = {
     "Qwen3.8-27B": (
         ("model_type", "qwen3_5_text"),
@@ -37,6 +39,18 @@ TEXT: dict[str, tuple[tuple[str, object], ...]] = {
         ("num_experts", 256),
         ("num_experts_per_tok", 8),
     ),
+    "Qwen3.5-122B-A10B": (
+        ("model_type", "qwen3_5_moe_text"),
+        ("max_position_embeddings", 262144),
+        ("hidden_size", 3072),
+        ("num_hidden_layers", 48),
+        ("vocab_size", 248320),
+        ("num_attention_heads", 32),
+        ("num_key_value_heads", 2),
+        ("head_dim", 256),
+        ("num_experts", 256),
+        ("num_experts_per_tok", 8),
+    ),
     "Qwen3.8-Flash-Next": (
         ("model_type", "qwen4_exp_text"),
         ("max_position_embeddings", 262144),
@@ -49,10 +63,25 @@ TEXT: dict[str, tuple[tuple[str, object], ...]] = {
         ("num_experts", 512),
         ("num_experts_per_tok", 10),
     ),
+    "Flint": (
+        ("model_type", "flint"),
+        ("max_position_embeddings", 262144),
+        ("hidden_size", 2048),
+        ("num_hidden_layers", 49),
+        ("vocab_size", 150144),
+        ("num_attention_heads", 32),
+        ("num_key_value_heads", 4),
+        ("head_dim", 128),
+        ("num_experts", 256),
+        ("num_experts_per_tok", 6),
+    ),
 }
 # The families whose layout loads no safetensors checkpoint, only a GGUF
-# (Qwen4Exp.hpp `loadsSafetensors = false`).
-GGUF_ONLY = frozenset({"Qwen3.8-Flash-Next"})
+# (Qwen4Exp.hpp and Flint.hpp `loadsSafetensors = false`).
+GGUF_ONLY = frozenset({"Qwen3.8-Flash-Next", "Flint"})
+# The families whose config is flat, the text model's keys at its top level
+# (Flint.hpp `flatConfig`).
+FLAT = frozenset({"Flint"})
 
 # The fields every DFlash2 draft states alike.
 _DFLASH2 = (
@@ -88,6 +117,22 @@ DRAFT: dict[str, tuple[tuple[str, object], ...]] = {
         ("vocab_size", 248320),
         ("intermediate_size", 7680),
     ),
+    # incoai/Ornith-1.5-122B-DFlash2's and incoai/Flint-DFlash2's config.json
+    # (Hub, 2026-10-26).
+    "Qwen3.5-122B-A10B": (
+        *_DFLASH2,
+        ("num_hidden_layers", 6),
+        ("hidden_size", 3072),
+        ("vocab_size", 248320),
+        ("intermediate_size", 9216),
+    ),
+    "Flint": (
+        *_DFLASH2,
+        ("num_hidden_layers", 5),
+        ("hidden_size", 2048),
+        ("vocab_size", 150144),
+        ("intermediate_size", 6144),
+    ),
 }
 
 
@@ -105,6 +150,9 @@ def check(config: object) -> families.ModelFamily:
     (...); supported: " and every family)."""
     supported = ", ".join(f.name for f in families.FAMILIES)
     text = config.get("text_config") if isinstance(config, dict) else None
+    if isinstance(config, dict) and config.get("model_type") in {TEXT[name][0][1] for name in FLAT}:
+        # A flat config's text model is the config itself (Flint.hpp flatConfig).
+        text = config
     if not isinstance(text, dict):
         raise models.ModelError(
             f"no supported model has this architecture (its config has no text_config); supported: {supported}"

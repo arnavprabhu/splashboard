@@ -17,6 +17,8 @@ from typing import Any
 
 import pytest
 
+from splash_gui import schemas
+
 from .fakeengine import FAKE, MODEL, MODEL_27B
 
 GGUF_35B = "unsloth/Qwen3.6-35B-A3B-GGUF"
@@ -257,7 +259,7 @@ def test_catalog_is_grouped_by_family_and_format(hub_harness):
     assert payload["families"], "the bundled catalog seed must not be empty"
     assert payload["memory_bytes"] > 0
     for family in payload["families"]:
-        assert family["family"] in ("Qwen3.8-27B", "Qwen3.6-35B-A3B", "Qwen3.8-Flash-Next")
+        assert family["family"] in schemas.FAMILIES
         assert family["label"]
         groups = family["groups"]
         assert groups, "each family is grouped by format"
@@ -762,6 +764,7 @@ def test_only_an_explicit_ssd_cache_size_costs_state_staging() -> None:
 FLASH_NEXT = "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF"
 FLASH_NEXT_UNSLOTH = "unsloth/Qwen3.8-Flash-Next-GGUF"
 FLASH_NEXT_MLX = "rapid-mlx/Qwen3.8-Flash-Next-4bit"
+FLASH_NEXT_CODER = "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF"
 
 
 def test_a_split_repository_lists_each_variant_folder_with_its_parts(hub_harness):
@@ -810,7 +813,7 @@ def test_a_flash_next_safetensors_checkpoint_is_refused_with_the_plain_line(hub_
 
     result = inspect(hub_harness(), FLASH_NEXT_MLX)
     assert result["compatible"] is False and result["badge"] == "incompatible"
-    assert result["reason"] == compat.GGUF_ONLY
+    assert result["reason"] == compat.GGUF_ONLY.format(family="Qwen3.8-Flash-Next")
     assert result["reason_detail"] == "Qwen3.8-Flash-Next loads from a GGUF only"
 
 
@@ -822,7 +825,7 @@ def test_the_catalog_lists_flash_next_as_gguf_only(hub_harness):
     assert family["label"] == "Qwen3.8-Flash-Next MoE"
     assert [g["format"] for g in family["groups"]] == ["gguf"]
     rows = {e["id"]: e for g in family["groups"] for e in g["entries"]}
-    assert set(rows) == {FLASH_NEXT, FLASH_NEXT_UNSLOTH}
+    assert set(rows) == {FLASH_NEXT, FLASH_NEXT_UNSLOTH, FLASH_NEXT_CODER}
     ista = rows[FLASH_NEXT]
     assert {v["name"] for v in ista["variants"]} == {"Q2_0", "IQ2_XS"}
     assert ista["download_bytes"], "the draft's size is known, so the total is"
@@ -880,7 +883,8 @@ def test_a_gguf_only_refusal_gets_a_plain_line():
     from splash_gui.models import compat
 
     reason, detail = compat.explain_refusal("Qwen3.8-Flash-Next loads from a GGUF only")
-    assert reason == compat.GGUF_ONLY and detail == "Qwen3.8-Flash-Next loads from a GGUF only"
+    assert reason == compat.GGUF_ONLY.format(family="Qwen3.8-Flash-Next")
+    assert detail == "Qwen3.8-Flash-Next loads from a GGUF only"
 
 
 def test_a_split_repository_gets_time_for_every_part():

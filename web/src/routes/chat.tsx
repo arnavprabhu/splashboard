@@ -1073,6 +1073,7 @@ export default function ChatPage({ params }: { params?: { cid?: string } }) {
         saveSoon(next, 800);
       }}
       laterSystem={laterSystem}
+      reasoningSwitch={model === active && typeof e?.view?.reasoning_switch === "boolean" ? e.view.reasoning_switch : null}
       onInsertSystem={insertSystem}
       toolsText={toolsText}
       onToolsText={setToolsText}

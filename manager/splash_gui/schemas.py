@@ -7,9 +7,9 @@ milliseconds (`*_ms`) or seconds (`*_s`). Every error is `ErrorResponse`.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 from .engine.discovery import SUPPORTED_RANGE
 from .settings.metadata import Applies, Control, Scope
@@ -150,6 +150,7 @@ class EngineNotice(ApiModel):
         "setting_ignored",
         "yarn_on",
         "persistent_cache_emptied",
+        "memory_wait",
         "other",
     ]
     message: str
@@ -213,6 +214,10 @@ class EngineView(ApiModel):
     yarn_factor: float | None = None
     context_bound: Literal["model", "memory", "disk"] | None = None
     verify_rows: Literal["auto", "all"] | None = None
+    # Whether a request's reasoning effort or enable_thinking turns the model's
+    # reasoning on and off (`reasoning_switch`, Splash 1.4.1): false for Flint, whose
+    # model decides each turn; null before an engine reports it.
+    reasoning_switch: bool | None = None
     status_schema_version: int | None = None
     schema_supported: bool = True
     transport: TransportInfo | None = None
@@ -555,6 +560,15 @@ class KvMetrics(ApiModel):
     pages_cache: int | None = None
     pages_free: int | None = None
     pages_allocated: int | None = None
+    # A sliding-window target's pages (`kv.window`, Flint, Splash 1.4.1): those a
+    # window or a cached state's tail keeps Full, those that gave up their windowed
+    # layers' K/V (Slim) and their bytes, and the pages trimmed since the engine
+    # started; null for every other target. `window_trim` is false with trimming off.
+    window_trim: bool | None = None
+    window_full_pages: int | None = None
+    window_slim_pages: int | None = None
+    window_slim_bytes: int | None = None
+    window_trimmed_pages: int | None = None
 
 
 class DiskMetrics(ApiModel):
@@ -869,7 +883,22 @@ class ProfilesUpdate(ApiModel):
 # Models -------------------------------------------------------------------------
 
 ModelFormat = Literal["mlx", "gguf", "legacy"]
-Family = Literal["Qwen3.8-27B", "Qwen3.6-35B-A3B", "Qwen3.8-Flash-Next"]
+# The families Splash serves (splash/install/families.py `FAMILIES`, 1.4.1): Ornith-1.5-122B
+# is the Qwen3.5-122B-A10B family, a fine-tune of it.
+Family = Literal[
+    "Qwen3.8-27B", "Qwen3.6-35B-A3B", "Qwen3.5-122B-A10B", "Qwen3.8-Flash-Next", "Flint"
+]
+FAMILIES: tuple[str, ...] = get_args(Family)
+
+
+def _known_family(value: object) -> object:
+    """A family name Splash records that this release does not know (a later engine's)
+    reads as unknown rather than failing the whole inventory."""
+    return value if value is None or value in FAMILIES else None
+
+
+# A family read from what Splash wrote (an installation's record, its check's verdict).
+RecordedFamily = Annotated[Family | None, BeforeValidator(_known_family)]
 # "streams": too large to load whole, but a MoE model's routed experts (and
 # Flash-Next's PLE table) can stay on the SSD and stream from it, which is slower.
 Fit = Literal["fits", "tight", "streams", "wont_fit"]
@@ -885,7 +914,7 @@ class InstalledModel(ApiModel):
     id: str
     repo_id: str
     variant: str | None = None
-    family: Family | None = None
+    family: RecordedFamily = None
     format: ModelFormat
     # A Model Optimizer or compressed-tensors checkpoint (format "mlx": Splash loads it
     # as a safetensors target), labelled e.g. "NVFP4 · Model Optimizer"; null otherwise.
@@ -1032,7 +1061,7 @@ class InspectResult(ApiModel):
     compatible: bool
     # "checking" only in `/inspect/stream` progress events, while no verdict decides it.
     badge: Literal["compatible", "text_only", "incompatible", "not_clef_accurate", "checking"]
-    family: Family | None = None
+    family: RecordedFamily = None
     format: ModelFormat | None = None
     # A Model Optimizer or compressed-tensors checkpoint (format "mlx": Splash loads it
     # as a safetensors target), labelled e.g. "NVFP4 · Model Optimizer"; null otherwise.
@@ -1742,7 +1771,7 @@ class ImportCandidate(ApiModel):
     path: str
     size_bytes: int
     kind: Literal["model", "draft"]
-    family: Family | None = None
+    family: RecordedFamily = None
 
 
 class ImportCandidates(ApiModel):

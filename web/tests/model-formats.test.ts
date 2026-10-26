@@ -76,6 +76,10 @@ describe('the offline catalog seed', () => {
     const family = catalogSeed().families.find((f) => f.family === 'Qwen3.8-Flash-Next');
     expect(family?.label).toBe('Qwen3.8-Flash-Next · Mixture of experts');
     expect(family?.groups.map((g) => g.format)).toEqual(['gguf']);
-    expect(family?.groups[0]?.entries.map((e) => e.id)).toEqual(['ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF', 'unsloth/Qwen3.8-Flash-Next-GGUF']);
+    expect(family?.groups[0]?.entries.map((e) => e.id)).toEqual([
+      'ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF',
+      'unsloth/Qwen3.8-Flash-Next-GGUF',
+      'ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF',
+    ]);
   });
 });

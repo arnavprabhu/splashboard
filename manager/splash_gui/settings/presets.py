@@ -77,6 +77,15 @@ _GGUF_35B_Q4 = "unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_M"
 _GGUF_35B_Q2 = "unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q2_K_XL"
 _GGUF_27B_IQ3 = "unsloth/Qwen3.8-27B-GGUF:UD-IQ3_XXS"
 _BONSAI = "prism-ml/Ternary-Bonsai-2-27B-gguf:PQ2_0"
+# Flint (Splash 1.4.1), offered beside the recommendations rather than in their place:
+# faster than the 35B-A3B, between it and the 27B in intelligence, and more dependent
+# on the task than either. Text only. UD-Q4_K_XL is 25 GB (Hub, 2026-10-26).
+_FLINT = "unsloth/flint-GGUF:UD-Q4_K_XL"
+_FLINT_NOTE = (
+    "Also worth trying: Flint, faster than the 35B-A3B and between it and the 27B in "
+    "intelligence, though how well it does depends a lot on your use. Text only"
+)
+FLINT_PICK = ModelPick(_FLINT, _FLINT_NOTE)
 
 
 def recommend(preset: PresetId, memory_bytes: int) -> Recommendation:
@@ -87,12 +96,12 @@ def recommend(preset: PresetId, memory_bytes: int) -> Recommendation:
         if gb >= 48:
             return Recommendation(
                 ModelPick(_MLX_27B, "Best quality"),
-                (ModelPick(_MLX_35B, "Faster alternative"),),
+                (ModelPick(_MLX_35B, "Faster alternative"), FLINT_PICK),
                 "≥ 48 GB",
             )
         if gb >= 36:
             return Recommendation(
-                ModelPick(_GGUF_35B_Q4, "Fits with room for context"), (), "36–47 GB"
+                ModelPick(_GGUF_35B_Q4, "Fits with room for context"), (FLINT_PICK,), "36–47 GB"
             )
         return Recommendation(
             ModelPick(
@@ -105,10 +114,14 @@ def recommend(preset: PresetId, memory_bytes: int) -> Recommendation:
         )
     if preset == "chat":
         if gb >= 36:
-            return Recommendation(ModelPick(_MLX_35B, "Fast, with vision"), (), "≥ 36 GB")
+            return Recommendation(
+                ModelPick(_MLX_35B, "Fast, with vision"), (FLINT_PICK,), "≥ 36 GB"
+            )
         return Recommendation(ModelPick(_BONSAI, "7.2 GB, with vision"), (), "24–35 GB")
     if gb >= 36:
-        return Recommendation(ModelPick(_MLX_35B, "About 210 tok/s on an M5 Pro"), (), "≥ 36 GB")
+        return Recommendation(
+            ModelPick(_MLX_35B, "About 210 tok/s on an M5 Pro"), (FLINT_PICK,), "≥ 36 GB"
+        )
     return Recommendation(ModelPick(_GGUF_35B_Q2, "MoE at 2-bit"), (), "24–35 GB")
 
 
@@ -131,6 +144,7 @@ _CODING_TARGETS: dict[str, tuple[str, int]] = {
     _GGUF_35B_Q4: ("Qwen3.6-35B-A3B", int(16.5 * GIB)),
     _GGUF_27B_IQ3: ("Qwen3.8-27B", 11 * GIB),
     _GGUF_35B_Q2: ("Qwen3.6-35B-A3B", 12 * GIB),
+    _FLINT: ("Flint", int(23.3 * GIB)),
 }
 
 

@@ -311,6 +311,8 @@ export const chatStrings = {
   'chat.help.ignore_eos': 'Keep generating past the end-of-sequence token.',
   'chat.help.kwargs': 'Passed to the chat template; Chat only.',
   'chat.help.reasoning_effort': 'Model default sends nothing.',
+  'chat.help.reasoning_model_decides':
+    'This model decides each turn whether to reason, so reasoning effort, enable_thinking and the thinking budget change nothing.',
 
   'chat.err.temperature': 'Temperature must be between 0 and 2.',
   'chat.err.top_p': 'Top P must be between 0 and 1.',

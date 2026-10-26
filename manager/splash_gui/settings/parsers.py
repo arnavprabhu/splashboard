@@ -2,7 +2,8 @@
 
 Each function reproduces the logic and error message of its counterpart in
 splash/server/serve_options.py, server/origins.py, server/frontend.py and
-install/models.py at tag 1.4.0, so the GUI refuses exactly what Splash refuses.
+install/models.py at tag 1.4.1 (unchanged since 1.4.0), so the GUI refuses exactly
+what Splash refuses.
 The parity test runs both under Splash's bundled Python when it is installed.
 Functions raise `ValueError` where Splash raises `argparse.ArgumentTypeError`.
 """

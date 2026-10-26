@@ -75,6 +75,7 @@ export const statusStrings = {
   'status.banner.crashed_msg': 'Splash exited unexpectedly. Restarting in {s} s (attempt {n} of 3).',
   'status.banner.crashed_msg_now': 'Splash exited unexpectedly. Restarting (attempt {n} of 3).',
   'status.banner.hub': 'Hub notice',
+  'status.banner.memory_wait': 'Waiting for memory to free up',
   'status.banner.schema': 'Splash status schema {n} is not recognized; some panels may be empty.',
 
   // startup band

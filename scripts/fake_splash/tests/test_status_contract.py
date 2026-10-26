@@ -139,6 +139,9 @@ CONDITIONAL = (
     "identity.cache.rope_scaling.",
     "kv_spill",
     "memory_plan.budget.kv_spill.",
+    # A windowed target's (Flint's, 1.4.1); test_splash_1_4_1.py checks them.
+    "memory_plan.budget.kv_window",
+    "kv.window",
 )
 
 

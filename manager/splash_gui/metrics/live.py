@@ -80,7 +80,7 @@ def flatten(sample: LiveMetrics) -> dict[str, float | None]:
     data = sample.model_dump()
     for group in ("throughput", "totals", "cache", "draft", "latency", "scheduler", "memory", "kv"):
         for key, value in (data.get(group) or {}).items():
-            if key in ("system_pressure", "growth_allowed"):
+            if key in ("system_pressure", "growth_allowed", "window_trim"):
                 continue
             out[f"{group}.{key}"] = _number(value)
     disk = data.get("disk") or {}
@@ -328,6 +328,11 @@ class MetricsHub:
                 pages_cache=st.integer(status, "kv.pages_cache"),
                 pages_free=st.integer(status, "kv.pages_free"),
                 pages_allocated=st.integer(status, "kv.pages_allocated"),
+                window_trim=st.boolean(status, "kv.window.trim"),
+                window_full_pages=st.integer(status, "kv.window.full_pages"),
+                window_slim_pages=st.integer(status, "kv.window.slim_pages"),
+                window_slim_bytes=st.integer(status, "kv.window.slim_bytes"),
+                window_trimmed_pages=st.integer(status, "kv.window.trimmed_pages"),
             ),
             disk=DiskMetrics(
                 # The tier is on whenever it has a quota; `--max-cache-disk 0` (or a

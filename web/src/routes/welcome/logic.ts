@@ -86,9 +86,9 @@ export function brewStatus(brew: BrewInfo | null): CheckStatus {
   return brew.installed ? 'ok' : 'fail';
 }
 
-/** The lowest supported Splash version from the manager's `supported_range` (">=1.4.0 <1.5.0" → "1.4.0"). */
+/** The lowest supported Splash version from the manager's `supported_range` (">=1.4.1 <1.5.0" → "1.4.1"). */
 export function minimumEngine(range: string | null | undefined): string {
-  return /^\s*>=\s*(\d+\.\d+\.\d+)/.exec(range ?? '')?.[1] ?? '1.4.0';
+  return /^\s*>=\s*(\d+\.\d+\.\d+)/.exec(range ?? '')?.[1] ?? '1.4.1';
 }
 
 /** Splash: found and in the manager's supported range; newer minor = warning; older = blocking. */

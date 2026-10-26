@@ -2370,7 +2370,7 @@ export interface components {
              * Family
              * @enum {string}
              */
-            family: "Qwen3.8-27B" | "Qwen3.6-35B-A3B" | "Qwen3.8-Flash-Next";
+            family: "Qwen3.8-27B" | "Qwen3.6-35B-A3B" | "Qwen3.5-122B-A10B" | "Qwen3.8-Flash-Next" | "Flint";
             /**
              * Format
              * @enum {string}
@@ -2419,7 +2419,7 @@ export interface components {
              * Family
              * @enum {string}
              */
-            family: "Qwen3.8-27B" | "Qwen3.6-35B-A3B" | "Qwen3.8-Flash-Next";
+            family: "Qwen3.8-27B" | "Qwen3.6-35B-A3B" | "Qwen3.5-122B-A10B" | "Qwen3.8-Flash-Next" | "Flint";
             /** Label */
             label: string;
             /** Groups */
@@ -3089,7 +3089,7 @@ export interface components {
             support: "supported" | "untested" | "too_old" | "unknown";
             /**
              * Supported Range
-             * @default >=1.4.0 <1.5.0
+             * @default >=1.4.1 <1.5.0
              */
             supported_range: string;
             /** Banner */
@@ -3155,7 +3155,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "disk_cache_off" | "persistent_cache_off" | "hub_unreachable" | "new_commit_not_installed" | "weights_restored" | "schema_unrecognized" | "setting_ignored" | "yarn_on" | "persistent_cache_emptied" | "other";
+            kind: "disk_cache_off" | "persistent_cache_off" | "hub_unreachable" | "new_commit_not_installed" | "weights_restored" | "schema_unrecognized" | "setting_ignored" | "yarn_on" | "persistent_cache_emptied" | "memory_wait" | "other";
             /** Message */
             message: string;
             /** Raw */
@@ -3284,6 +3284,8 @@ export interface components {
             context_bound?: ("model" | "memory" | "disk") | null;
             /** Verify Rows */
             verify_rows?: ("auto" | "all") | null;
+            /** Reasoning Switch */
+            reasoning_switch?: boolean | null;
             /** Status Schema Version */
             status_schema_version?: number | null;
             /**
@@ -3560,7 +3562,7 @@ export interface components {
              */
             kind: "model" | "draft";
             /** Family */
-            family?: ("Qwen3.8-27B" | "Qwen3.6-35B-A3B" | "Qwen3.8-Flash-Next") | null;
+            family?: ("Qwen3.8-27B" | "Qwen3.6-35B-A3B" | "Qwen3.5-122B-A10B" | "Qwen3.8-Flash-Next" | "Flint") | null;
         };
         /** ImportCandidates */
         ImportCandidates: {
@@ -3593,7 +3595,7 @@ export interface components {
              */
             badge: "compatible" | "text_only" | "incompatible" | "not_clef_accurate" | "checking";
             /** Family */
-            family?: ("Qwen3.8-27B" | "Qwen3.6-35B-A3B" | "Qwen3.8-Flash-Next") | null;
+            family?: ("Qwen3.8-27B" | "Qwen3.6-35B-A3B" | "Qwen3.5-122B-A10B" | "Qwen3.8-Flash-Next" | "Flint") | null;
             /** Format */
             format?: ("mlx" | "gguf" | "legacy") | null;
             /** Checkpoint */
@@ -3636,7 +3638,7 @@ export interface components {
             /** Variant */
             variant?: string | null;
             /** Family */
-            family?: ("Qwen3.8-27B" | "Qwen3.6-35B-A3B" | "Qwen3.8-Flash-Next") | null;
+            family?: ("Qwen3.8-27B" | "Qwen3.6-35B-A3B" | "Qwen3.5-122B-A10B" | "Qwen3.8-Flash-Next" | "Flint") | null;
             /**
              * Format
              * @enum {string}
@@ -3792,6 +3794,16 @@ export interface components {
             pages_free?: number | null;
             /** Pages Allocated */
             pages_allocated?: number | null;
+            /** Window Trim */
+            window_trim?: boolean | null;
+            /** Window Full Pages */
+            window_full_pages?: number | null;
+            /** Window Slim Pages */
+            window_slim_pages?: number | null;
+            /** Window Slim Bytes */
+            window_slim_bytes?: number | null;
+            /** Window Trimmed Pages */
+            window_trimmed_pages?: number | null;
         };
         /** LatencyMetrics */
         LatencyMetrics: {
@@ -4190,7 +4202,7 @@ export interface components {
             /** Variant */
             variant?: string | null;
             /** Family */
-            family?: ("Qwen3.8-27B" | "Qwen3.6-35B-A3B" | "Qwen3.8-Flash-Next") | null;
+            family?: ("Qwen3.8-27B" | "Qwen3.6-35B-A3B" | "Qwen3.5-122B-A10B" | "Qwen3.8-Flash-Next" | "Flint") | null;
             /**
              * Format
              * @enum {string}

@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any
 from ..hubcache import repo_folder
 from ..paths import splash_models_dir, write_atomic
 from ..schemas import ModelsChangedEvent
-from .catalog import NO_DRAFT, SPLIT_NAME, split_complete
+from .catalog import NO_DRAFT, SPLIT_NAME, TEXT_ONLY_FAMILIES, split_complete
 from .layout import read_all
 
 if TYPE_CHECKING:
@@ -494,7 +494,12 @@ class LocalModels:
                 # Relative links survive a move of the models folder, like Hub-cache links.
                 link.symlink_to(os.path.relpath(file, link.parent))
             models_only = [c for c in self.candidates() if not is_projector(c.path)]
-            projector = self.projector_for(item, models_only)
+            # A text-only family (Flint) reads no projector, so none is paired.
+            projector = (
+                None
+                if verdict.get("family") in TEXT_ONLY_FAMILIES
+                else self.projector_for(item, models_only)
+            )
             if projector:
                 (snapshot / projector.name).symlink_to(os.path.relpath(projector, snapshot))
             return await self._finish(item, verdict, model, revision, repo, snapshot, projector)

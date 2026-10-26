@@ -105,6 +105,8 @@ export const bandsStrings = {
   'bands.cache.ram': 'RAM',
   'bands.cache.pages': 'KV pages {a} active · {c} cached · {f} free of {t}',
   'bands.cache.kv_bytes': 'KV bytes {b} ({r} reclaimable)',
+  'bands.cache.window': 'Sliding window · {f} full pages, {s} slim pages in {b} · {n} trimmed',
+  'bands.cache.window_off': 'Sliding window · {f} full pages · trimming off',
   'bands.cache.states': 'states {n} ({u} in use, {b})',
   'bands.cache.checkpoints': 'checkpoints {list}',
   'bands.cache.evictions': 'evictions {n}',

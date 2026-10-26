@@ -29,7 +29,7 @@ def run_cli(tmp_path, *args, env=None, timeout=30):
 
 def test_version_matches_real_wording(tmp_path):
     result = run_cli(tmp_path, "--version")
-    assert result.returncode == 0 and result.stdout == "Splash 1.4.0\n"
+    assert result.returncode == 0 and result.stdout == "Splash 1.4.1\n"
     if REAL_CLI.exists():
         real = subprocess.run([str(REAL_CLI), "--version"], capture_output=True, text=True, timeout=30)
         assert real.stdout == result.stdout
@@ -247,7 +247,10 @@ def test_budget_refusal_exits_with_breakdown(tmp_path):
     assert re.search(r"^memory_plan_json: \{\"schema_version\":2,\"valid\":false", err, re.MULTILINE)
     # runtime/main.mm printBootstrapError writes with writeStderrLine: no timestamp.
     assert re.search(r"^error: runtime bootstrap failed", err, re.MULTILINE)
-    assert re.search(TS + r"Error · native protocol reached EOF$", err, re.MULTILINE)
+    # 1.4.1 (runtime/main.mm reportStartFailure): the server ends the start with the
+    # engine's reason, not "native protocol reached EOF".
+    assert re.search(TS + r"Error · hard budget cannot fit one lane's state and the KV runway$", err, re.MULTILINE)
+    assert "native protocol reached EOF" not in err
     assert " Ready · " not in result.stdout
     # server.py main(): the backend exists once the chat template is read, so
     # its cleanup still runs after a failed start.
@@ -439,6 +442,7 @@ def test_copied_engine_modules_are_verbatim():
         "lru",
         "diagnostics",
         "protocol",
+        "chat_format",
     ):
         assert (pkg / "server" / f"{name}.py").read_text() == (REAL_SPLASH / "server" / f"{name}.py").read_text(), name
     for name in ("families", "clients"):

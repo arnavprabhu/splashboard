@@ -231,6 +231,8 @@ def import_candidates(state: State) -> ImportCandidates:
                 if text.get("hidden_size") == 5120 and text.get("num_hidden_layers") == 64
                 else "Qwen3.6-35B-A3B"
                 if text.get("hidden_size") == 2048 and text.get("num_hidden_layers") == 40
+                else "Qwen3.5-122B-A10B"
+                if text.get("hidden_size") == 3072 and text.get("num_hidden_layers") == 48
                 else None
             )
             draft = "DFlash2DraftModel" in data.get("architectures", [])

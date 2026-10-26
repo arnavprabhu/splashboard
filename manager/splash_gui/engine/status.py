@@ -127,3 +127,10 @@ def verify_rows(status: Any) -> str | None:
     outputs differ between runs, "all" keeps them reproducible."""
     rows = text(status, "verify_rows")
     return rows if rows in ("auto", "all") else None
+
+
+def reasoning_switch(status: Any) -> bool | None:
+    """Whether a request's reasoning effort or enable_thinking turns the model's
+    reasoning on and off (`reasoning_switch`, server/frontend.py, 1.4.1): false for a
+    model that decides each turn itself (Flint); None when the engine does not say."""
+    return boolean(status, "reasoning_switch")

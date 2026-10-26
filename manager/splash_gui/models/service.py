@@ -297,7 +297,10 @@ class Models:
                     "family": selection.family,
                     "format": selection.format,
                     "checkpoint": installed_checkpoint(selection),
-                    "language_only": selection.language_only,
+                    # A text-only family (Flint) has no vision to skip: it is never
+                    # "language only", and never has vision.
+                    "language_only": selection.language_only
+                    and selection.family not in cat.TEXT_ONLY_FAMILIES,
                     "vision": not selection.language_only,
                     "size_bytes": sum(files.values()),
                     "unique_bytes": sum(

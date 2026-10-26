@@ -341,6 +341,11 @@ def family_of(repo_id: str):
     by_name = {family.name: family for family in _families()}
     if "flash-next" in name:
         return by_name["Qwen3.8-Flash-Next"]
+    if "flint" in name:
+        return by_name["Flint"]
+    # Ornith-1.5-122B is a fine-tune of Qwen3.5-122B-A10B, and that family (1.4.1).
+    if "122b" in name:
+        return by_name["Qwen3.5-122B-A10B"]
     if "35b-a3b" in name:
         return by_name["Qwen3.6-35B-A3B"]
     if "27b" in name:
@@ -426,8 +431,17 @@ def _commit(repo_id: str, revision: str | None) -> str:
 
 
 # Families whose GGUFs the fake publishes split, with the number of parts: as every
-# Qwen3.8-Flash-Next GGUF on the Hub is, VARIANT/MODEL-VARIANT-0000K-of-00002.gguf.
-SPLIT_FAMILIES = {"Qwen3.8-Flash-Next": 2}
+# Qwen3.8-Flash-Next GGUF on the Hub is, VARIANT/MODEL-VARIANT-0000K-of-00002.gguf,
+# and Ornith-1.5-122B's larger ones (UD-Q4_K_XL/, three parts on the Hub).
+SPLIT_FAMILIES = {"Qwen3.8-Flash-Next": 2, "Qwen3.5-122B-A10B": 3}
+
+
+# The Qwen3.5 MoE architecture's families, whose MLX configs name qwen3_5_moe, and
+# the families whose config is flat (Flint, 1.4.1).
+MOE_FAMILIES = frozenset({"Qwen3.6-35B-A3B", "Qwen3.5-122B-A10B"})
+FLAT_FAMILIES = frozenset({"Flint"})
+# The families that load from a GGUF only (ModelDescriptor.mm describeSourceModel).
+GGUF_ONLY_FAMILIES = frozenset({"Qwen3.8-Flash-Next", "Flint"})
 
 
 def _text_config(family) -> dict:
@@ -466,7 +480,8 @@ def target_repo(selection: Selection, family) -> tuple[RemoteRepo, dict[str, str
             repo.files.append(RemoteFile(weights, shard_bytes, True, b"GGUF\x03\x00\x00\x00", part_seed))
             assembly["target/" + Path(weights).name] = weights
         vision_format = "none"
-        if not selection.language_only:
+        # A family without a vision tower (Flint, 1.4.1) reads no projector.
+        if not selection.language_only and family.vision:
             # Splash only accepts a clip projector whose tensors are BF16 or F32;
             # F16 has already rounded small weights, so it is never usable
             # (splash/install/upstream.py select_vision).
@@ -484,12 +499,15 @@ def target_repo(selection: Selection, family) -> tuple[RemoteRepo, dict[str, str
         return repo, assembly, "gguf", vision_format
     shards = max(1, int(os.environ.get("FAKE_SPLASH_DL_SHARDS", "2")))
     names = [f"model-{i:05d}-of-{shards:05d}.safetensors" for i in range(1, shards + 1)]
-    config = {
+    config: dict = {
         "architectures": ["Qwen3_5ForConditionalGeneration"],
-        "model_type": "qwen3_5_moe" if family.name == "Qwen3.6-35B-A3B" else "qwen3_5",
+        "model_type": "qwen3_5_moe" if family.name in MOE_FAMILIES else "qwen3_5",
         "text_config": _text_config(family),
         "quantization": {"group_size": 64, "bits": 4, "mode": "affine"},
     }
+    if family.name in FLAT_FAMILIES:
+        # Flint's config.json is flat, its text model's keys at the top level.
+        config = {**_text_config(family), "quantization": config["quantization"]}
     repo.files += [
         _json_file("config.json", config),
         _json_file("tokenizer.json", {"version": "1.0", "fake": True}),
@@ -504,7 +522,7 @@ def target_repo(selection: Selection, family) -> tuple[RemoteRepo, dict[str, str
     assembly["tokenizer/tokenizer.json"] = "tokenizer.json"
     assembly["tokenizer/tokenizer_config.json"] = "tokenizer_config.json"
     vision_format = "none"
-    if not selection.language_only:
+    if not selection.language_only and family.vision:
         repo.files.append(_json_file("preprocessor_config.json", {"patch_size": 16}))
         assembly["vision/config.json"] = "config.json"
         vision_format = "safetensors"
@@ -513,7 +531,7 @@ def target_repo(selection: Selection, family) -> tuple[RemoteRepo, dict[str, str
         shard_seed = seed + f"/{index}".encode() + (changed if index == 0 else b"")
         repo.files.append(RemoteFile(name, shard_bytes, True, header, shard_seed))
         assembly["target/" + name] = name
-        if not selection.language_only:
+        if vision_format != "none":
             assembly["vision/" + name] = name
     return repo, assembly, "mlx-affine", vision_format
 
@@ -799,17 +817,19 @@ def _install(selection: Selection, family: Any, mode: str, context: str) -> None
     the assembly at the selection link."""
     if mode == "incompatible":
         raise ModelError(f"{context}: {incompatible_message()}")
-    if selection.variant is None and family.name in SPLIT_FAMILIES:
+    if selection.variant is None and family.name in GGUF_ONLY_FAMILIES:
         # The fake publishes such a family as GGUFs only; a repository read as
         # safetensors gets the engine's refusal (ModelDescriptor.mm describeSourceModel).
         raise ModelError(f"{context}: {family.name} loads from a GGUF only")
     # upstream.py inspect_target ("Selected ...") runs only when installing.
     target, assembly_paths, target_format, vision_format = target_repo(selection, family)
     draft = draft_repo(selection, family)
+    # upstream.py _install (1.4.1): vision follows the target's vision format, so a
+    # family without a vision tower installs with it disabled.
     print(
         f"Installing {selection.model} as {family.name} ({target_format}); "
         f"draft {draft.name}; "
-        f"vision {'disabled' if selection.language_only else 'enabled'}.",
+        f"vision {'disabled' if vision_format == 'none' else 'enabled'}.",
         flush=True,
     )
     throttle = Throttle(parse_size(os.environ.get("FAKE_SPLASH_DL_BPS"), 64 << 20))

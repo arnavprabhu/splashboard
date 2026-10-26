@@ -98,6 +98,9 @@ export interface SidePanelProps {
   system: string;
   onSystem: (s: string) => void;
   laterSystem: 'native' | 'patched' | 'unsupported' | null;
+  /** False for a model that decides itself when to reason (Flint): effort and
+   * enable_thinking change nothing (`/status.reasoning_switch`, Splash 1.4.1). */
+  reasoningSwitch?: boolean | null;
   onInsertSystem: () => void;
   // tools
   toolsText: string;
@@ -193,6 +196,7 @@ function SamplingTab(p: SidePanelProps) {
           onChange={(v) => set({ reasoning_effort: v })}
         />
         <p class="field-help">{t('chat.help.reasoning_effort')}</p>
+        {p.reasoningSwitch === false && <p class="meta">{t('chat.help.reasoning_model_decides')}</p>}
       </div>
       {NUM_FIELDS.map((k) => {
         const eff = effective(k);

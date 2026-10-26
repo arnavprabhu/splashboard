@@ -1,11 +1,11 @@
 # Fake Splash engine
 
-A stdlib-only stand-in for Homebrew's `splash` 1.4.0 package. The
+A stdlib-only stand-in for Homebrew's `splash` 1.4.1 package. The
 manager, the web app's Playwright tests and local development use it in place
 of the real engine, so nothing needs a model, Metal or the network. It runs
 under any Python 3.12+, including Splash's bundled interpreter.
 
-Every engine fact it reproduces was checked against `./splash` at tag `1.4.0`.
+Every engine fact it reproduces was checked against `./splash` at tag `1.4.1`.
 Comments in `pkg/server/fake_engine.py` and `fake_server.py` give the source
 file and line for each output string.
 
@@ -17,12 +17,12 @@ pkg/                     laid out like $(brew --prefix)/opt/splash (bin/) and it
 ├── libexec -> .         so pkg/ also works as an opt/splash prefix
 ├── python/bin/python3   runs $FAKE_SPLASH_PYTHON, else the first Python ≥ 3.12 on PATH
 ├── engine/splash        answers `device-check` only (FAKE_SPLASH_DEVICE_CHECK=fail refuses the Mac)
-├── release.json         {"version": "1.4.0", ...}
+├── release.json         {"version": "1.4.1", ...}
 ├── install/
 │   ├── launcher.py      `splash --version | serve | claude|opencode|codex|hermes|pi [--port PORT] [-- ARGS]`
 │   ├── models.py        fake installer, same CLI as the real install/models.py
 │   ├── paths.py         DATA from SPLASH_GUI_FAKE_DATA (never ~/Library/Application Support/Splash)
-│   ├── families.py      verbatim copy (names and draft repos only, since 1.3.1)
+│   ├── families.py      verbatim copy (names, draft repos, chat formats and vision, 1.4.1)
 │   ├── clients.py       verbatim copy: the coding-client configurator `splash launch` uses (Hermes needs PyYAML in the interpreter to write its profile; `--print` does not)
 │   ├── signatures.py    each family's config fields; stands in for the engine's model-check
 │   └── upstream.py      inspect_target/check_model stand-in for the compatibility helper
@@ -33,7 +33,8 @@ pkg/                     laid out like $(brew --prefix)/opt/splash (bin/) and it
     ├── fake_text.py     deterministic tokenizer, ChatML template, reply text
     ├── crash_trace.py   `python -m server.crash_trace <trace>`: prints the trace's frames
     └── serve_options.py origins.py http_security.py errors.py images.py protocol.py
-        metrics.py latency.py json_codec.py lru.py diagnostics.py   verbatim copies (a test checks this)
+        metrics.py latency.py json_codec.py lru.py diagnostics.py chat_format.py
+                         verbatim copies (a test checks this)
 harness.py               pytest helpers: FakeSplash, run_installer, fake_env, free_port
 tests/                   the fake's own tests
 ```
@@ -42,7 +43,7 @@ tests/                   the fake's own tests
 
 ```sh
 export SPLASH_GUI_FAKE_DATA=/tmp/fake-splash HF_HUB_CACHE=/tmp/fake-splash/models
-scripts/fake_splash/pkg/bin/splash --version          # Splash 1.4.0
+scripts/fake_splash/pkg/bin/splash --version          # Splash 1.4.1
 scripts/fake_splash/pkg/bin/splash serve --model unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_M --port 8001 --no-webui
 curl -s localhost:8001/v1/chat/completions -H 'content-type: application/json' \
   -d '{"messages":[{"role":"user","content":"hi"}],"stream":true}'
@@ -54,7 +55,9 @@ curl -s localhost:8001/v1/chat/completions -H 'content-type: application/json' \
 `--thinking-end-text` are honoured; from 1.4.0, `--max-context` up to 1M with
 YaRN past 256K, fractional sizes such as `2.5G`, `--expert-memory`,
 `--ple-memory`, `--sparse-kv-memory` and `--verify-rows`, each with the engine's
-startup lines and refusals). It
+startup lines and refusals; from 1.4.1, Flint and Ornith-1.5-122B, Flint's
+sliding-window `kv.window`, `reasoning_switch`, its 262,144-token bound and its
+own choice to reason, and start failures that end with the engine's reason). It
 reads `SPLASH_API_KEY`, binds `--host`/`--port`, runs the fake installer for the
 selection (as the real launcher does), and then serves. Like the real server,
 it does not listen until Ready.
@@ -160,7 +163,7 @@ Installer (`install/models.py`, and the install step of `serve`):
 |---|---|---|
 | `HF_HUB_CACHE` | `$SPLASH_GUI_FAKE_DATA/hub` | Where `models--owner--repo/{blobs,snapshots,refs}` are written |
 | `FAKE_SPLASH_DL_BPS` | 64M | Download rate in bytes/s (`.incomplete` blobs grow at this rate) |
-| `FAKE_SPLASH_DL_HUB` | — | Unset: huggingface_hub 1.28 partials, as Splash 1.2.0 to 1.4.0 bundle (`blobs/<hash>.<uuid8>.incomplete`, a new file per run, deleted on a handled error, never resumed). `legacy`: older hubs (`blobs/<hash>.incomplete`, appended to by the next run) |
+| `FAKE_SPLASH_DL_HUB` | — | Unset: huggingface_hub 1.28 partials, as Splash 1.2.0 to 1.4.1 bundle (`blobs/<hash>.<uuid8>.incomplete`, a new file per run, deleted on a handled error, never resumed). `legacy`: older hubs (`blobs/<hash>.incomplete`, appended to by the next run) |
 | `FAKE_SPLASH_DL_SHARD_BYTES`, `_SHARDS`, `_DRAFT_BYTES`, `_VISION_BYTES` | 2M, 2, 1M, 512K | File sizes |
 | `FAKE_SPLASH_DL_COMMIT_SALT` | — | Changes every resolved commit, so `prepare` reports "moved from … to …" (simulates updates). The first weight file changes too, so an update fetches one file; if that fails, the old commit is kept with `Warning: keeping the installed …` and `prepare` still exits 0 (upstream.py `_keeping_installation`) |
 | `FAKE_SPLASH_DL_FAIL` | — | `gated` (401 unless `HF_TOKEN` is set), `network` (Hub unreachable), `network_mid`, `disk_full` (ENOSPC mid-download), `incompatible` |
@@ -204,4 +207,5 @@ blob stays.
 - Per-request log lines (`Started ·`, `Done ·`, `Cancelled ·`, `Error · code`) come from the copied `diagnostics.print_request` and cover generation requests; judgments and System One requests log none. Each request's speculative decoding is invented (about 2.4 tokens a cycle) and reported in its `timings`, `metrics.speculation` and `/status.metrics`.
 - `POST /v1/memory/release` releases the weights while no request is in service or restoring (200), and answers 409 `engine_busy` otherwise; the next request restores them, with `/status.weights.restoring` true meanwhile.
 - The streamed stores (1.4.0) use invented sizes: a 35B-A3B's routed experts are 17,920 MiB over 40 layers (448 MiB the smallest store), Flash-Next's 30,000 MiB over 48, and its PLE table 28.8 GB (64 MiB the smallest row cache). Auto streams Flash-Next's table and experts and loads a 35B-A3B's whole; a size streams them. The startup lines, refusals and `--verify-rows` line follow RuntimeResources.mm, with the model's family as its name.
+- Flint and Ornith-1.5-122B (1.4.1) use invented weights and states (Flint 23,300 MiB with a 770 MiB draft, Ornith 74,000 MiB with 1,780 MiB) and their real KV geometry. Flint's `kv.window` splits the used pages into the Full ones its window and states keep and Slim ones; it decides itself whether to reason (a last user message of four words or more), ignores a thinking budget, and refuses a `--max-context` past 262,144 as the engine's argument check does.
 - `cache_salt` keys the fake's prefix cache, so a salted request shares cached prompts only with requests of the same salt. Deduplicated KV tokens are always 0.

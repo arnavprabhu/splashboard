@@ -101,7 +101,12 @@ def test_flash_next_reports_every_conditional_group():
     bounds = status["memory_plan"]["budget"]["context_bounds"]
     assert bounds["spilled"] == bounds["window"] and bounds["disk"] > 0
     if ENGINE.exists():
-        conditional = {p for p in native_status_paths() if p.startswith(("streamed_", "kv_spill", "memory_plan"))}
+        conditional = {
+            p
+            for p in native_status_paths()
+            if p.startswith(("streamed_", "kv_spill", "memory_plan"))
+            and not p.startswith("memory_plan.budget.kv_window")
+        }
         missing = conditional - flatten(status)
         assert not missing, sorted(missing)
 

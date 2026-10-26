@@ -319,6 +319,7 @@ class Supervisor:
             yarn_factor=st.yarn_factor(status) if status else None,
             context_bound=st.context_bound(status) if status else None,  # type: ignore[arg-type]
             verify_rows=st.verify_rows(status) if status else None,  # type: ignore[arg-type]
+            reasoning_switch=st.reasoning_switch(status) if status else None,
             status_schema_version=self.schema_version,
             schema_supported=self.schema_version in (None, st.SCHEMA_VERSION),
             transport=self.transport,

@@ -2,7 +2,7 @@
 
 These check the assumptions the rest of the suite takes on faith:
 
-  * the engine is 1.4.0 or a later 1.4.x, inside the supported range;
+  * the engine is 1.4.1 or a later 1.4.x, inside the supported range;
   * `install/serve_options.py` still matches the settings' option map, including that no
     option has appeared that we do not map;
   * `helpers/inspect_model.py` really runs under Splash's own bundled Python and
@@ -261,6 +261,40 @@ def test_a_single_gguf_repository_needs_no_variant(engine_python: Path) -> None:
         pytest.skip(f"that repository now has {len(roots)} root GGUFs")
     result = inspect("prism-ml/Ternary-Bonsai-2-27B-gguf", engine_python)
     assert any(r["compatible"] for r in result["results"]), result
+
+
+@needs_engine
+@needs_network
+def test_flint_is_compatible_text_only(engine_python: Path) -> None:
+    """Splash 1.4.1 loads Flint from a GGUF, with no vision tower: the full check
+    passes with no projector, and the helper reports it text only."""
+    result = inspect("unsloth/flint-GGUF", engine_python, variant="UD-Q4_K_XL")
+    compatible = [r for r in result["results"] if r["compatible"]]
+    assert compatible, [r.get("reason") for r in result["results"]]
+    assert compatible[0]["family"] == "Flint" and compatible[0]["vision"] is False
+    assert compatible[0]["draft"] == "incoai/Flint-DFlash2"
+
+
+@needs_engine
+@needs_network
+def test_flint_s_safetensors_are_refused_as_gguf_only(engine_python: Path) -> None:
+    result = inspect("RecursiveSI/flint", engine_python)
+    assert not any(r["compatible"] for r in result["results"]), result
+    reasons = [r.get("reason") or "" for r in result["results"]]
+    assert any("Flint loads from a GGUF only" in reason for reason in reasons), reasons
+
+
+@needs_engine
+@needs_network
+def test_ornith_s_split_variant_is_the_122b_family(engine_python: Path) -> None:
+    """Ornith-1.5-122B is a fine-tune of Qwen3.5-122B-A10B, told apart from the
+    35B-A3B by its sizes; its UD-Q4_K_XL is split into a folder."""
+    result = inspect("unsloth/Ornith-1.5-122B-GGUF", engine_python, variant="UD-Q4_K_XL")
+    compatible = [r for r in result["results"] if r["compatible"]]
+    assert compatible, [r.get("reason") for r in result["results"]]
+    assert compatible[0]["family"] == "Qwen3.5-122B-A10B"
+    assert compatible[0]["draft"] == "incoai/Ornith-1.5-122B-DFlash2"
+    assert compatible[0]["vision"] is True
 
 
 # --- the manager's own view, over the real Hub ------------------------------------

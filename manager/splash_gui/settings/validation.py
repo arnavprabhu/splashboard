@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from pydantic import ValidationError
 
+from ..models.catalog import FAMILY_MAX_CONTEXT, family_guess
 from . import parsers as p
 from .effective import effective_values
 from .model import SettingsDocument
@@ -26,8 +27,23 @@ YARN_TRADEOFF = (
     "Past 256K Splash turns on YaRN, which is static: it changes answers at every "
     "length, and each such context keeps its own persistent cache. A "
     "Qwen3.8-Flash-Next model's context also follows the free space of the SSD "
-    "cache's disk"
+    "cache's disk, and Flint serves at most 256K"
 )
+# Flint decides each turn whether to reason (splash/DEVELOPMENT.md "Default
+# reasoning effort", 1.4.1): a request's effort, enable_thinking and a thinking
+# budget change nothing for it.
+REASONING_IGNORED = (
+    "Flint decides each turn whether to reason, so this setting changes nothing for it"
+)
+
+
+def family_context_cap(model_id: str) -> int | None:
+    """The most context the model's family serves when YaRN cannot stretch it
+    (Flint's 262,144), by the name's family; None for the others."""
+    family = family_guess(model_id.partition(p.VARIANT_SEPARATOR)[0])
+    return FAMILY_MAX_CONTEXT.get(family or "")
+
+
 # Splash ignores --sparse-kv-memory without the SSD cache, where no KV spills.
 SPARSE_KV_NEEDS_CACHE = "Ignored with the SSD cache off: no KV goes to the SSD"
 
@@ -343,8 +359,27 @@ def _model_issues(doc: SettingsDocument, model_id: str) -> Iterable[Issue]:
             (*base, "state_format"), STATE_BF16_TRADEOFF, severity="warning", code="tradeoff"
         )
     context = values["serve.max_context"]
-    if context.source == "model" and _is_yarn(context.value):
+    cap = family_context_cap(model_id)
+    try:
+        tokens = p.parse_max_context(str(context.value))
+    except ValueError:
+        tokens = None
+    if cap is not None and tokens is not None and tokens > cap:
+        # Splash refuses to start: "Flint serves at most 262144 tokens of context".
+        # An override is the model's own error; the global value only warns here.
+        yield Issue(
+            (*base, "max_context"),
+            f"{family_guess(model_id)} serves at most {cap:,} tokens of context",
+            severity="error" if context.source == "model" else "warning",
+            code="family_context",
+        )
+    elif context.source == "model" and _is_yarn(context.value):
         yield Issue((*base, "max_context"), YARN_TRADEOFF, severity="warning", code="yarn")
+    if family_guess(model_id.partition(p.VARIANT_SEPARATOR)[0]) == "Flint":
+        for key in ("default_reasoning_effort", "thinking_token_budget", "thinking_end_text"):
+            value = values[f"serve.{key}"]
+            if value.source == "model" and value.value is not None:
+                yield Issue((*base, key), REASONING_IGNORED, severity="warning", code="ignored")
     sparse = values["serve.sparse_kv_memory"]
     if (
         sparse.source == "model"

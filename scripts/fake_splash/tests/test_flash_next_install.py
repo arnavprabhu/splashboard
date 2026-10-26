@@ -70,7 +70,7 @@ def test_select_gguf_answers_with_a_list_and_falls_back_to_a_variant_folder():
 
 
 def test_a_family_without_a_released_draft_needs_draft_model(monkeypatch):
-    family = families.ModelFamily("Qwen3.8-Flash-Next", None)
+    family = families.ModelFamily("Qwen3.8-Flash-Next", None, families.QWEN)
     selection = models.Selection.of(Path("/nowhere"), f"{FLASH}:Q2_0")
     with pytest.raises(models.ModelError, match=r"^no DFlash2 draft is released for Qwen3\.8-Flash-Next; name one"):
         models.draft_repo(selection, family)

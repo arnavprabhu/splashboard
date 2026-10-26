@@ -81,8 +81,24 @@ CHECKPOINT_TAGS = {MODELOPT_27B: "modelopt", COMPRESSED_35B: "compressed-tensors
 FLASH_NEXT_GGUF = "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF"
 FLASH_NEXT_UNSLOTH = "unsloth/Qwen3.8-Flash-Next-GGUF"
 FLASH_NEXT_MLX = "rapid-mlx/Qwen3.8-Flash-Next-4bit"
+# Splash 1.4.1's new models. Flint loads from a GGUF only and has no vision tower,
+# so its repository holds no projector and RecursiveSI's own safetensors are
+# refused. Ornith-1.5-122B (the Qwen3.5-122B-A10B family) loads from a GGUF, its
+# UD-Q4_K_XL split into a folder as on the Hub, or from its MLX conversion.
+# ISTA-DASLab's Coder release of Flash-Next keeps 256 of its 512 experts.
+FLINT_GGUF = "unsloth/flint-GGUF"
+FLINT_SAFETENSORS = "RecursiveSI/flint"
+ORNITH_GGUF = "unsloth/Ornith-1.5-122B-GGUF"
+ORNITH_MLX = "ornith-ai/Ornith-1.5-122B-MLX-4bit"
+FLASH_NEXT_CODER = "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF"
 # The variant the fake installer publishes for each GGUF repository it serves.
-INSTALLED_VARIANT = {FLASH_NEXT_GGUF: "Q2_0", FLASH_NEXT_UNSLOTH: "UD-Q2_K_XL"}
+INSTALLED_VARIANT = {
+    FLASH_NEXT_GGUF: "Q2_0",
+    FLASH_NEXT_UNSLOTH: "UD-Q2_K_XL",
+    FLINT_GGUF: "UD-Q4_K_XL",
+    ORNITH_GGUF: "UD-Q4_K_XL",
+    FLASH_NEXT_CODER: "IQ1_M",
+}
 
 _ROUTE_LOCK = threading.Lock()
 
@@ -114,13 +130,18 @@ def repository(repo_id: str, revision: str | None = None) -> tuple[models.Remote
             repo, _, _, _ = models.target_repo(selection, family)
     if repo_id == ACCEPT_GGUF:
         repo.files += more_variants(repo)
-    elif repo_id in INSTALLED_VARIANT:
+    elif repo_id in (FLASH_NEXT_GGUF, FLASH_NEXT_UNSLOTH):
         repo.files += more_folders(repo, repo_id)
+    elif repo_id == ORNITH_GGUF:
+        repo.files += ornith_roots(repo)
     files = {f.name: f for f in repo.files}
-    config = {
+    config: dict[str, Any] = {
         "text_config": signatures.text_config(family),
         "quantization": {"bits": 4, "group_size": 64, "mode": "affine"},
     }
+    if family.name in signatures.FLAT:
+        # Flint's config.json holds its text model's keys at the top level.
+        config = {**signatures.text_config(family), "quantization": config["quantization"]}
     if bits := re.search(r"(\d)bit", repo_id):
         # 8-bit loads; 7-bit is one Splash's model-check refuses.
         config["quantization"]["bits"] = int(bits.group(1))
@@ -206,6 +227,19 @@ def more_folders(repo: models.RemoteRepo, repo_id: str) -> list[models.RemoteFil
         return folder("IQ2_XS", 2, 103)
     head = models.RemoteFile(f"mtp-{stem}-Q8_0.gguf", 4096, True, base[0].header, b"mtp")
     return [*folder("Q8_0", 3, 120), head]
+
+
+def ornith_roots(repo: models.RemoteRepo) -> list[models.RemoteFile]:
+    """unsloth/Ornith-1.5-122B-GGUF keeps its smaller variants at the root and its
+    larger ones split into folders (Hub, 2026-10-26); the fixture adds one root
+    variant, UD-Q2_K_XL, a little over half the size of UD-Q4_K_XL."""
+    base = next(f for f in repo.files if "/" in f.name)
+    parts = sum(1 for f in repo.files if "/" in f.name)
+    return [
+        models.RemoteFile(
+            "Ornith-1.5-122B-UD-Q2_K_XL.gguf", base.size * parts * 56 // 100, True, base.header, b"ornith-q2"
+        )
+    ]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -506,6 +540,11 @@ def _catalog() -> list[str]:
         FLASH_NEXT_GGUF,
         FLASH_NEXT_UNSLOTH,
         FLASH_NEXT_MLX,
+        FLINT_GGUF,
+        FLINT_SAFETENSORS,
+        ORNITH_GGUF,
+        ORNITH_MLX,
+        FLASH_NEXT_CODER,
     ]
 
 

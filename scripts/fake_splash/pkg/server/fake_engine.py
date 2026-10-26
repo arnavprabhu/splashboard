@@ -65,8 +65,27 @@ EXPERT_ARENA_BYTES = 16 * GIB
 # but consistent): its routed experts, one layer's of them at least, and
 # Flash-Next's PLE table (28.8 GB in IQ4_NL, DEVELOPMENT.md "PLE table
 # streaming"); model::kSsdReaders reads them.
-ROUTED_EXPERT_BYTES = {"Qwen3.6-35B-A3B": 17_920 * MIB, "Qwen3.8-Flash-Next": 30_000 * MIB}
-EXPERT_LAYERS = {"Qwen3.6-35B-A3B": 40, "Qwen3.8-Flash-Next": 48}
+ROUTED_EXPERT_BYTES = {
+    "Qwen3.6-35B-A3B": 17_920 * MIB,
+    "Qwen3.8-Flash-Next": 30_000 * MIB,
+    "Qwen3.5-122B-A10B": 62_000 * MIB,
+    "Flint": 21_000 * MIB,
+}
+EXPERT_LAYERS = {"Qwen3.6-35B-A3B": 40, "Qwen3.8-Flash-Next": 48, "Qwen3.5-122B-A10B": 48, "Flint": 47}
+# Splash 1.4.1's families (runtime/model/Qwen3_6Moe.hpp kQwen3_5_122BLayout,
+# Flint.hpp): full-attention layers, KV heads, head dimension, and the target's
+# and draft's weights (invented but consistent, the 4-bit GGUFs' sizes). Flint
+# attends in all 49 layers, 35 of them over a sliding window of 513 keys; it has
+# no GDN layers, so a lane's state is the draft's rings and window alone.
+FAMILY_GEOMETRY = {
+    "Qwen3.5-122B-A10B": (12, 2, 256, 74_000 * MIB, 1_780 * MIB),
+    "Flint": (49, 4, 128, 23_300 * MIB, 770 * MIB),
+}
+FLINT_WINDOWED_LAYERS = 35
+FLINT_WINDOW_PAGES = 16  # kv::Layout::windowPages for a 512-token window
+# Flint's context is its native window: its full layers have no RoPE for YaRN
+# to stretch (Flint.hpp; ModelDescriptor.mm servedFor).
+FLINT_CONTEXT_TOKENS = 262144
 PLE_TABLE_BYTES = 28_800_000_000
 PLE_STORE_FLOOR = 64 * MIB
 SSD_READERS = 32
@@ -318,7 +337,23 @@ class ServeSettings:
 
 
 def _family(model: str) -> str:
-    return "Qwen3.6-35B-A3B" if "35b-a3b" in model.lower() else "Qwen3.8-27B"
+    name = model.lower()
+    if "flint" in name:
+        return "Flint"
+    # Ornith-1.5-122B is a fine-tune of Qwen3.5-122B-A10B, and that family (1.4.1).
+    if "122b" in name:
+        return "Qwen3.5-122B-A10B"
+    return "Qwen3.6-35B-A3B" if "35b-a3b" in name else "Qwen3.8-27B"
+
+
+def _flint(model: str) -> bool:
+    """Flint (1.4.1): a MoE whose layers all attend, 35 of them over a sliding
+    window, without GDN layers or vision, that decides itself when to reason."""
+    return _family(model) == "Flint"
+
+
+def _head_dimension(model: str) -> int:
+    return FAMILY_GEOMETRY.get(_family(model), (0, 0, HEAD_DIMENSION))[2]
 
 
 def _flash_next(model: str) -> bool:
@@ -414,10 +449,16 @@ class Breakdown:
 class MemoryPlan:
     def __init__(self, settings: ServeSettings, config: FakeConfig, *, force_refusal: bool = False):
         family = _family(settings.model)
-        moe = family == "Qwen3.6-35B-A3B"
+        moe = family != "Qwen3.8-27B"
         self.family = family or "Qwen3.8-27B"
-        # Full-attention KV layout: one layer in four, head_dim 256.
+        geometry = FAMILY_GEOMETRY.get(family)
+        # Full-attention KV layout: one layer in four, head_dim 256; the 1.4.1
+        # families' own.
         self.attention_layers, self.kv_heads = (10, 2) if moe else (16, 4)
+        self.head_dimension = HEAD_DIMENSION
+        if geometry is not None:
+            self.attention_layers, self.kv_heads, self.head_dimension = geometry[:3]
+        self.flint = family == "Flint"
         self.kv_format = settings.kv_format
         physical = config.physical_memory
         recommended = int(physical * 0.75)
@@ -427,7 +468,10 @@ class MemoryPlan:
         hard = max(0, ceiling - margin)
         target = (19_600 if moe else 15_200) * MIB
         draft = (980 if moe else 1_900) * MIB
-        vision = 0 if settings.language_only else 860 * MIB
+        if geometry is not None:
+            target, draft = geometry[3:]
+        # Flint has no vision tower (install/families.py).
+        vision = 0 if settings.language_only or self.flint else 860 * MIB
         lane_state = self.lane_state_bytes(settings)
         prefill, decode = 1_536 * MIB, 512 * MIB
         # RuntimeResources.mm (1.3.2): a quota that holds a state, the automatic
@@ -438,7 +482,7 @@ class MemoryPlan:
         fixed = target + draft + vision + prefill + decode + PIPELINE_RESERVE + RUNTIME_RESERVE + staging + ane
         dynamic = max(0, hard - fixed)
         # Full-attention KV per token: layers x KV heads x head_dim x (K, V).
-        per_token = self.attention_layers * self.kv_heads * HEAD_DIMENSION * 2
+        per_token = self.attention_layers * self.kv_heads * self.head_dimension * 2
         if settings.kv_format == "bf16":
             per_token *= 2
         page = per_token * KV_PAGE_TOKENS
@@ -485,6 +529,11 @@ class MemoryPlan:
             automatic = min(automatic or config.auto_context, config.auto_context)
         self.automatic_context = automatic
         self.page_bytes = page
+        # A Flint page gives up its windowed layers' K/V once every window has
+        # passed it (1.4.1 "Sliding windows"): a Slim page keeps the 14 others.
+        full_layers = self.attention_layers - FLINT_WINDOWED_LAYERS
+        self.slim_page_bytes = page * full_layers // self.attention_layers if self.flint else 0
+        self.window_floor_pages = FLINT_WINDOW_PAGES + PREFILL_TOKEN_BUDGET // KV_PAGE_TOKENS + 1
         # 1.4.0: the streamed stores (--ple-memory, --expert-memory), a
         # Flash-Next target's KV on the SSD cache, and what bounds the context
         # (MemoryPlan.cpp ContextBounds). Auto streams Flash-Next's table and
@@ -503,6 +552,8 @@ class MemoryPlan:
         if self.spills:
             self.hot_bytes = max(SPILL_HOT_FLOOR, _streamed_bytes(getattr(settings, "sparse_kv_memory", None), 0))
         window = max(MAX_CONTEXT_TOKENS, settings.max_context or 0)
+        if self.flint:
+            window = FLINT_CONTEXT_TOKENS
         resident = min(window, max(0, self.breakdown.kv_capacity_tokens - SPECULATIVE_SCRATCH_TOKENS))
         spilled = window if self.spills else 0
         disk = spill_room(settings, config) // SPILL_BYTES_PER_TOKEN if self.spills else 0
@@ -546,7 +597,8 @@ class MemoryPlan:
     @staticmethod
     def lane_state_bytes(settings: ServeSettings) -> int:
         """One lane's state; --state-format bf16 (1.3.2) halves each recurrent state."""
-        state = (96 if _family(settings.model) == "Qwen3.6-35B-A3B" else 160) * MIB
+        family = _family(settings.model)
+        state = {"Qwen3.6-35B-A3B": 96, "Qwen3.5-122B-A10B": 140, "Flint": 2}.get(family, 160) * MIB
         return state // 2 if settings.state_format == "bf16" else state
 
     def status_json(self, valid: bool = True) -> dict:
@@ -562,6 +614,10 @@ class MemoryPlan:
             max(0, b.dynamic_budget_bytes - b.lane_state_bytes - self.hot_bytes) if self.spills else 0
         )
         budget["context_bounds"] = dict(self.context_bounds)
+        if self.flint:
+            # MemoryPlan.cpp toStatusJson (1.4.1): a windowed target's Slim page and
+            # the Full pages a lane keeps.
+            budget["kv_window"] = {"slim_page_bytes": self.slim_page_bytes, "floor_pages": self.window_floor_pages}
         if valid:
             return {
                 "valid": True,
@@ -584,10 +640,10 @@ class MemoryPlan:
                     "maximum_context_tokens": self.window,
                     "attention_layers": self.attention_layers,
                     "kv_heads": self.kv_heads,
-                    "head_dimension": HEAD_DIMENSION,
+                    "head_dimension": self.head_dimension,
                     "kv_page_tokens": KV_PAGE_TOKENS,
                     "kv_format": self.kv_format,
-                    "kv_elements_per_scale": HEAD_DIMENSION if self.kv_format == "int8" else 0,
+                    "kv_elements_per_scale": self.head_dimension if self.kv_format == "int8" else 0,
                     "kv_page_bytes": self.page_bytes,
                     "state_format": self.state_format,
                     "memory": {
@@ -782,7 +838,8 @@ class FakeEngine:
         self.instance_id = secrets.token_hex(12)
         self.plan: MemoryPlan | None = None
         self.max_context = 0
-        self.vision = not settings.language_only
+        # Flint has no vision tower and serves text only (install/families.py, 1.4.1).
+        self.vision = not settings.language_only and not _flint(settings.model)
         self.lanes = threading.Semaphore(MAX_BATCH_WIDTH)
         self.requests = HttpAdmission(settings.queue_size)
         self.token_counts = HttpAdmission(settings.queue_size)
@@ -914,6 +971,13 @@ class FakeEngine:
                 )
         print_status(f"Chat template · {self.template_description()}")  # server.py:1754
         self.backend_created = True
+        if _flint(s.model) and s.max_context is not None and s.max_context > FLINT_CONTEXT_TOKENS:
+            # runtime/engine/NativeArguments.cpp (1.4.1): servedFor refuses a context
+            # past the family's window, which YaRN cannot stretch for Flint; a usage
+            # error, so the engine exits before Ready and the server sees EOF.
+            write_stderr_line(f"error: MAX_CONTEXT: Flint serves at most {FLINT_CONTEXT_TOKENS} tokens of context")
+            write_stderr_line("usage: splash MODEL_ROOT MAX_CONTEXT MAX_MEMORY_BYTES MAX_CACHE_DISK_BYTES [options]")
+            raise StartupFailed("native protocol reached EOF")
         quota, state_bytes = s.cache_disk_quota, MemoryPlan.lane_state_bytes(s)
         if 0 < quota < state_bytes:
             # runtime/engine/RuntimeResources.mm:398-400 (1.3.2)
@@ -926,7 +990,9 @@ class FakeEngine:
         if refusal := self._store_refusal():
             # planRefusal (RuntimeResources.mm:333-335) at Configuration stage.
             write_stderr_line(f"error: runtime bootstrap failed [resource_assembly/configuration]: {refusal}")
-            raise StartupFailed("native protocol reached EOF")
+            # 1.4.1 (runtime/main.mm reportStartFailure): the engine sends the reason
+            # in place of Ready, and the server ends the start with it.
+            raise StartupFailed(refusal)
         time.sleep(max(0.0, cfg.load_seconds))
         # runtime/engine/RuntimeResources.mm:856-857
         log_startup(f"Weights loaded in {cfg.load_seconds:.2f} s.")
@@ -948,7 +1014,7 @@ class FakeEngine:
                 + plan.breakdown.describe()
             )
             write_stderr_line("memory_plan_json: " + json.dumps(plan.status_json(valid=False), separators=(",", ":")))
-            raise StartupFailed("native protocol reached EOF")
+            raise StartupFailed(message)
         if cfg.startup_failure == "crash":
             write_stderr_line("error: native runtime I/O failed: fake startup crash")
             raise StartupFailed("native protocol reached EOF")
@@ -998,12 +1064,12 @@ class FakeEngine:
                 else "this Mac's memory"
             )
             # runtime/engine/Bootstrap.mm:286-299
-            write_stderr_line(
-                f"error: runtime bootstrap failed [model_creation]: --max-context {requested} exceeds the "
-                f"{allowed} tokens the model and {bound} allow; "
-                f"omit it or pass at most {allowed}\n" + budget.describe()
+            reason = (
+                f"--max-context {requested} exceeds the {allowed} tokens the model and {bound} allow; "
+                f"omit it or pass at most {allowed}"
             )
-            raise StartupFailed("native protocol reached EOF")
+            write_stderr_line(f"error: runtime bootstrap failed [model_creation]: {reason}\n" + budget.describe())
+            raise StartupFailed(reason)
         # 1.3.2 dropped Bootstrap.mm's "may not hold" suggestion: the SSD cache
         # is on by default.
         self.max_context = s.max_context or automatic
@@ -1017,6 +1083,29 @@ class FakeEngine:
     def _model_name(self) -> str:
         """The loaded model's name in startup lines: its family."""
         return "Qwen3.8-Flash-Next" if _flash_next(self.settings.model) else _family(self.settings.model)
+
+    def _kv_window(self, pages_used: int) -> dict:
+        """Status.cpp appendKvWindow (1.4.1): a windowed target's (Flint's) pages, its
+        Full ones those a window or a state's tail keeps, the rest Slim; absent for
+        other targets."""
+        plan = self.plan
+        if plan is None or not plan.flint:
+            return {}
+        full = min(pages_used, FLINT_WINDOW_PAGES * max(1, self.c["publications"]))
+        slim = max(0, pages_used - full)
+        return {
+            "window": {
+                "window_pages": FLINT_WINDOW_PAGES,
+                "trim": True,
+                "full_pages": full,
+                "slim_pages": slim,
+                "slim_bytes": slim * plan.slim_page_bytes,
+                "pinned_blocks": min(full, FLINT_WINDOW_PAGES * len(self.prefix_cache)),
+                "trimmed_pages": slim,
+                "upgrades": 0,
+                "refused_states": 0,
+            }
+        }
 
     def _streamable(self) -> tuple[int, int]:
         """What streams of the target: its routed experts' and PLE table's bytes."""
@@ -1490,8 +1579,15 @@ class FakeEngine:
         """The reasoning pieces, content pieces and tool calls (name, args)."""
         cfg = self.config
         thinking = (job.thinking and cfg.reasoning != "never") or cfg.reasoning == "always"
+        flint = _flint(self.settings.model)
+        if flint and cfg.reasoning not in ("never", "always"):
+            # Flint (1.4.1) decides each turn whether to reason, whatever the request
+            # says; the fake reasons about any message of four words or more.
+            thinking = len(job.last_user.split()) >= 4
         reasoning = fake_text.reasoning_pieces(job.last_user) if thinking else []
-        if job.thinking_token_budget is not None:
+        # A model that opens its reasoning itself never starts in one, so a budget
+        # caps nothing for it (DEVELOPMENT.md, 1.4.1).
+        if job.thinking_token_budget is not None and not flint:
             # A thinking budget (1.3.2) closes the thinking after that many tokens.
             reasoning = reasoning[: job.thinking_token_budget]
         tools = job.tools or []
@@ -2215,6 +2311,7 @@ class FakeEngine:
                 "extent_compactions": 0,
                 "pages_moved": 0,
                 "extent_compact_max_ms": 0.0,
+                **self._kv_window(pages_active + pages_cache),
             },
             "state": {
                 "entries": len(self.prefix_cache),
@@ -2410,6 +2507,9 @@ class FakeEngine:
         # server/frontend.py Frontend.status
         status["vision"] = self.vision
         status["input_modalities"] = self.input_modalities
+        # frontend.py Frontend.status (1.4.1): whether a request's reasoning effort or
+        # enable_thinking turns the reasoning on and off; Flint decides each turn.
+        status["reasoning_switch"] = not _flint(s.model)
         later = {"native": "native", "patched": "patched", "unsupported": "unsupported"}.get(cfg.template, "patched")
         status["chat_template"] = {"later_system": later}
         status["frontend"] = {"preparation_capacity": MAX_BATCH_WIDTH, "active": 0, "waiting": 0}

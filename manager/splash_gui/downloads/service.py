@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, ClassVar, TypeVar
 from ..errors import ApiError
 from ..events.alerts import action
 from ..hubcache import blob_partials, blobs_dir, range_partial, remove_partial, repo_folder
-from ..models.catalog import installable_id
+from ..models.catalog import TEXT_ONLY_FAMILIES, installable_id
 from ..models.hf import HubError, is_blob_id
 from ..models.layout import read_all
 from ..models.service import valid_id
@@ -95,6 +95,8 @@ class Downloads:
         self.stopping = False
         self.queue_lock = asyncio.Lock()
         self.preexisting: dict[str, list[str]] = {}
+        # Models of a text-only family (Flint) the compatibility check found, by ID.
+        self.text_only_models: set[str] = set()
         # The state each item last went out with on /events (see `publish`).
         self.announced: dict[str, str] = {}
 
@@ -187,6 +189,10 @@ class Downloads:
             created_at=iso(),
         )
         repos = [(body.id, None, [])] if draft else await self._model_repos(body)
+        if not draft and body.language_only and body.id in self.text_only_models:
+            # A text-only family installs one way: --language-only would only give it a
+            # second selection of the same files (install/models.py `selection_link`).
+            item.language_only = False
         blob_map: dict[str, str] = {}
         try:
             for repo_id, revision, selected in repos:
@@ -262,7 +268,11 @@ class Downloads:
                 if inspection.reason_detail
                 else None,
             )
-        if not body.language_only and not inspection.vision.available:
+        # A text-only family (Flint) has no vision to skip: Splash installs it as is.
+        text_only = inspection.family in TEXT_ONLY_FAMILIES
+        if text_only:
+            self.text_only_models.add(body.id)
+        if not body.language_only and not inspection.vision.available and not text_only:
             raise ApiError(
                 422,
                 inspection.vision.reason or "Use language-only for this model",

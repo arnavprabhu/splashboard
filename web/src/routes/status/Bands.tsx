@@ -491,6 +491,16 @@ export function CacheBand({ raw, stopped }: BandsProps) {
       t: count(rawNum(raw, 'kv.pages_allocated')),
     }),
     t('bands.cache.kv_bytes', { b: bytes(rawNum(raw, 'kv.allocated_bytes')), r: bytes(rawNum(raw, 'kv.reclaimable_bytes')) }),
+    // A sliding-window target (Flint, Splash 1.4.1): pages every window has passed give up
+    // their windowed layers' K/V, so they take less memory ("slim").
+    rawGet(raw, 'kv.window') && typeof rawGet(raw, 'kv.window') === 'object'
+      ? t(rawGet(raw, 'kv.window.trim') === false ? 'bands.cache.window_off' : 'bands.cache.window', {
+          f: count(rawNum(raw, 'kv.window.full_pages')),
+          s: count(rawNum(raw, 'kv.window.slim_pages')),
+          b: bytes(rawNum(raw, 'kv.window.slim_bytes')),
+          n: count(rawNum(raw, 'kv.window.trimmed_pages')),
+        })
+      : null,
     t('bands.cache.states', { n: count(rawNum(raw, 'state.entries')), u: count(rawNum(raw, 'state.in_use')), b: bytes(rawNum(raw, 'state.bytes')) }),
     checkpoints ? t('bands.cache.checkpoints', { list: checkpoints }) : null,
     t('bands.cache.evictions', { n: count(rawNum(raw, 'state.in_use_evictions')) }),

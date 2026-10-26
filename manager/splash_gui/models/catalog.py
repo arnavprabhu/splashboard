@@ -4,8 +4,9 @@ The seed lists repositories only; sizes, licenses, vision and the GGUF variant
 table come from the Hub at runtime (`HfClient.repo_info`, cached for a day).
 
 The memory estimate:
-`target + draft (~0.7 GB, 1.2 GB for Flash-Next) + vision (~0.9 GB unless
-language-only) + KV runway (~0.5 GB) + 2 GB reserve`. A MoE model too large for
+`target + draft (~0.7 GB; 1.2 GB for Flash-Next, 1.9 GB for Ornith-1.5-122B) +
+vision (~0.9 GB unless language-only or text-only Flint) + KV runway (~0.5 GB) +
+2 GB reserve`. A MoE model too large for
 that can still run with its routed experts (and Flash-Next's PLE table) streamed
 from the SSD (`streamed_need`), which the fit calls "streams". Splash's own
 startup budget check stays the authority.
@@ -26,9 +27,24 @@ from typing import Any
 
 GIB = 1024**3
 DRAFT_BYTES = int(0.7 * GIB)
-# A family whose DFlash2 draft is larger: incoai/Qwen3.8-Flash-Next-DFlash2's
-# model.safetensors is 1.21 GB (Hub, 2026-10-20).
-FAMILY_DRAFT_BYTES: dict[str, int] = {"Qwen3.8-Flash-Next": 1_210_000_000}
+# A family whose DFlash2 draft is another size: incoai/Qwen3.8-Flash-Next-DFlash2's
+# model.safetensors is 1.21 GB (Hub, 2026-10-20); incoai/Ornith-1.5-122B-DFlash2's
+# 1.86 GB with its mask embedding and incoai/Flint-DFlash2's 0.81 GB (2026-10-26).
+FAMILY_DRAFT_BYTES: dict[str, int] = {
+    "Qwen3.8-Flash-Next": 1_210_000_000,
+    "Qwen3.5-122B-A10B": 1_860_574_768,
+    "Flint": 805_137_472,
+}
+# Families whose models have no vision tower: they serve text only, whatever
+# their repository holds (splash/install/families.py `vision`, 1.4.1).
+TEXT_ONLY_FAMILIES = frozenset({"Flint"})
+# Families that load from a GGUF only (splash/runtime/model/Qwen4Exp.hpp and
+# Flint.hpp `loadsSafetensors = false`).
+GGUF_ONLY_FAMILIES = frozenset({"Qwen3.8-Flash-Next", "Flint"})
+# The context each family serves at most: the native window, stretched by YaRN to
+# 1,010,000 tokens for the Qwen families. Flint's full layers have no RoPE to
+# stretch, so its window is all it serves (Flint.hpp; ModelDescriptor.mm servedFor).
+FAMILY_MAX_CONTEXT: dict[str, int] = {"Flint": 262_144}
 VISION_BYTES = int(0.9 * GIB)
 KV_RUNWAY_BYTES = int(0.5 * GIB)
 RESERVE_BYTES = 2 * GIB
@@ -88,6 +104,34 @@ SEED: list[tuple[str, str, str, str, str | None]] = [
         "MLX nvfp4, about 20 GB of weights.",
         None,
     ),
+    # Flint, RecursiveSI's 40B-A2.5B MoE (Splash 1.4.1): GGUF only, text only.
+    (
+        "Flint",
+        "unsloth/flint-GGUF",
+        "gguf",
+        "Text only, and faster than Qwen3.6-35B-A3B. It sits between the 35B-A3B and the "
+        "27B in intelligence, and how well it does depends a lot on what you use it for. "
+        "Recommended: UD-Q4_K_XL (about 25 GB).",
+        "UD-Q4_K_XL ≈190 tok/s on a 36 GB M5 Max (Splash 1.4.1 notes)",
+    ),
+    # Ornith-1.5-122B, a fine-tune of Qwen3.5-122B-A10B (Splash 1.4.1). Splash's README
+    # names unsloth's UD-Q4_K_XL and the MLX 4-bit, which keeps its vision tower; both
+    # checked on the Hub on 2026-10-26.
+    (
+        "Qwen3.5-122B-A10B",
+        "unsloth/Ornith-1.5-122B-GGUF",
+        "gguf",
+        "Splash's example is UD-Q4_K_XL (about 80 GB in three files; streams its experts "
+        "on a 64 GB Mac); UD-IQ1_M to UD-Q2_K_XL fit in 48–64 GB.",
+        None,
+    ),
+    (
+        "Qwen3.5-122B-A10B",
+        "ornith-ai/Ornith-1.5-122B-MLX-4bit",
+        "mlx",
+        "MLX 4-bit with its vision tower, about 70 GB of weights.",
+        None,
+    ),
     # Flash-Next loads from a GGUF only, and every GGUF of it on the Hub is split
     # into a folder per variant. Splash's README names the ISTA-DASLab Q2_0 as its
     # example and links unsloth's repository for the other variants; both checked
@@ -107,6 +151,16 @@ SEED: list[tuple[str, str, str, str, str | None]] = [
         "UD-IQ1_S to UD-Q6_K_XL and Q8_0, each in split files.",
         None,
     ),
+    # Splash 1.4.1 loads pruned-expert GGUFs: this one keeps 256 of Flash-Next's
+    # 512 experts (splash/DEVELOPMENT.md; Hub, 2026-10-26).
+    (
+        "Qwen3.8-Flash-Next",
+        "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF",
+        "gguf",
+        "Tuned for coding, with half of Flash-Next's experts pruned; IQ1_M, about 58 GB "
+        "in two files.",
+        None,
+    ),
 ]
 
 # Each family's DFlash2 draft, which every install fetches beside the target
@@ -115,6 +169,8 @@ DRAFT_REPOS: dict[str, str] = {
     "Qwen3.8-27B": "incoai/Qwen3.8-27B-DFlash2",
     "Qwen3.6-35B-A3B": "incoai/Qwen3.6-35B-A3B-DFlash2",
     "Qwen3.8-Flash-Next": "incoai/Qwen3.8-Flash-Next-DFlash2",
+    "Qwen3.5-122B-A10B": "incoai/Ornith-1.5-122B-DFlash2",
+    "Flint": "incoai/Flint-DFlash2",
 }
 # A family without a released draft (Splash's `draft_repo` is None) needs one named
 # in the model's settings; Splash refuses to install it otherwise.
@@ -127,6 +183,8 @@ FAMILY_LABELS: dict[str, str] = {
     "Qwen3.8-27B": "Qwen3.8-27B dense",
     "Qwen3.6-35B-A3B": "Qwen3.6-35B-A3B MoE",
     "Qwen3.8-Flash-Next": "Qwen3.8-Flash-Next MoE",
+    "Qwen3.5-122B-A10B": "Ornith-1.5-122B MoE",
+    "Flint": "Flint MoE",
 }
 
 _SHARD = re.compile(r"-\d{5}-of-\d{5}$")
@@ -235,6 +293,10 @@ def family_guess(repo_id: str) -> str | None:
     name = repo_id.lower()
     if "flash-next" in name:
         return "Qwen3.8-Flash-Next"
+    if "flint" in name:
+        return "Flint"
+    if "122b" in name:
+        return "Qwen3.5-122B-A10B"
     if "35b-a3b" in name:
         return "Qwen3.6-35B-A3B"
     if "27b" in name:
@@ -245,13 +307,21 @@ def family_guess(repo_id: str) -> str | None:
 # The KV cache's geometry per family: (full-attention layers, KV heads, head dimension).
 # Splash's hybrid models run a full-attention layer every fourth layer
 # (runtime/model/Qwen3_8.hpp, Qwen3_6Moe.hpp and Qwen4Exp.hpp: `fullAttentionPeriod = 4`;
-# 64, 40 and 48 layers), with 4, 2 and 2 KV heads of 256 (`attentionKvHeads`,
-# `attentionHeadDimension`).
+# 64, 40, 48 and, for Qwen3.5-122B-A10B, 48 layers), with 4, 2, 2 and 2 KV heads of 256
+# (`attentionKvHeads`, `attentionHeadDimension`). Every one of Flint's 49 layers
+# attends with 4 KV heads of 128 (Flint.hpp); the 14 without a window are counted here.
 KV_GEOMETRY: dict[str, tuple[int, int, int]] = {
     "Qwen3.8-27B": (16, 4, 256),
     "Qwen3.6-35B-A3B": (10, 2, 256),
+    "Qwen3.5-122B-A10B": (12, 2, 256),
     "Qwen3.8-Flash-Next": (12, 2, 256),
+    "Flint": (14, 4, 128),
 }
+# Flint's 35 sliding-window layers: a page every window has passed gives up their K/V
+# (splash/DEVELOPMENT.md "Sliding windows", 1.4.1), so a request keeps them only for
+# the pages its lane holds Full: the window's 16, a command's 64 and one more, 32
+# tokens each (MemoryPlan.cpp `kvWindowFloorPages`).
+WINDOWED_KV: dict[str, tuple[int, int]] = {"Flint": (35, (16 + 64 + 1) * 32)}
 # Flash-Next's KV pages also hold its sparse attention indexer's pooled keys: 128
 # values in bf16 per block of 4 tokens in each attention layer, 64 bytes a token a
 # layer (runtime/ops/PagedKv.hpp `indexBytesPerLayerPage`; Qwen4Exp.hpp
@@ -265,9 +335,14 @@ def kv_bytes(family: str, tokens: int, *, bf16: bool = False) -> int:
     scale per token and head, for keys and for values; BF16 stores two bytes each. An
     indexer's keys come on top, whatever the format."""
     layers, heads, dim = KV_GEOMETRY[family]
-    per_token = layers * 2 * heads * (dim * 2 if bf16 else dim + 4)
+    layer_token = 2 * heads * (dim * 2 if bf16 else dim + 4)
+    per_token = layers * layer_token
     per_token += layers * KV_INDEX_BYTES_PER_LAYER_TOKEN.get(family, 0)
-    return per_token * tokens
+    windowed = 0
+    if family in WINDOWED_KV:
+        window_layers, full_tokens = WINDOWED_KV[family]
+        windowed = window_layers * layer_token * min(tokens, full_tokens)
+    return per_token * tokens + windowed
 
 
 # The SSD cache stages a state's write through one resident buffer of a state's size,
@@ -280,6 +355,12 @@ STATE_STAGING_BYTES: dict[str, int] = {
     "Qwen3.8-27B": 153 * 1024**2,
     "Qwen3.6-35B-A3B": 64 * 1024**2,
     "Qwen3.8-Flash-Next": 113 * 1024**2,
+    # 36 GDN layers of 64 heads of 128 × 128 fp32 (144 MiB) with their convolution
+    # (Qwen3_6Moe.hpp kQwen3_5_122BLayout); an estimate like Flash-Next's.
+    "Qwen3.5-122B-A10B": 152 * 1024**2,
+    # No GDN layers: a state is the draft's window, 2 MiB (Splash 1.4.1's startup line
+    # on an M5 Pro: "states of 2 MiB").
+    "Flint": 2 * 1024**2,
 }
 
 
@@ -318,9 +399,13 @@ def memory_need(
 # 512 in each of 40 layers, 32B of its 35B weights; Flash-Next's 512 of 3 × 2560 × 640
 # in each of 48 (Qwen4Exp.hpp), 121B of about 126B, and its quantizations keep the rest
 # wider: ISTA-DASLab's Q2_0 has about 34 GB of experts in its 37.6 GB first part.
+# Qwen3.5-122B-A10B's are 256 of 3 × 3072 × 1024 in each of 48 layers, 116B of 122B;
+# Flint's 256 of 3 × 2048 × 512 in each of its 47 MoE layers, 38B of 40B (Flint.hpp).
 STREAMED_EXPERTS: dict[str, tuple[float, int]] = {
     "Qwen3.6-35B-A3B": (0.9, 40),
     "Qwen3.8-Flash-Next": (0.9, 48),
+    "Qwen3.5-122B-A10B": (0.95, 48),
+    "Flint": (0.94, 47),
 }
 # Flash-Next's PLE table: 320M rows of 160 values, 28.8 GB in IQ4_NL (DEVELOPMENT.md),
 # the second file of each ISTA-DASLab variant. Without a header to read, a variant's
@@ -626,7 +711,8 @@ def entry_facts(
     files: dict[str, int | None] = info.files
     facts: dict[str, Any] = {"license": info.license, "last_modified": info.last_modified}
     if fmt == "gguf":
-        mmproj = projector(files)
+        # A text-only family reads no projector, whatever the repository holds.
+        mmproj = None if family in TEXT_ONLY_FAMILIES else projector(files)
         vision = mmproj is not None
         variants = gguf_variants(repo_id, files)
         picked = pick_variant(variants, memory, vision, family)
@@ -656,7 +742,7 @@ def entry_facts(
             facts["recommended_variant"] = picked.name if picked else None
         return facts
     size = weights_bytes(files)
-    vision = any(name in files for name in PROCESSOR_FILES)
+    vision = family not in TEXT_ONLY_FAMILIES and any(name in files for name in PROCESSOR_FILES)
     facts.update(
         size_bytes=size,
         vision=vision,

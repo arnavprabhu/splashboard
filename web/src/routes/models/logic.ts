@@ -410,6 +410,21 @@ export function catalogSeed(memoryBytes = 0): Catalog {
           { format: 'gguf', label: t('models.format.gguf'), entries: [entry('unsloth/Qwen3.6-35B-A3B-GGUF', 'Qwen3.6-35B-A3B', 'gguf', t('models.seed.moe_gguf'))] },
         ],
       },
+      // Text only and GGUF only (Splash 1.4.1).
+      {
+        family: 'Flint',
+        label: t('models.catalog.family.flint'),
+        groups: [{ format: 'gguf', label: t('models.format.gguf'), entries: [entry('unsloth/flint-GGUF', 'Flint', 'gguf', t('models.seed.flint_gguf'))] }],
+      },
+      // Ornith-1.5-122B, a fine-tune of Qwen3.5-122B-A10B (Splash 1.4.1).
+      {
+        family: 'Qwen3.5-122B-A10B',
+        label: t('models.catalog.family.ornith'),
+        groups: [
+          { format: 'mlx', label: t('models.format.mlx'), entries: [entry('ornith-ai/Ornith-1.5-122B-MLX-4bit', 'Qwen3.5-122B-A10B', 'mlx', t('models.seed.ornith_mlx'))] },
+          { format: 'gguf', label: t('models.format.gguf'), entries: [entry('unsloth/Ornith-1.5-122B-GGUF', 'Qwen3.5-122B-A10B', 'gguf', t('models.seed.ornith_gguf'))] },
+        ],
+      },
       // Loads from GGUFs only, so it has no MLX group.
       {
         family: 'Qwen3.8-Flash-Next',
@@ -421,6 +436,7 @@ export function catalogSeed(memoryBytes = 0): Catalog {
             entries: [
               entry('ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF', 'Qwen3.8-Flash-Next', 'gguf', t('models.seed.flash_next_gguf')),
               entry('unsloth/Qwen3.8-Flash-Next-GGUF', 'Qwen3.8-Flash-Next', 'gguf', t('models.seed.flash_next_unsloth')),
+              entry('ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF', 'Qwen3.8-Flash-Next', 'gguf', t('models.seed.flash_next_coder')),
             ],
           },
         ],
