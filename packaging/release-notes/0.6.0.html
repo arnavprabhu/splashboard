@@ -1,0 +1,17 @@
+<!--
+  Release notes for 0.6.0 (TEMPLATE.html says how these are used).
+-->
+<h2>Splashboard 0.6.0</h2>
+<p>Splashboard now requires Splash 1.4.1. Update the engine with <code>brew upgrade incoai/tap/splash</code>, or from Settings → About.</p>
+<ul>
+  <li>Flint is in the catalog (GGUF only, text only), with UD-Q4_K_XL recommended. It is faster than Qwen3.6-35B-A3B and sits between it and Qwen3.8-27B in intelligence, though how well it does depends a lot on what you use it for. The welcome wizard still recommends the 27B and 35B-A3B, and lists Flint beside them.</li>
+  <li>Ornith-1.5-122B is in the catalog, as Unsloth's GGUFs and the MLX 4-bit, both with vision. Its larger variants stream their experts from the SSD on a 64 GB Mac.</li>
+  <li>ISTA-DASLab's Flash-Next Coder GGUF, which keeps half of Flash-Next's experts, is in the catalog too.</li>
+  <li>Flint decides by itself when to reason. Chat says so, and Settings warns that reasoning effort and thinking budget change nothing for it. A context limit above 256K is refused for Flint, which can't go past it.</li>
+  <li>Status shows a Flint model's sliding-window memory: the KV pages it keeps in full and the ones that have given up their windowed layers.</li>
+  <li>When a model fails to start, Splashboard shows the reason Splash now reports, and a short notice while Splash waits for memory to free up.</li>
+  <li>A model whose vision files are missing gets an offer to load it text only.</li>
+  <li>The first start of each GGUF model after the engine upgrade takes a little longer while Splash refreshes its metadata. Its persistent cache starts empty once.</li>
+</ul>
+<p>Engine: <a href="https://github.com/incoai/splash">Splash</a> by inco.ai, 1.4.1 or newer (Homebrew <code>incoai/tap/splash</code>). Restart the server after upgrading Splash. Splashboard is not an inco.ai product.</p>
+<p>Splashboard is not notarized. On a first install, open it once from System Settings → Privacy &amp; Security → Open Anyway.</p>
