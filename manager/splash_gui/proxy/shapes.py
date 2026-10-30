@@ -233,21 +233,7 @@ class UsageCapture:
                     self._first_token()
                 if choice.get("finish_reason"):
                     self.finish_reason = str(choice["finish_reason"])
-        timings = data.get("timings")
-        if isinstance(timings, dict):
-            self.prompt_ms = _f(timings.get("prompt_ms"), self.prompt_ms)
-            self.predicted_ms = _f(timings.get("predicted_ms"), self.predicted_ms)
-            # llama-server-style timings (server/metrics.py) carry the token counts
-            # even when the client did not ask for `stream_options.include_usage`.
-            cache_n = timings.get("cache_n")
-            if isinstance(cache_n, int) and self.cached_tokens is None:
-                self.cached_tokens = cache_n
-            prompt_n = timings.get("prompt_n")
-            if isinstance(prompt_n, int) and self.prompt_tokens is None:
-                self.prompt_tokens = prompt_n
-            predicted_n = timings.get("predicted_n")
-            if isinstance(predicted_n, int) and self.completion_tokens is None:
-                self.completion_tokens = predicted_n
+        self._timings(data.get("timings"))
         usage = data.get("usage")
         if isinstance(usage, dict):
             self.prompt_tokens = _i(usage.get("prompt_tokens"), self.prompt_tokens)
@@ -257,6 +243,25 @@ class UsageCapture:
                 self.cached_tokens = _i(details.get("cached_tokens"), self.cached_tokens)
             # /v1/judgments, /v1/systemone and count_tokens report other names.
             self.prompt_tokens = _i(usage.get("input_tokens"), self.prompt_tokens)
+
+    def _timings(self, timings: Any) -> None:
+        """llama-server-style timings (server/metrics.py `timings_dict`): Chat and
+        Completions since 1.0, the end of a Responses or Messages reply from Splash 1.5.0.
+        They carry the token counts even when the client did not ask for
+        `stream_options.include_usage`; a count the usage reports wins."""
+        if not isinstance(timings, dict):
+            return
+        self.prompt_ms = _f(timings.get("prompt_ms"), self.prompt_ms)
+        self.predicted_ms = _f(timings.get("predicted_ms"), self.predicted_ms)
+        cache_n = timings.get("cache_n")
+        if isinstance(cache_n, int) and self.cached_tokens is None:
+            self.cached_tokens = cache_n
+        prompt_n = timings.get("prompt_n")
+        if isinstance(prompt_n, int) and self.prompt_tokens is None:
+            self.prompt_tokens = prompt_n
+        predicted_n = timings.get("predicted_n")
+        if isinstance(predicted_n, int) and self.completion_tokens is None:
+            self.completion_tokens = predicted_n
 
     def _responses(self, data: dict[str, Any], final: bool) -> None:
         kind = data.get("type")
@@ -284,6 +289,7 @@ class UsageCapture:
             status = response.get("status")
             if isinstance(status, str) and status not in ("in_progress", "queued"):
                 self.finish_reason = status
+            self._timings(response.get("timings"))
 
     def _messages(self, data: dict[str, Any], final: bool) -> None:
         kind = data.get("type")
@@ -297,8 +303,10 @@ class UsageCapture:
             if data.get("content"):
                 self._first_token()
         usage = data.get("usage")
+        timings = data.get("timings")
         if isinstance(message, dict):
             usage = message.get("usage")
+            timings = message.get("timings")
             if message.get("stop_reason"):
                 self.finish_reason = str(message["stop_reason"])
         if kind == "message_delta" and isinstance(data.get("delta"), dict):
@@ -306,11 +314,17 @@ class UsageCapture:
             if reason:
                 self.finish_reason = str(reason)
         if isinstance(usage, dict):
-            self.prompt_tokens = _i(usage.get("input_tokens"), self.prompt_tokens)
-            self.cached_tokens = _i(usage.get("cache_read_input_tokens"), self.cached_tokens)
+            uncached = _i(usage.get("input_tokens"), None)
+            cached = _i(usage.get("cache_read_input_tokens"), None)
+            self.cached_tokens = cached if cached is not None else self.cached_tokens
+            # Messages counts only the uncached input in `input_tokens`; the prompt is
+            # that plus what the cache read, as Chat and Responses count it.
+            if uncached is not None:
+                self.prompt_tokens = uncached + (cached or 0)
             output = usage.get("output_tokens")
             if isinstance(output, int) and (kind != "message_start" or output):
                 self.completion_tokens = output
+        self._timings(timings)
 
 
 def _i(value: Any, current: int | None) -> int | None:

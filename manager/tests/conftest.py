@@ -67,6 +67,12 @@ def isolated_home(
 
     monkeypatch.setattr(userpath, "shell_path", lambda: "")
     monkeypatch.setattr(userpath, "SYSTEM_DIRS", ())
+    # Nor the developer's Splash desktop app in /Applications.
+    from splash_gui.engine import desktop_app
+
+    monkeypatch.setattr(desktop_app, "CANDIDATES", ())
+    # Nor a Hermes root the developer's shell (or an agent running the tests) points at.
+    monkeypatch.delenv("HERMES_HOME", raising=False)
     monkeypatch.setenv("SPLASH_GUI_HOME", str(home))
     monkeypatch.setenv("SPLASH_GUI_SECRETS", "memory")
     monkeypatch.setenv("SPLASH_GUI_FAKE_DATA", str(home / "fake-data"))
@@ -159,7 +165,7 @@ def fake_engine() -> EngineInfo:
         found=True,
         cli=Path("/opt/homebrew/opt/splash/bin/splash"),
         source="brew",
-        version="1.4.1",
+        version="1.5.0",
         version_tuple=(1, 4, 1),
         support="supported",
         pkg=Path("/nonexistent/pkg"),

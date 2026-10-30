@@ -51,6 +51,7 @@ from ..schemas import (
     EngineDiscoveryInfo,
     EngineError,
     EngineNotice,
+    EngineReasoning,
     EngineSuggestion,
     EngineView,
     NotificationAction,
@@ -320,6 +321,7 @@ class Supervisor:
             context_bound=st.context_bound(status) if status else None,  # type: ignore[arg-type]
             verify_rows=st.verify_rows(status) if status else None,  # type: ignore[arg-type]
             reasoning_switch=st.reasoning_switch(status) if status else None,
+            reasoning=self._reasoning(),
             status_schema_version=self.schema_version,
             schema_supported=self.schema_version in (None, st.SCHEMA_VERSION),
             transport=self.transport,
@@ -346,6 +348,23 @@ class Supervisor:
         if run is None or self.state != "starting" or self.phase != "installing":
             return None
         return run.install
+
+    def _reasoning(self) -> EngineReasoning | None:
+        """The served model's `reasoning` from the engine's /v1/models (Splash 1.5.0)."""
+        if self.state not in RUNNING_STATES:
+            return None
+        entry = next((m for m in self.engine_models if m.get("id") == self.model), None)
+        entry = entry or (self.engine_models[0] if self.engine_models else None)
+        raw = entry.get("reasoning") if entry else None
+        if not isinstance(raw, dict):
+            return None
+        efforts = raw.get("efforts")
+        thinks, default = raw.get("thinks"), raw.get("default")
+        return EngineReasoning(
+            thinks=thinks if isinstance(thinks, bool) else None,
+            efforts=[e for e in efforts if isinstance(e, str)] if isinstance(efforts, list) else [],
+            default=default if isinstance(default, str) else None,
+        )
 
     def _draft(self) -> str | None:
         if not self.model:

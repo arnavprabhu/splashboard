@@ -33,6 +33,8 @@ from pathlib import Path
 
 from ..hubcache import (
     BLOB,
+    LEGACY_RANGE_PARTIAL,
+    LEGACY_RANGE_SUFFIX,
     RANGE_PARTIAL,
     RANGE_SIDECAR,
     RANGE_SUFFIX,
@@ -196,7 +198,8 @@ def remove_stale_partials(
 ) -> list[Removed]:
     """Delete the partials in `repos`' blobs that nothing will continue: the
     per-process `<etag>.<uuid8>.incomplete` files, and the Downloader's resumable
-    `<etag>.splashgui.incomplete` (with its sidecar) once no unfinished download
+    `<etag>.splashgui.partial` (with its sidecar; `<etag>.splashgui.incomplete` from an
+    older manager) once no unfinished download
     claims it. Kept: the legacy `<etag>.incomplete` (an older hub resumes it), any
     file a process has open, and any blob an unfinished download in the Downloader
     needs (`protected_digests`). When `lsof` cannot tell, a partial written in the
@@ -207,13 +210,18 @@ def remove_stale_partials(
         files = scan_blobs(directory)
         for name, fact in files.items():
             # Never the legacy `<etag>.incomplete`.
-            match = UUID_PARTIAL.match(name) or RANGE_PARTIAL.match(name)
+            match = (
+                UUID_PARTIAL.match(name)
+                or RANGE_PARTIAL.match(name)
+                or LEGACY_RANGE_PARTIAL.match(name)
+            )
             if match is None:
                 sidecar = RANGE_SIDECAR.match(name)
                 if (
                     sidecar
                     and sidecar.group("digest") not in protected_digests
                     and sidecar.group("digest") + RANGE_SUFFIX not in files
+                    and sidecar.group("digest") + LEGACY_RANGE_SUFFIX not in files
                 ):
                     (directory / name).unlink(missing_ok=True)
                 continue

@@ -41,6 +41,7 @@ GROUP_OF = {
     "hardware": "hardware",
     "engine": "engine",
     "brew": "engine",
+    "splash_app": "engine",
     "path": "shell",
     "shim": "shell",
     "manager": "manager",

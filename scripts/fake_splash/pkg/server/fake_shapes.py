@@ -160,7 +160,8 @@ def responses_response(model, job, status, output, result=None, error=None):
             "input_tokens": result.prompt_tokens,
             "input_tokens_details": {
                 "cached_tokens": cache.matched_tokens,
-                "cache_write_tokens": max(0, result.prompt_tokens - cache.matched_tokens),
+                # 1.5.0: uncached input is input_tokens less cached_tokens.
+                "cache_write_tokens": 0,
             },
             "output_tokens": result.completion_tokens,
             "output_tokens_details": {"reasoning_tokens": job.reasoning_tokens},
@@ -183,6 +184,8 @@ def responses_response(model, job, status, output, result=None, error=None):
         "previous_response_id": job.response_previous_id,
         "text": {"format": text_format},
         "usage": usage,
+        # 1.5.0: once complete, Chat's timings.
+        **({} if result is None else {"timings": timings_dict(result)}),
         "end_turn": result is not None
         and result.reason == "stop"
         and not any(item["type"] == "function_call" for item in output),
@@ -331,12 +334,16 @@ def anthropic_stop(result, tool_calls, output_clamped_to_context):
     return "end_turn"
 
 
-def anthropic_usage(prompt_tokens, output_tokens, cache):
-    return {
+def anthropic_usage(prompt_tokens, output_tokens, cache, thinking_tokens=None):
+    usage = {
         "input_tokens": prompt_tokens - cache.matched_tokens,
         "cache_read_input_tokens": cache.matched_tokens,
         "output_tokens": output_tokens,
     }
+    if thinking_tokens is not None:
+        # 1.5.0: the output tokens the response spent thinking.
+        usage["output_tokens_details"] = {"thinking_tokens": thinking_tokens}
+    return usage
 
 
 def anthropic_response(model, job, blocks, result, tool_calls, thinking_signature):
@@ -370,5 +377,6 @@ def anthropic_response(model, job, blocks, result, tool_calls, thinking_signatur
         "content": content,
         "stop_reason": anthropic_stop(result, tool_calls, job.output_clamped_to_context),
         "stop_sequence": result.stop_sequence,
-        "usage": anthropic_usage(result.prompt_tokens, result.completion_tokens, result.cache),
+        "usage": anthropic_usage(result.prompt_tokens, result.completion_tokens, result.cache, job.reasoning_tokens),
+        "timings": timings_dict(result),
     }

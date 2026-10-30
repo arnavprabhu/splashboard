@@ -27,11 +27,14 @@ ENTRY_POINT_MARKER = "from splash_gui.cli import"
 # 1.4.0 is the first with the expert, PLE and sparse KV memory options, --verify-rows
 # and contexts past 256K that the settings pass, and the first to load
 # Qwen3.8-Flash-Next and split GGUFs. 1.4.1 is the first to load Flint and
-# Ornith-1.5-122B, which the catalog lists, and to report `reasoning_switch`.
-SUPPORTED_MIN = (1, 4, 1)
-SUPPORTED_BELOW = (1, 5, 0)
-SUPPORTED_RANGE = ">=1.4.1 <1.5.0"
-# The lowest supported version as people read it, "1.4.1".
+# Ornith-1.5-122B, which the catalog lists, and to report `reasoning_switch`. 1.5.0
+# fixes image requests that could crash an engine streaming its experts from the SSD,
+# reports timings from Responses and Messages and reasoning efforts in /v1/models, and
+# cleans up partial downloads in a way the manager's resumable partials must avoid.
+SUPPORTED_MIN = (1, 5, 0)
+SUPPORTED_BELOW = (1, 6, 0)
+SUPPORTED_RANGE = ">=1.5.0 <1.6.0"
+# The lowest supported version as people read it, "1.5.0".
 SUPPORTED_MIN_TEXT = ".".join(map(str, SUPPORTED_MIN))
 BREW_TIMEOUT_S = 10
 VERSION_TIMEOUT_S = 15

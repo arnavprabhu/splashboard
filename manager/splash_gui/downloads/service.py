@@ -22,7 +22,16 @@ from typing import TYPE_CHECKING, ClassVar, TypeVar
 
 from ..errors import ApiError
 from ..events.alerts import action
-from ..hubcache import blob_partials, blobs_dir, range_partial, remove_partial, repo_folder
+from ..hubcache import (
+    LEGACY_RANGE_SUFFIX,
+    RANGE_SUFFIX,
+    adopt_legacy_range_partials,
+    blob_partials,
+    blobs_dir,
+    range_partial,
+    remove_partial,
+    repo_folder,
+)
 from ..models.catalog import TEXT_ONLY_FAMILIES, installable_id
 from ..models.hf import HubError, is_blob_id
 from ..models.layout import read_all
@@ -85,6 +94,27 @@ def _load_blob_map(raw: object) -> dict[str, dict[str, str]]:
     return blobs
 
 
+def installer_progress(line: str) -> tuple[str, int, int] | None:
+    """A progress line of `install/models.py prepare --json-progress` (Splash 1.5.0,
+    install/hub.py `_report_progress`): `{"event": "download", "repo": R, "done": N,
+    "total": T}` → (R, N, T); None for any other line."""
+    if not line.startswith("{"):
+        return None
+    try:
+        event = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(event, dict) or event.get("event") != "download":
+        return None
+    repo, done, total = event.get("repo"), event.get("done"), event.get("total")
+    if not isinstance(repo, str) or not all(
+        isinstance(n, int) and not isinstance(n, bool) and n >= 0 for n in (done, total)
+    ):
+        return None
+    assert isinstance(done, int) and isinstance(total, int)
+    return repo, min(done, total), total
+
+
 class Downloads:
     def __init__(self, state: ManagerState) -> None:
         self.state = state
@@ -97,14 +127,32 @@ class Downloads:
         self.preexisting: dict[str, list[str]] = {}
         # Models of a text-only family (Flint) the compatibility check found, by ID.
         self.text_only_models: set[str] = set()
+        # Each running installer's report, by job and repository: (done, total) bytes.
+        self.reported: dict[str, dict[str, tuple[int, int]]] = {}
         # The state each item last went out with on /events (see `publish`).
         self.announced: dict[str, str] = {}
 
     async def start(self) -> None:
+        # Before any installer runs: an older manager's resumable partials end in
+        # `.incomplete`, which Splash 1.5.0's installer removes as abandoned.
+        with contextlib.suppress(OSError):
+            adopted = await asyncio.to_thread(
+                adopt_legacy_range_partials, self.state.settings.models_dir()
+            )
+            if adopted:
+                log.info("renamed %d resumable partial(s) to %s", adopted, RANGE_SUFFIX)
         try:
             raw = json.loads(self.state.paths.downloads_file.read_text())
             self.blobs = _load_blob_map(raw.get("blobs", {}))
-            self.preexisting = raw.get("preexisting", {})
+            self.preexisting = {
+                key: [
+                    path.removesuffix(LEGACY_RANGE_SUFFIX) + RANGE_SUFFIX
+                    if path.endswith(LEGACY_RANGE_SUFFIX)
+                    else path
+                    for path in paths
+                ]
+                for key, paths in raw.get("preexisting", {}).items()
+            }
             for data in raw["items"]:
                 item = DownloadItem.model_validate(data)
                 if item.state in ("running", "verifying"):
@@ -244,7 +292,9 @@ class Downloads:
             and self.blob_path(file.repo_id, digest).is_file()
         ]
         self.preexisting[item.id] = [
-            str(p) for p in directory.glob("models--*/blobs/*.incomplete")
+            str(p)
+            for pattern in ("*.incomplete", "*" + RANGE_SUFFIX)
+            for p in directory.glob("models--*/blobs/" + pattern)
         ] + complete
         self.items[item.id] = item
         self.publish(item)
@@ -343,6 +393,15 @@ class Downloads:
             if sizes:
                 file.done_bytes, file.state = max(sizes)[1], "downloading"
         item.bytes_done = sum(f.done_bytes for f in item.files)
+        # The installer's own count (`prepare --json-progress`): under Xet a file is written
+        # in order from chunks that arrive out of order, so its partial can stay at 0 for
+        # minutes and then jump. Per repository, the larger of the two counts.
+        for repo, (done, total) in self.reported.get(item.id, {}).items():
+            files = [f for f in item.files if f.repo_id == repo]
+            on_disk = sum(f.done_bytes for f in files)
+            # What the repository had before the installer's fetch began.
+            present = sum(f.size_bytes or 0 for f in files) - total
+            item.bytes_done += max(0, present + done - on_disk)
         item.progress = min(1.0, item.bytes_done / item.bytes_total) if item.bytes_total else None
 
     def shared_digests(self, dl: str) -> set[str]:
@@ -374,8 +433,12 @@ class Downloads:
                 continue
             blob = self.blob_path(file.repo_id, digest)
             # Kept on resume: what an older hub (`<etag>.incomplete`) or the Range
-            # download (`<etag>.splashgui.incomplete`) continues.
-            resumable = {blob.name + ".incomplete", range_partial(blob).name}
+            # download (`<etag>.splashgui.partial`) continues.
+            resumable = {
+                blob.name + ".incomplete",
+                range_partial(blob).name,
+                blob.name + LEGACY_RANGE_SUFFIX,
+            }
             for path in self.partials(file.repo_id, digest):
                 if str(path) in keep or (stale_only and path.name in resumable):
                     continue
@@ -500,6 +563,7 @@ class Downloads:
             draft_model=item.draft_model,
             language_only=item.language_only,
             full=action == "verify" and self.state.settings.current.global_.downloads.full_verify,
+            json_progress=True,
         )
         return argv, env
 
@@ -514,10 +578,16 @@ class Downloads:
         )
         self.processes[item.id] = proc
 
+        self.reported.pop(item.id, None)
+
         async def read() -> None:
             assert proc.stdout
             async for line in proc.stdout:
                 text = line.decode(errors="replace").rstrip()
+                if (reported := installer_progress(text)) is not None:
+                    repo, done, total = reported
+                    self.reported.setdefault(item.id, {})[repo] = (done, total)
+                    continue
                 token = self.state.models.hf.token()
                 if token:
                     text = text.replace(token, "[redacted]")
@@ -546,6 +616,7 @@ class Downloads:
             with contextlib.suppress(asyncio.CancelledError):
                 await reader
             self.processes.pop(item.id, None)
+            self.reported.pop(item.id, None)
 
     async def run(self, item: DownloadItem) -> None:
         # Splash's installer starts each unfinished file again in a new partial file;

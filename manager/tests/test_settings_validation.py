@@ -351,7 +351,8 @@ def test_the_new_engine_options_cannot_be_extra_flags() -> None:
     assert errors(doc_with("engine.extra_flags", [{"flag": "--verify", "value": "all"}])) == [
         (
             "engine.extra_flags.0.flag",
-            "--verify abbreviates --verify-rows, which is set through its own setting",
+            "--verify abbreviates --verify-rows: Splash takes full option names only, "
+            "and --verify-rows is set through its own setting",
         )
     ]
 
@@ -457,7 +458,8 @@ def test_extra_flags_cannot_abbreviate_managed_flags(flag: str, managed: str) ->
     assert errors(raw) == [
         (
             "engine.extra_flags.0.flag",
-            f"{flag} abbreviates {managed}, which is set through its own setting",
+            f"{flag} abbreviates {managed}: Splash takes full option names only, "
+            f"and {managed} is set through its own setting",
         )
     ]
 

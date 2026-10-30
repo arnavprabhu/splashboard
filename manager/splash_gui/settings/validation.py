@@ -55,6 +55,8 @@ MIN_USEFUL_CACHE_DISK = {"Qwen3.6-35B-A3B": 64 * 1024**2, "Qwen3.8-27B": 153 * 1
 MANAGED_FLAGS = frozenset(
     {
         "--model",
+        "--model-dir",
+        "--mmproj",
         "--port",
         "--host",
         "--no-webui",
@@ -99,9 +101,10 @@ MANAGED_FLAGS = frozenset(
 def managed_flag_for(flag: str) -> str | None:
     """The managed flag `flag` names, exactly or as an argparse abbreviation.
 
-    Splash's parsers keep argparse's default `allow_abbrev=True`
-    (`install/launcher.py` `parse_args`), so `--hos 0.0.0.0` *is* `--host 0.0.0.0`
-    to the engine and an exact-match check alone would let it through.
+    Before 1.5.0 Splash's serve parser kept argparse's default `allow_abbrev=True`, so
+    `--hos 0.0.0.0` *was* `--host 0.0.0.0` to the engine; from 1.5.0 it refuses
+    abbreviations (`install/launcher.py` `parse_args`, `allow_abbrev=False`), so one in
+    `engine.extra_flags` fails the start either way. Both are refused here.
     """
     if flag in MANAGED_FLAGS:
         return flag
@@ -308,7 +311,10 @@ def cross_field_issues(doc: SettingsDocument, context: ValidationContext) -> Ite
                 ("global", "engine", "extra_flags", index, "flag"),
                 f"{extra.flag} is set through its own setting"
                 if managed == extra.flag
-                else f"{extra.flag} abbreviates {managed}, which is set through its own setting",
+                else (
+                    f"{extra.flag} abbreviates {managed}: Splash takes full option names "
+                    f"only, and {managed} is set through its own setting"
+                ),
                 code="managed_flag",
             )
 

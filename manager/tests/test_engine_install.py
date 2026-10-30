@@ -67,7 +67,7 @@ def test_fetching_pattern_matches_the_engine_source() -> None:
     if not source.is_file():
         pytest.skip("the read-only splash/ reference clone is not checked out")
     text = source.read_text()
-    assert 'f"Fetching {len(fetch)} file(s), {sum(fetch) / 1e9:.2f} GB, "' in text
+    assert 'f"Fetching {len(fetch)} file(s), {total / 1e9:.2f} GB, "' in text
     assert 'f"from {self.name}@{self.revision[:12]}; cached files are reused."' in text
 
 
@@ -240,9 +240,13 @@ def test_load_that_installs_shows_progress_and_asks_before_stopping(
         "speed_bps",
         "eta_s",
     }
-    # Bug 5: what a killed run left is gone at start; the rest stays.
-    assert not stale.exists()
-    assert legacy.exists() and needed.exists()
+    # Bug 5: what a killed run left is gone at start; the legacy partial stays. The
+    # manager keeps a partial an unfinished download needs, but from 1.5.0 Splash's
+    # installer removes every `<blob>.<x>.incomplete` no download holds before it fetches
+    # into the repository (install/hub.py `_remove_abandoned_downloads`); nothing could
+    # continue such a partial anyway.
+    assert not stale.exists() and not needed.exists()
+    assert legacy.exists()
 
     later = engine_until(
         h, lambda v: v["install"] is not None and v["install"]["done_bytes"] > 1_000_000

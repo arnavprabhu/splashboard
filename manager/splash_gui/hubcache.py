@@ -9,13 +9,19 @@ renamed to the blob when complete and deleted on a handled error
 A killed run leaves its uuid partial behind, and no later run can reuse it.
 
 The manager's own byte-resumable downloads of large LFS/Xet files
-(`downloads/ranged.py`) write `<etag>.splashgui.incomplete` next to a sidecar
+(`downloads/ranged.py`) write `<etag>.splashgui.partial` next to a sidecar
 `<etag>.splashgui.json` that records which remote file the bytes belong to (up
 to four Range segments fill one preallocated partial, and the sidecar records each
 segment's verified bytes, which are its progress). The next run continues each
 segment from its verified end (a one-stream partial from its size), so the partial is
 kept across pause and restart, counted as progress, and deleted on cancel or once
 nothing claims it.
+
+Splash 1.5.0's installer removes, before it downloads into a repository, every
+`<blob>.<anything>.incomplete` whose huggingface_hub blob lock it can take at once
+(install/hub.py `_remove_abandoned_downloads`). A paused partial holds no lock, so the
+manager's partial must not end in `.incomplete`: it was `<etag>.splashgui.incomplete`
+before, and such a partial is renamed (`adopt_legacy_range_partials`) before use.
 """
 
 from __future__ import annotations
@@ -31,9 +37,12 @@ from pathlib import Path
 _DIGEST = r"(?:[0-9a-f]{40}|[0-9a-f]{64})"
 UUID_PARTIAL = re.compile(rf"^(?P<digest>{_DIGEST})\.(?P<uuid>[0-9a-f]{{8}})\.incomplete$")
 LEGACY_PARTIAL = re.compile(rf"^(?P<digest>{_DIGEST})\.incomplete$")
-RANGE_SUFFIX = ".splashgui.incomplete"
+RANGE_SUFFIX = ".splashgui.partial"
 RANGE_SIDECAR_SUFFIX = ".splashgui.json"
-RANGE_PARTIAL = re.compile(rf"^(?P<digest>{_DIGEST})\.splashgui\.incomplete$")
+RANGE_PARTIAL = re.compile(rf"^(?P<digest>{_DIGEST})\.splashgui\.partial$")
+# The name a resumable partial had before Splash 1.5.0 began cleaning up partials.
+LEGACY_RANGE_SUFFIX = ".splashgui.incomplete"
+LEGACY_RANGE_PARTIAL = re.compile(rf"^(?P<digest>{_DIGEST})\.splashgui\.incomplete$")
 RANGE_SIDECAR = re.compile(rf"^(?P<digest>{_DIGEST})\.splashgui\.json$")
 BLOB = re.compile(rf"^{_DIGEST}$")
 
@@ -58,25 +67,60 @@ def range_sidecar(blob: Path) -> Path:
 
 def blob_partials(blob: Path) -> list[Path]:
     """A blob's partial files: the legacy `<etag>.incomplete` first, then every
-    per-process `<etag>.<uuid8>.incomplete` and the manager's resumable
-    `<etag>.splashgui.incomplete`."""
+    per-process `<etag>.<uuid8>.incomplete` (and an older manager's
+    `<etag>.splashgui.incomplete`), then the manager's resumable
+    `<etag>.splashgui.partial`."""
     legacy = blob.with_name(blob.name + ".incomplete")
     found = [legacy] if legacy.is_file() else []
     found += sorted(blob.parent.glob(glob.escape(blob.name) + ".*.incomplete"))
+    ranged = range_partial(blob)
+    if ranged.is_file():
+        found.append(ranged)
     return found
+
+
+def adopt_legacy_range_partial(blob: Path) -> bool:
+    """Rename an older manager's `<etag>.splashgui.incomplete` to the resumable
+    partial's name, unless that exists already; whether it renamed one."""
+    legacy = blob.with_name(blob.name + LEGACY_RANGE_SUFFIX)
+    target = range_partial(blob)
+    if not legacy.is_file() or target.exists():
+        return False
+    try:
+        legacy.rename(target)
+    except OSError:
+        return False
+    return True
+
+
+def adopt_legacy_range_partials(models_dir: Path) -> int:
+    """`adopt_legacy_range_partial` for every repository in the models folder, before
+    a Splash installer can mistake those partials for abandoned ones; how many."""
+    adopted = 0
+    with contextlib.suppress(OSError):
+        for legacy in models_dir.glob("models--*/blobs/*" + LEGACY_RANGE_SUFFIX):
+            match = LEGACY_RANGE_PARTIAL.match(legacy.name)
+            if match and adopt_legacy_range_partial(legacy.with_name(match.group("digest"))):
+                adopted += 1
+    return adopted
 
 
 def remove_partial(path: Path) -> None:
     """Delete a partial file, and with the manager's resumable one its sidecar too."""
     path.unlink(missing_ok=True)
-    match = RANGE_PARTIAL.match(path.name)
+    match = RANGE_PARTIAL.match(path.name) or LEGACY_RANGE_PARTIAL.match(path.name)
     if match:
         path.with_name(match.group("digest") + RANGE_SIDECAR_SUFFIX).unlink(missing_ok=True)
 
 
 def partial_digest(name: str) -> str | None:
     """The blob digest a partial file belongs to (any naming), else None."""
-    match = UUID_PARTIAL.match(name) or LEGACY_PARTIAL.match(name) or RANGE_PARTIAL.match(name)
+    match = (
+        UUID_PARTIAL.match(name)
+        or LEGACY_PARTIAL.match(name)
+        or RANGE_PARTIAL.match(name)
+        or LEGACY_RANGE_PARTIAL.match(name)
+    )
     return match.group("digest") if match else None
 
 

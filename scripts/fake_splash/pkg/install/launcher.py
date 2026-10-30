@@ -106,9 +106,16 @@ def _parse_port(value: str) -> int:
     return port
 
 
+def _local_path(value: str) -> str:
+    """launcher.py _local_path (1.5.0): absolute, a GGUF's own name kept."""
+    return str(Path(value).expanduser().absolute())
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """install/launcher.py parse_args (1.3.0), with the same help text and groups.
-    An agent command takes its own --port (#311); the agent's --port goes after --."""
+    """install/launcher.py parse_args (1.5.0), with the same help text and groups.
+    An agent command takes its own --port (#311); the agent's --port goes after --.
+    From 1.5.0 serve takes no abbreviated option names, and --model-dir serves local
+    files (with --mmproj, a GGUF's projector) without the Hub."""
     argv = list(sys.argv[1:] if argv is None else argv)
     client_args: list[str] = []
     is_client = bool(argv and argv[0] in CLIENTS)
@@ -135,7 +142,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     server = commands.add_parser(
         "serve",
         help="run the local server; Ctrl+C stops it",
-        description="Load an upstream model, automatically select its DFlash2 draft, and serve in the foreground.",
+        description="Load an upstream or local model with its DFlash2 draft, and serve in the foreground.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
@@ -149,6 +156,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "/status report the effective context limit; a client may impose a\n"
             "smaller one. Keep this terminal open; Ctrl+C stops serving."
         ),
+        allow_abbrev=False,
     )
     groups = serve_options.option_groups(server)
     model = groups["model"]
@@ -157,7 +165,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=serve_options.parse_model_id,
         required=True,
         metavar="OWNER/REPO[:VARIANT]",
-        help="upstream Hugging Face model, with a GGUF variant after ':' (e.g. :UD-Q4_K_M)",
+        help="upstream Hugging Face model, with a GGUF variant after ':' (e.g. :UD-Q4_K_M); "
+        "with --model-dir, the ID reported by the API",
+    )
+    model.add_argument(
+        "--model-dir",
+        type=_local_path,
+        metavar="PATH",
+        help="prepare a local GGUF file or GGUF/MLX model directory without Hub access",
+    )
+    model.add_argument(
+        "--mmproj",
+        type=_local_path,
+        metavar="FILE",
+        help="local GGUF vision projector (requires --model-dir)",
     )
     model.add_argument(
         "--revision",
@@ -168,7 +189,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--draft-model",
         type=model_artifacts.parse_draft_model,
         metavar="DRAFT",
-        help="DFlash2 draft repository or local directory to use instead of the automatically selected one",
+        help="DFlash2 draft repository or local directory to use instead of the "
+        "automatically selected one (a local directory with --model-dir)",
     )
     model.add_argument(
         "--language-only",
@@ -213,6 +235,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         except argparse.ArgumentTypeError as error:
             parser.error(f"SPLASH_PORT: {error}")
     if args.command == "serve":
+        if args.model_dir is not None:
+            if args.revision is not None:
+                parser.error("--revision cannot be used with --model-dir")
+            if args.draft_model is not None and not Path(args.draft_model).is_dir():
+                parser.error("--draft-model must be a local DFlash2 draft directory with --model-dir")
+        elif args.mmproj is not None:
+            parser.error("--mmproj requires --model-dir")
+        if args.mmproj is not None and args.language_only:
+            parser.error("--mmproj cannot be used with --language-only")
         serve_options.check_serve_arguments(parser, args)
     if client_args and args.command == "serve":
         parser.error("arguments after -- are only supported for coding clients")
@@ -320,14 +351,22 @@ def serve(args: argparse.Namespace, argv: list[str]) -> int:
             _check_port(args.host, args.port)
         except OSError as error:
             raise LauncherError(f"cannot bind {args.host}:{args.port}: {error}") from None
-        selection = model_artifacts.Selection.of(
-            paths.MODELS,
-            args.model,
-            revision=args.revision,
-            language_only=args.language_only,
-            draft_model=args.draft_model,
-        )
-        _ensure_installed(selection)
+        if args.model_dir is not None:
+            # launcher.py _prepare_local_model (1.5.0): the fake checks only that the
+            # files exist; it serves them as the model the ID names.
+            _device_check()
+            for path in (args.model_dir, args.mmproj):
+                if path is not None and not Path(path).exists():
+                    raise LauncherError("local model preparation failed; see the output above")
+        else:
+            selection = model_artifacts.Selection.of(
+                paths.MODELS,
+                args.model,
+                revision=args.revision,
+                language_only=args.language_only,
+                draft_model=args.draft_model,
+            )
+            _ensure_installed(selection)
         from server import fake_server
 
         return fake_server.serve(args, argv)

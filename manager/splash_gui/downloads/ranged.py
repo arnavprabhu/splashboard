@@ -8,7 +8,9 @@ HTTP Range requests into the same Hub cache first, and then runs `prepare` as be
 
 Data shape, per file (next to the blob it becomes, in `models--O--R/blobs/`):
 
-- **partial** `<etag>.splashgui.incomplete`. Version 2 is preallocated to the
+- **partial** `<etag>.splashgui.partial` (`<etag>.splashgui.incomplete` before
+  Splash 1.5.0's installer began removing every `<blob>.*.incomplete` it can lock,
+  renamed on resume). Version 2 is preallocated to the
   file's full size, a sparse file, and filled by `RANGE_SEGMENTS` Range streams at
   once, each at its own offsets. Version 1 is one stream whose size is the bytes done.
 - **sidecar** `<etag>.splashgui.json` (`PartialState`): what the bytes belong to (repo,
@@ -75,6 +77,7 @@ import httpx
 from ..hubcache import (
     RANGE_PARTIAL,
     RANGE_SIDECAR_SUFFIX,
+    adopt_legacy_range_partial,
     range_partial,
     range_sidecar,
     remove_partial,
@@ -529,6 +532,7 @@ class RangeDownloader:
         blob = folder / "blobs" / remote.etag
         blob.parent.mkdir(parents=True, exist_ok=True)
         async with self.hub_lock(remote.repo, remote.etag):
+            adopt_legacy_range_partial(blob)
             if blob.is_file() and blob.stat().st_size == remote.size:
                 remove_partial(range_partial(blob))
                 link_snapshot(folder, remote)

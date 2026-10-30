@@ -336,6 +336,20 @@ class ServeSettings:
         return _family(self.model) == "Qwen3.8-27B" and not _flash_next(self.model) and not self.disable_ane
 
 
+# chat_templates.py _reasoning (1.5.0) on Qwen3.8's template: each effort besides none
+# -> the listed effort it renders like (high and max render as xhigh, minimal as low),
+# and the effort a request without one renders like.
+QWEN38_EFFORT_NAMES = {
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "xhigh",
+    "xhigh": "xhigh",
+    "max": "xhigh",
+}
+QWEN38_TEMPLATE_EFFORT = "xhigh"
+
+
 def _family(model: str) -> str:
     name = model.lower()
     if "flint" in name:
@@ -936,6 +950,28 @@ class FakeEngine:
     def input_modalities(self) -> list[str]:
         return ["text", "image", "pdf"] if self.vision else ["text"]
 
+    @property
+    def reasoning(self) -> dict:
+        """frontend.py Frontend.reasoning (1.5.0), as /v1/models reports it: whether a
+        request without an effort thinks, the efforts the template renders differently
+        (Qwen3.8's low, medium and xhigh; none for the MoE templates, which switch
+        reasoning on and off alike at every effort) and the one the default renders like,
+        --default-reasoning-effort in place of the template's. Flint decides itself."""
+        s = self.settings
+        if _flint(s.model):
+            return {"thinks": None, "efforts": [], "default": None}
+        dense = _family(s.model) == "Qwen3.8-27B" and not _flash_next(s.model)
+        names = QWEN38_EFFORT_NAMES if dense else {}
+        reasoning = {
+            "thinks": True,
+            "efforts": list(dict.fromkeys(names.values())),
+            "default": QWEN38_TEMPLATE_EFFORT if dense else None,
+        }
+        if (effort := s.default_reasoning_effort) is not None:
+            reasoning["thinks"] = effort != "none"
+            reasoning["default"] = names.get(effort)
+        return reasoning
+
     def accepts_model(self, model: object) -> bool:
         """frontend.py accepts_model (1.3.2): a name the server answers to, or
         none, absent or empty, which means the served model."""
@@ -1234,7 +1270,7 @@ class FakeEngine:
         # server/server.py:1825-1831
         context = self.max_context
         text = f"{context // 1024}K" if context % 1024 == 0 else f"{context:,}"
-        mode = "" if self.vision else " · language only"
+        mode = "" if self.vision else " · text only"
         return f"Ready · {self.settings.model} · context {text}{mode} · {address}"
 
     def _open_disk_tier(self, plan: MemoryPlan) -> None:

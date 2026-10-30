@@ -18,10 +18,14 @@ from .discovery import EngineInfo
 HELPER_TIMEOUT_S = 20
 HELPER = Path(__file__).resolve().parent.parent / "helpers" / "serve_options_dump.py"
 
-# Every option that maps to a setting (or that the GUI always manages).
+# Every option that maps to a setting (or that the GUI always manages). `--model-dir` and
+# `--mmproj` (Splash 1.5.0) serve local files outside an installation; the GUI serves
+# installed models only, so they have no setting and are not extra flags either.
 KNOWN_FLAGS = frozenset(
     {
         "--model",
+        "--model-dir",
+        "--mmproj",
         "--revision",
         "--draft-model",
         "--language-only",

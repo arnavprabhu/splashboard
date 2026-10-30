@@ -307,7 +307,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="skip vision preparation and loading",
     )
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("prepare")
+    commands.add_parser("prepare").add_argument(
+        "--json-progress",
+        action="store_true",
+        help="also report download progress as JSON lines on stdout",
+    )
     commands.add_parser("verify").add_argument("--full", action="store_true")
     commands.add_parser("link", help="print the selection link")
     return parser.parse_args(argv)
@@ -598,6 +602,45 @@ class Failure:
         return None
 
 
+# install/hub.py json_progress (1.5.0): `prepare --json-progress` reports each
+# repository's download as JSON lines on stdout.
+JSON_PROGRESS = False
+
+
+def report_json_progress() -> None:
+    global JSON_PROGRESS
+    JSON_PROGRESS = True
+
+
+def _report_progress(repo_id: str, done: int, total: int) -> None:
+    """install/hub.py _report_progress (1.5.0)."""
+    event = {"event": "download", "repo": repo_id, "done": done, "total": total}
+    sys.stdout.write(json.dumps(event) + "\n")
+    sys.stdout.flush()
+
+
+def remove_abandoned_downloads(blobs: Path) -> None:
+    """install/hub.py _remove_abandoned_downloads (1.5.0): before a download, every
+    `<blob>.<anything>.incomplete` in the blobs folder whose huggingface_hub lock
+    (`<Hub cache>/.locks/<repository folder>/<blob>.lock`) is free is removed."""
+    locks = blobs.parent.parent / ".locks" / blobs.parent.name
+    partial: dict[str, list[Path]] = {}
+    for path in blobs.glob("*.*.incomplete"):
+        partial.setdefault(path.name.split(".", 1)[0], []).append(path)
+    for blob, found in partial.items():
+        locks.mkdir(parents=True, exist_ok=True)
+        with (locks / f"{blob}.lock").open("a") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                continue  # a live download holds it
+            try:
+                for path in found:
+                    path.unlink(missing_ok=True)
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
+
 def download(
     repo: RemoteRepo, revision: str | None, throttle: Throttle, failure: Failure, context: str
 ) -> dict[str, Path]:
@@ -606,12 +649,17 @@ def download(
     snapshot = repo.folder / "snapshots" / repo.commit
     blobs.mkdir(parents=True, exist_ok=True)
     fetch = [item for item in repo.files if not (blobs / item.blob).exists()]
+    total = sum(i.size for i in fetch)
     if fetch:
+        remove_abandoned_downloads(blobs)
         print(
-            f"Fetching {len(fetch)} file(s), {sum(i.size for i in fetch) / 1e9:.2f} GB, "
+            f"Fetching {len(fetch)} file(s), {total / 1e9:.2f} GB, "
             f"from {repo.name}@{repo.commit[:12]}; cached files are reused.",
             flush=True,
         )
+    received, last_report = 0, time.monotonic()
+    if fetch and JSON_PROGRESS:
+        _report_progress(repo.name, 0, total)
     legacy = os.environ.get("FAKE_SPLASH_DL_HUB") == "legacy"
     for item in fetch:
         final = blobs / item.blob
@@ -638,10 +686,17 @@ def download(
                     offset += len(chunk)
                     failure.check(len(chunk), context)
                     throttle.wait(len(chunk))
+                    received += len(chunk)
+                    # Measured every PROGRESS_INTERVAL (install/hub.py, 0.25 s).
+                    if JSON_PROGRESS and time.monotonic() - last_report >= 0.25:
+                        last_report = time.monotonic()
+                        _report_progress(repo.name, min(received, total), total)
             partial.replace(final)
         finally:
             if not legacy:
                 partial.unlink(missing_ok=True)
+    if fetch and JSON_PROGRESS:
+        _report_progress(repo.name, total, total)
     snapshot.mkdir(parents=True, exist_ok=True)
     result = {}
     for item in repo.files:
@@ -875,6 +930,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         signal.pthread_sigmask(signal.SIG_UNBLOCK, (signal.SIGINT, signal.SIGTERM))
         if args.command == "prepare":
+            if args.json_progress:
+                report_json_progress()
             prepare(selection)
         else:
             kind = installation_kind(selection.link)

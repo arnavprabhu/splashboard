@@ -2,7 +2,7 @@
 
 These check the assumptions the rest of the suite takes on faith:
 
-  * the engine is 1.4.1 or a later 1.4.x, inside the supported range;
+  * the engine is 1.5.0 or a later 1.5.x, inside the supported range;
   * `install/serve_options.py` still matches the settings' option map, including that no
     option has appeared that we do not map;
   * `helpers/inspect_model.py` really runs under Splash's own bundled Python and
@@ -110,7 +110,7 @@ def test_the_installed_engine_is_in_the_supported_range() -> None:
 
     info = d.discover(env={"PATH": "/usr/bin:/bin"})
     assert info.found and info.source == "brew"
-    assert info.version is not None and info.version.startswith("1.4."), info.version
+    assert info.version is not None and info.version.startswith("1.5."), info.version
     assert info.support == "supported", info.version
     assert info.pkg is not None and info.pkg.resolve() == SPLASH_PKG.resolve()
     assert info.python is not None and info.python.exists()
@@ -145,6 +145,30 @@ def test_the_installer_takes_the_command_line_we_build() -> None:
         assert flag in result.stdout, f"{flag} is missing from install/models.py"
     for action in ("prepare", "verify", "link"):
         assert action in result.stdout, f"the {action} action is missing"
+    # Splash 1.5.0: `prepare --json-progress`, which the Downloader passes.
+    prepare = subprocess.run(
+        [str(SPLASH_PYTHON), str(SPLASH_PKG / "install" / "models.py"), "prepare", "--help"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert prepare.returncode == 0 and "--json-progress" in prepare.stdout, prepare.stderr
+
+
+@needs_engine
+def test_serve_refuses_abbreviated_options() -> None:
+    """Splash 1.5.0 takes full option names only (`allow_abbrev=False`)."""
+    result = subprocess.run(
+        [str(SPLASH_PKG.parent / "bin" / "splash"), "serve", "--model", "a/b", "--max-mem", "1G"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+        env={"PATH": "/usr/bin:/bin", "HOME": os.environ.get("HOME", "/tmp")},
+    )
+    assert result.returncode == 2, result
+    assert "unrecognized arguments: --max-mem" in result.stderr
 
 
 @needs_engine

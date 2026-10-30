@@ -12,6 +12,39 @@ import type { ChatSummary, MessageMeta, ModelEntry } from './types';
 export const REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 export const PRIORITIES = ['normal', 'foreground', 'background'] as const;
 
+/** What reasoning efforts do to the served model's template (`/v1/models` `reasoning`,
+ * Splash 1.5.0): whether a request without one reasons (null: the model decides), the
+ * efforts besides `none` it renders differently, and the one the default renders like. */
+export interface ModelReasoning {
+  thinks?: boolean | null;
+  efforts?: string[];
+  default?: string | null;
+}
+
+/** The effort Splash renders in place of one a template rejects (server/chat_templates.py
+ * `REASONING_EFFORT_ALIASES`). */
+const EFFORT_ALIASES: Record<string, string> = { high: 'xhigh', max: 'xhigh', minimal: 'low' };
+
+/** The effort select's options, each labelled with what it does to this model when the
+ * engine says (Splash 1.5.0): the default names the effort it renders like or whether it
+ * reasons, an effort the template renders like another names that one, and on a template
+ * that switches reasoning alike at every effort each one but `none` reads "on". */
+export function effortOptions(reasoning: ModelReasoning | null | undefined): Array<{ value: string; label: string }> {
+  const efforts = reasoning?.efforts ?? [];
+  let fallback = t('chat.sampling.model_default');
+  if (reasoning?.thinks === false) fallback = t('chat.reasoning.default_off');
+  else if (reasoning?.default) fallback = t('chat.reasoning.default_effort', { effort: reasoning.default });
+  else if (reasoning?.thinks === true) fallback = t('chat.reasoning.default_on');
+  const label = (e: string): string => {
+    if (!reasoning || reasoning.thinks === null || e === 'none') return e;
+    if (efforts.length === 0) return t('chat.reasoning.on', { effort: e });
+    if (efforts.includes(e)) return e;
+    const alias = EFFORT_ALIASES[e];
+    return alias && efforts.includes(alias) ? t('chat.reasoning.same_as', { effort: e, alias }) : e;
+  };
+  return [{ value: '', label: fallback }, ...REASONING_EFFORTS.map((e) => ({ value: e, label: label(e) }))];
+}
+
 export type NumField =
   | 'thinking_token_budget'
   | 'temperature'

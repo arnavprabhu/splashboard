@@ -498,8 +498,9 @@ class StartupParser:
                 "The model does not fit in memory with these settings",
                 None,
             )
-        # Ready · <model> · context 256K[ · language only] · http://… (server.py:1831); a
-        # context that is no whole K, past 256K with YaRN too, reads "context 1,000,000".
+        # Ready · <model> · context 256K[ · text only] · http://… (server.py:1864; before
+        # 1.5.0 "language only"); a context that is no whole K, past 256K with YaRN too,
+        # reads "context 1,000,000".
         if line.startswith("Ready · "):
             parts = line.split(" · ")
             match = _CONTEXT.search(line)
@@ -508,7 +509,7 @@ class StartupParser:
                 ReadyEvent(
                     model=parts[1].strip() if len(parts) > 1 else None,
                     context_tokens=parse_context(match.group(1)) if match else None,
-                    language_only="language only" in lowered,
+                    language_only="text only" in lowered or "language only" in lowered,
                 ),
             ]
         if line.startswith("Loading · "):  # server.py:1762

@@ -12,6 +12,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 
 from .. import __version__
+from ..engine.desktop_app import find_splash_app
 from ..engine.discovery import SUPPORTED_RANGE
 from ..errors import ApiError, error_responses
 from ..schemas import (
@@ -168,6 +169,9 @@ def doctor(state: State) -> DoctorReport:
         ),
         _permissions_check(state.paths.base),
     ]
+    app_check = _splash_app_check(engine.version if engine.found else None)
+    if app_check is not None:
+        checks.append(app_check)
     hidden = []
     for name in (".zshrc", ".zprofile", ".bashrc", ".bash_profile"):
         path = Path.home() / name
@@ -191,6 +195,37 @@ def doctor(state: State) -> DoctorReport:
     # A fix is advice for a check that is not ok; never shown beside a passing one.
     checks = [c if c.status != "ok" else c.model_copy(update={"fix": None}) for c in checks]
     return DoctorReport(ok=all(c.status != "fail" for c in checks), checks=checks)
+
+
+def _splash_app_check(engine_version: str | None) -> DoctorCheck | None:
+    """The Splash desktop app, when installed: it shares installed models with the
+    engine, and its release should match the engine's. None without the app."""
+    app = find_splash_app()
+    if app is None:
+        return None
+    version = app.version or "of an unknown release"
+    if engine_version is None or app.version == engine_version:
+        return DoctorCheck(
+            id="splash_app",
+            label="Splash desktop app",
+            status="ok",
+            message=f"Splash app {version} at {app.path}"
+            + ("; the same release as the engine" if engine_version else ""),
+        )
+    return DoctorCheck(
+        id="splash_app",
+        label="Splash desktop app",
+        status="warn",
+        message=(
+            f"Splash app {version} and the Splash {engine_version} engine share installed "
+            "models; switching between releases rebuilds GGUF metadata and starts the "
+            "SSD caches of MoE models fresh"
+        ),
+        fix=(
+            "Keep both on one release: brew upgrade incoai/tap/splash, and update the "
+            "Splash app (brew upgrade --cask incoai/tap/splash-app)"
+        ),
+    )
 
 
 def _permissions_check(base: Path) -> DoctorCheck:

@@ -186,6 +186,18 @@ class EngineInstall(ApiModel):
     eta_s: float | None = None
 
 
+class EngineReasoning(ApiModel):
+    """`/v1/models` `reasoning` (Splash 1.5.0, server/frontend.py `Frontend.reasoning`):
+    whether a request without an effort reasons (null for a model that decides itself,
+    such as Flint), the efforts besides `none` the template renders differently (Qwen3.8:
+    low, medium, xhigh; none for a template that switches reasoning on and off alike at
+    every effort), and which of them a request without an effort renders like."""
+
+    thinks: bool | None = None
+    efforts: list[str] = Field(default_factory=list)
+    default: str | None = None
+
+
 class EngineView(ApiModel):
     """The engine state machine plus a summary for headers and the menu bar."""
 
@@ -218,6 +230,9 @@ class EngineView(ApiModel):
     # reasoning on and off (`reasoning_switch`, Splash 1.4.1): false for Flint, whose
     # model decides each turn; null before an engine reports it.
     reasoning_switch: bool | None = None
+    # What reasoning efforts do to the served model's default template, as its
+    # /v1/models entry reports it (`reasoning`, Splash 1.5.0); null before.
+    reasoning: EngineReasoning | None = None
     status_schema_version: int | None = None
     schema_supported: bool = True
     transport: TransportInfo | None = None

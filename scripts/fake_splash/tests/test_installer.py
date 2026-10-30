@@ -131,8 +131,9 @@ def _sigterm_mid_file(tmp_path: Path, env: dict) -> tuple[Path, Path, int]:
     return blobs, partial[0], kept
 
 
-def test_progress_sigterm_keeps_a_uuid_partial_that_is_never_resumed(tmp_path):
-    """huggingface_hub 1.28 (Splash 1.2.0): `<hash>.<uuid8>.incomplete`, a new one per run."""
+def test_progress_sigterm_leaves_a_uuid_partial_the_next_download_removes(tmp_path):
+    """huggingface_hub 1.28 (Splash 1.2.0): `<hash>.<uuid8>.incomplete`, a new one per run.
+    From 1.5.0 the next download from the repository removes the killed run's partial."""
     env = {"FAKE_SPLASH_DL_BPS": "2M", "FAKE_SPLASH_DL_SHARD_BYTES": "4M"}
     blobs, stale, kept = _sigterm_mid_file(tmp_path, env)
     assert re.fullmatch(r"[0-9a-f]{64}\.[0-9a-f]{8}\.incomplete", stale.name), stale.name
@@ -140,8 +141,8 @@ def test_progress_sigterm_keeps_a_uuid_partial_that_is_never_resumed(tmp_path):
     assert code == 0, err
     final = blobs / stale.name.split(".")[0]
     assert final.stat().st_size == 4 << 20
-    assert stale.exists() and stale.stat().st_size == kept, "the killed run's partial is left behind"
-    assert list(blobs.glob("*.incomplete")) == [stale]
+    assert kept > 0 and not stale.exists(), "the killed run's partial is removed"
+    assert list(blobs.glob("*.incomplete")) == []
 
 
 def test_legacy_hub_resumes_the_incomplete_blob(tmp_path):

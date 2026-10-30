@@ -29,7 +29,7 @@ def run_cli(tmp_path, *args, env=None, timeout=30):
 
 def test_version_matches_real_wording(tmp_path):
     result = run_cli(tmp_path, "--version")
-    assert result.returncode == 0 and result.stdout == "Splash 1.4.1\n"
+    assert result.returncode == 0 and result.stdout == "Splash 1.5.0\n"
     if REAL_CLI.exists():
         real = subprocess.run([str(REAL_CLI), "--version"], capture_output=True, text=True, timeout=30)
         assert real.stdout == result.stdout
@@ -158,7 +158,7 @@ def test_second_start_reports_installed_and_language_only(tmp_path, make_engine)
     first.stop()
     second = make_engine(base=tmp_path, args=["--no-webui", "--language-only", "--max-context", "64K"])
     assert any(line.startswith("Installing ") and "vision disabled" in line for line in second.stdout)
-    assert second.wait_for_line(r"Ready · .* · context 64K · language only · http://")
+    assert second.wait_for_line(r"Ready · .* · context 64K · text only · http://")
     second.stop()
     third = make_engine(base=tmp_path)
     assert third.stdout[0].startswith("Splash model unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_M is already installed in ")
@@ -247,7 +247,7 @@ def test_budget_refusal_exits_with_breakdown(tmp_path):
     assert re.search(r"^memory_plan_json: \{\"schema_version\":2,\"valid\":false", err, re.MULTILINE)
     # runtime/main.mm printBootstrapError writes with writeStderrLine: no timestamp.
     assert re.search(r"^error: runtime bootstrap failed", err, re.MULTILINE)
-    # 1.4.1 (runtime/main.mm reportStartFailure): the server ends the start with the
+    # 1.5.0 (runtime/main.mm reportStartFailure): the server ends the start with the
     # engine's reason, not "native protocol reached EOF".
     assert re.search(TS + r"Error · hard budget cannot fit one lane's state and the KV runway$", err, re.MULTILINE)
     assert "native protocol reached EOF" not in err

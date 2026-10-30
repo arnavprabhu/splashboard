@@ -247,7 +247,10 @@ class Models:
         language_only: bool = False,
         draft_model: str | None = None,
         full: bool = False,
+        json_progress: bool = False,
     ) -> tuple[list[str], dict[str, str]]:
+        """`install/models.py` for one action. `json_progress` asks `prepare` to report
+        each repository's download as JSON lines on stdout (Splash 1.5.0)."""
         valid_id(model)
         engine = self.state.engine_cached()
         if not engine.python or not engine.pkg:
@@ -261,6 +264,8 @@ class Models:
         argv.append(action)
         if full:
             argv.append("--full")
+        if json_progress and action == "prepare":
+            argv.append("--json-progress")
         return argv, self.env()
 
     def inventory(self) -> InstalledModels:

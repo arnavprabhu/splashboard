@@ -17,8 +17,9 @@ import {
   NUM_FIELDS,
   OUTPUT_TEMPLATES,
   PRIORITIES,
-  REASONING_EFFORTS,
   TOOL_TEMPLATES,
+  effortOptions,
+  type ModelReasoning,
   type NumField,
   type OutputForm,
   type SamplingErrors,
@@ -101,6 +102,9 @@ export interface SidePanelProps {
   /** False for a model that decides itself when to reason (Flint): effort and
    * enable_thinking change nothing (`/status.reasoning_switch`, Splash 1.4.1). */
   reasoningSwitch?: boolean | null;
+  /** What reasoning efforts do to the served model (`/v1/models` `reasoning`, Splash
+   * 1.5.0); null for another model or an engine that does not say. */
+  reasoning?: ModelReasoning | null;
   onInsertSystem: () => void;
   // tools
   toolsText: string;
@@ -192,10 +196,17 @@ function SamplingTab(p: SidePanelProps) {
         <Select
           id="chat-effort"
           value={f.reasoning_effort}
-          options={[{ value: '', label: t('chat.sampling.model_default') }, ...REASONING_EFFORTS.map((e) => ({ value: e, label: e }))]}
+          options={effortOptions(p.reasoning)}
           onChange={(v) => set({ reasoning_effort: v })}
         />
         <p class="field-help">{t('chat.help.reasoning_effort')}</p>
+        {p.reasoning && p.reasoning.thinks !== null && p.reasoningSwitch !== false && (
+          <p class="meta" data-testid="chat-reasoning-efforts">
+            {p.reasoning.efforts?.length
+              ? t('chat.help.reasoning_efforts', { efforts: p.reasoning.efforts.join(', ') })
+              : t('chat.help.reasoning_switch_only')}
+          </p>
+        )}
         {p.reasoningSwitch === false && <p class="meta">{t('chat.help.reasoning_model_decides')}</p>}
       </div>
       {NUM_FIELDS.map((k) => {

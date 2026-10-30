@@ -71,6 +71,7 @@ export type EngineInstall = Schemas['EngineInstall'];
 export type EngineNotice = Schemas['EngineNotice'];
 export type EngineOptionOut = Schemas['EngineOptionOut'];
 export type EngineOptionsInfo = Schemas['EngineOptionsInfo'];
+export type EngineReasoning = Schemas['EngineReasoning'];
 export type EngineSettings = Schemas['EngineSettings'];
 export type EngineSuggestion = Schemas['EngineSuggestion'];
 export type EngineUpgradeEvent = Schemas['EngineUpgradeEvent'];

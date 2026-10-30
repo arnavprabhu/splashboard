@@ -234,6 +234,8 @@ def test_models_listing_and_lookup(engine):
         "context_length": 262144,
         "vision": True,
         "input_modalities": ["text", "image", "pdf"],
+        # 1.5.0: what reasoning efforts do; the MoE template switches alike at each.
+        "reasoning": {"thinks": True, "efforts": [], "default": None},
     }
     assert body["models"] == [{"name": MODEL, "description": "Splash resident model", "release_date": ""}]
     assert engine.json("GET", f"/v1/models/{MODEL}")[1]["id"] == MODEL
@@ -460,7 +462,15 @@ def test_messages_non_stream_and_stream(engine):
     assert message["type"] == "message" and message["id"].startswith("msg_")
     assert [c["type"] for c in message["content"]] == ["thinking", "text"]
     assert message["stop_reason"] == "end_turn"
-    assert set(message["usage"]) == {"input_tokens", "cache_read_input_tokens", "output_tokens"}
+    assert set(message["usage"]) == {
+        "input_tokens",
+        "cache_read_input_tokens",
+        "output_tokens",
+        "output_tokens_details",
+    }
+    # 1.5.0: Messages reports thinking tokens and Chat's timings.
+    assert message["usage"]["output_tokens_details"]["thinking_tokens"] > 0
+    assert message["timings"]["predicted_n"] == message["usage"]["output_tokens"]
     events = sse(engine, "/v1/messages", {**body, "stream": True})
     names = [e for e, _ in events]
     assert names[0] == "message_start" and names[-1] == "message_stop"

@@ -311,6 +311,13 @@ export const chatStrings = {
   'chat.help.ignore_eos': 'Keep generating past the end-of-sequence token.',
   'chat.help.kwargs': 'Passed to the chat template; Chat only.',
   'chat.help.reasoning_effort': 'Model default sends nothing.',
+  'chat.reasoning.default_off': 'Model default · reasoning off',
+  'chat.reasoning.default_on': 'Model default · reasoning on',
+  'chat.reasoning.default_effort': 'Model default · {effort}',
+  'chat.reasoning.on': '{effort} · reasoning on',
+  'chat.reasoning.same_as': '{effort} · same as {alias}',
+  'chat.help.reasoning_efforts': 'This model’s template tells {efforts} apart; other efforts render like the nearest of them.',
+  'chat.help.reasoning_switch_only': 'This model’s template turns reasoning on alike at every effort; none turns it off.',
   'chat.help.reasoning_model_decides':
     'This model decides each turn whether to reason, so reasoning effort, enable_thinking and the thinking budget change nothing.',
 

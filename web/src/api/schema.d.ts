@@ -3089,7 +3089,7 @@ export interface components {
             support: "supported" | "untested" | "too_old" | "unknown";
             /**
              * Supported Range
-             * @default >=1.4.1 <1.5.0
+             * @default >=1.5.0 <1.6.0
              */
             supported_range: string;
             /** Banner */
@@ -3204,6 +3204,22 @@ export interface components {
             /** Unknown */
             unknown?: components["schemas"]["EngineOptionOut"][];
         };
+        /**
+         * EngineReasoning
+         * @description `/v1/models` `reasoning` (Splash 1.5.0, server/frontend.py `Frontend.reasoning`):
+         *     whether a request without an effort reasons (null for a model that decides itself,
+         *     such as Flint), the efforts besides `none` the template renders differently (Qwen3.8:
+         *     low, medium, xhigh; none for a template that switches reasoning on and off alike at
+         *     every effort), and which of them a request without an effort renders like.
+         */
+        EngineReasoning: {
+            /** Thinks */
+            thinks?: boolean | null;
+            /** Efforts */
+            efforts?: string[];
+            /** Default */
+            default?: string | null;
+        };
         /** EngineSettings */
         EngineSettings: {
             /** Path */
@@ -3286,6 +3302,7 @@ export interface components {
             verify_rows?: ("auto" | "all") | null;
             /** Reasoning Switch */
             reasoning_switch?: boolean | null;
+            reasoning?: components["schemas"]["EngineReasoning"] | null;
             /** Status Schema Version */
             status_schema_version?: number | null;
             /**

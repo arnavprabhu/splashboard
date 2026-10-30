@@ -1,11 +1,11 @@
 # Fake Splash engine
 
-A stdlib-only stand-in for Homebrew's `splash` 1.4.1 package. The
+A stdlib-only stand-in for Homebrew's `splash` 1.5.0 package. The
 manager, the web app's Playwright tests and local development use it in place
 of the real engine, so nothing needs a model, Metal or the network. It runs
 under any Python 3.12+, including Splash's bundled interpreter.
 
-Every engine fact it reproduces was checked against `./splash` at tag `1.4.1`.
+Every engine fact it reproduces was checked against `./splash` at tag `1.5.0`.
 Comments in `pkg/server/fake_engine.py` and `fake_server.py` give the source
 file and line for each output string.
 
@@ -17,12 +17,12 @@ pkg/                     laid out like $(brew --prefix)/opt/splash (bin/) and it
 ├── libexec -> .         so pkg/ also works as an opt/splash prefix
 ├── python/bin/python3   runs $FAKE_SPLASH_PYTHON, else the first Python ≥ 3.12 on PATH
 ├── engine/splash        answers `device-check` only (FAKE_SPLASH_DEVICE_CHECK=fail refuses the Mac)
-├── release.json         {"version": "1.4.1", ...}
+├── release.json         {"version": "1.5.0", ...}
 ├── install/
 │   ├── launcher.py      `splash --version | serve | claude|opencode|codex|hermes|pi [--port PORT] [-- ARGS]`
 │   ├── models.py        fake installer, same CLI as the real install/models.py
 │   ├── paths.py         DATA from SPLASH_GUI_FAKE_DATA (never ~/Library/Application Support/Splash)
-│   ├── families.py      verbatim copy (names, draft repos, chat formats and vision, 1.4.1)
+│   ├── families.py      verbatim copy (names, draft repos, chat formats and vision, 1.5.0)
 │   ├── clients.py       verbatim copy: the coding-client configurator `splash launch` uses (Hermes needs PyYAML in the interpreter to write its profile; `--print` does not)
 │   ├── signatures.py    each family's config fields; stands in for the engine's model-check
 │   └── upstream.py      inspect_target/check_model stand-in for the compatibility helper
@@ -43,7 +43,7 @@ tests/                   the fake's own tests
 
 ```sh
 export SPLASH_GUI_FAKE_DATA=/tmp/fake-splash HF_HUB_CACHE=/tmp/fake-splash/models
-scripts/fake_splash/pkg/bin/splash --version          # Splash 1.4.1
+scripts/fake_splash/pkg/bin/splash --version          # Splash 1.5.0
 scripts/fake_splash/pkg/bin/splash serve --model unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_M --port 8001 --no-webui
 curl -s localhost:8001/v1/chat/completions -H 'content-type: application/json' \
   -d '{"messages":[{"role":"user","content":"hi"}],"stream":true}'
@@ -57,7 +57,11 @@ YaRN past 256K, fractional sizes such as `2.5G`, `--expert-memory`,
 `--ple-memory`, `--sparse-kv-memory` and `--verify-rows`, each with the engine's
 startup lines and refusals; from 1.4.1, Flint and Ornith-1.5-122B, Flint's
 sliding-window `kv.window`, `reasoning_switch`, its 262,144-token bound and its
-own choice to reason, and start failures that end with the engine's reason). It
+own choice to reason, and start failures that end with the engine's reason; from
+1.5.0, full option names only, `--model-dir` and `--mmproj` checked as the launcher
+checks them, timings and thinking tokens in Responses and Messages, `reasoning` in
+/v1/models, the "text only" Ready line, `prepare --json-progress` and the removal
+of abandoned `<blob>.*.incomplete` partials before a download). It
 reads `SPLASH_API_KEY`, binds `--host`/`--port`, runs the fake installer for the
 selection (as the real launcher does), and then serves. Like the real server,
 it does not listen until Ready.
@@ -163,7 +167,7 @@ Installer (`install/models.py`, and the install step of `serve`):
 |---|---|---|
 | `HF_HUB_CACHE` | `$SPLASH_GUI_FAKE_DATA/hub` | Where `models--owner--repo/{blobs,snapshots,refs}` are written |
 | `FAKE_SPLASH_DL_BPS` | 64M | Download rate in bytes/s (`.incomplete` blobs grow at this rate) |
-| `FAKE_SPLASH_DL_HUB` | — | Unset: huggingface_hub 1.28 partials, as Splash 1.2.0 to 1.4.1 bundle (`blobs/<hash>.<uuid8>.incomplete`, a new file per run, deleted on a handled error, never resumed). `legacy`: older hubs (`blobs/<hash>.incomplete`, appended to by the next run) |
+| `FAKE_SPLASH_DL_HUB` | — | Unset: huggingface_hub 1.28 partials, as Splash 1.2.0 to 1.5.0 bundle (`blobs/<hash>.<uuid8>.incomplete`, a new file per run, deleted on a handled error, never resumed; from 1.5.0 the next download from the repository removes it). `legacy`: older hubs (`blobs/<hash>.incomplete`, appended to by the next run) |
 | `FAKE_SPLASH_DL_SHARD_BYTES`, `_SHARDS`, `_DRAFT_BYTES`, `_VISION_BYTES` | 2M, 2, 1M, 512K | File sizes |
 | `FAKE_SPLASH_DL_COMMIT_SALT` | — | Changes every resolved commit, so `prepare` reports "moved from … to …" (simulates updates). The first weight file changes too, so an update fetches one file; if that fails, the old commit is kept with `Warning: keeping the installed …` and `prepare` still exits 0 (upstream.py `_keeping_installation`) |
 | `FAKE_SPLASH_DL_FAIL` | — | `gated` (401 unless `HF_TOKEN` is set), `network` (Hub unreachable), `network_mid`, `disk_full` (ENOSPC mid-download), `incompatible` |

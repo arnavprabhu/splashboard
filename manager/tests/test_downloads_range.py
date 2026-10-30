@@ -176,7 +176,7 @@ def test_pause_keeps_every_segment_and_resume_continues_each_from_its_verified_e
     paused = harness.client.post(f"/api/admin/downloads/{dl}/pause").json()
     assert paused["state"] == "paused"
     sha = remote_file().blob
-    partial = blobs(harness) / f"{sha}.splashgui.incomplete"
+    partial = blobs(harness) / f"{sha}.splashgui.partial"
     sidecar = blobs(harness) / f"{sha}.splashgui.json"
     segments = segments_on_disk(sidecar)
     at_pause = done_on_disk(sidecar)
@@ -292,6 +292,8 @@ def test_a_one_stream_sidecar_from_before_segments_resumes_as_one_stream(setup, 
     remote = hub_remote(fake_hub_server)
     sha, keep = remote.etag, 1_500_000
     blobs(harness).mkdir(parents=True, exist_ok=True)
+    # A partial of that era also had the name Splash 1.5.0's installer removes as abandoned
+    # (`.splashgui.incomplete`); the resume takes it under the current name.
     (blobs(harness) / f"{sha}.splashgui.incomplete").write_bytes(remote_file().read(0, keep))
     # The sidecar as the one-stream downloader wrote it before parallel streams: no version, no
     # segments.
@@ -326,7 +328,7 @@ def test_a_hash_mismatch_deletes_the_partial_and_falls_back_to_prepare(setup, fa
     partway(harness, dl)
     harness.client.post(f"/api/admin/downloads/{dl}/pause")
     sha = remote_file().blob
-    partial = blobs(harness) / f"{sha}.splashgui.incomplete"
+    partial = blobs(harness) / f"{sha}.splashgui.partial"
     data = bytearray(partial.read_bytes())
     data[100] ^= 0xFF
     partial.write_bytes(bytes(data))
@@ -393,7 +395,7 @@ def test_a_changed_remote_file_restarts_from_zero(setup, fake_hub_server, monkey
         "the new version starts at byte 0 in every segment"
     )
     assert all(g["status"] == 206 for g in fresh)
-    assert not (blobs(harness) / f"{old}.splashgui.incomplete").exists()
+    assert not (blobs(harness) / f"{old}.splashgui.partial").exists()
     assert not (blobs(harness) / f"{old}.splashgui.json").exists()
     assert sha256(blobs(harness) / new) == new
     assert harness.state.downloads.blobs[dl][KEY] == new
@@ -505,16 +507,16 @@ def test_the_stale_partial_cleanup_knows_the_range_partial(tmp_path):
     directory.mkdir(parents=True)
     ours, claimed, orphan = "a" * 64, "b" * 64, "c" * 64
     for digest in (ours, claimed):
-        (directory / f"{digest}.splashgui.incomplete").write_bytes(b"x")
+        (directory / f"{digest}.splashgui.partial").write_bytes(b"x")
         (directory / f"{digest}.splashgui.json").write_text("{}")
     (directory / f"{orphan}.splashgui.json").write_text("{}")
     removed = remove_stale_partials(
         tmp_path, [REPO_ID], protected_digests={claimed}, lsof=lambda _paths: set()
     )
-    assert [r.path.name for r in removed] == [f"{ours}.splashgui.incomplete"]
+    assert [r.path.name for r in removed] == [f"{ours}.splashgui.partial"]
     assert sorted(p.name for p in directory.iterdir()) == [
-        f"{claimed}.splashgui.incomplete",
         f"{claimed}.splashgui.json",
+        f"{claimed}.splashgui.partial",
     ]
 
 
@@ -539,7 +541,7 @@ def test_a_segment_answer_starts_at_its_verified_end_and_stays_inside_the_segmen
 
 def test_a_segmented_partial_reports_its_verified_bytes_not_its_size(tmp_path):
     sha = "ab" * 32
-    partial = tmp_path / f"{sha}.splashgui.incomplete"
+    partial = tmp_path / f"{sha}.splashgui.partial"
     partial.write_bytes(bytes(1000))  # preallocated: the full size, not all of it verified
     sidecar = tmp_path / f"{sha}.splashgui.json"
     sidecar.write_text(
@@ -688,7 +690,7 @@ def test_a_hard_killed_manager_resumes_every_segment_from_its_verified_end(manag
     dl = manager.api("POST", "/downloads", {"id": MODEL})["id"]
     sha = remote_file().blob
     folder = manager.home / "models" / ("models--" + REPO_ID.replace("/", "--")) / "blobs"
-    partial = folder / f"{sha}.splashgui.incomplete"
+    partial = folder / f"{sha}.splashgui.partial"
     sidecar = folder / f"{sha}.splashgui.json"
     deadline = time.monotonic() + 60
     while done_on_disk(sidecar) < 1 << 20:
