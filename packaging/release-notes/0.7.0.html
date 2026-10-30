@@ -1,0 +1,17 @@
+<!--
+  Release notes for 0.7.0 (TEMPLATE.html says how these are used).
+-->
+<h2>Splashboard 0.7.0</h2>
+<p>Splashboard now requires Splash 1.5.0. Update the engine with <code>brew upgrade incoai/tap/splash</code>, or from Settings → About.</p>
+<ul>
+  <li>Usage now records prompt and decode times for requests from Claude Code, Codex and other agents, not only for Chat Completions, so their speeds show up in Usage. Claude Code's prompt size now counts the cached part too.</li>
+  <li>Chat's reasoning effort list says what each effort does to the loaded model: which ones it tells apart, which ones render like another, and what the model default is.</li>
+  <li>Download progress follows Splash's own count while it fetches the smaller files, so it no longer sits at 0% and then jumps.</li>
+  <li>A paused download keeps its progress. Splash 1.5.0 cleans up interrupted downloads before each new one, and would otherwise have removed what a paused download had fetched.</li>
+  <li><code>splash doctor</code> and Settings → About notice Splash's new desktop app and warn when it is on a different release from the Homebrew engine. The two share installed models, and switching between releases makes the engine rebuild them.</li>
+  <li>Extra engine flags must use full option names, as Splash 1.5.0 requires; an abbreviation is refused when you save.</li>
+  <li>Splash 1.5.0 brings faster decoding on M5 and M6 Macs, lower memory for MoE routers, and a fix for image requests that could crash a model streaming its experts from the SSD.</li>
+  <li>The first start of each GGUF model after the engine upgrade takes a little longer while Splash rebuilds its metadata. The SSD cache of GGUF and MLX MoE models starts empty once.</li>
+</ul>
+<p>Engine: <a href="https://github.com/incoai/splash">Splash</a> by inco.ai, 1.5.0 or newer (Homebrew <code>incoai/tap/splash</code>). Restart the server after upgrading Splash. Splashboard is not an inco.ai product.</p>
+<p>Splashboard is not notarized. On a first install, open it once from System Settings → Privacy &amp; Security → Open Anyway.</p>
