@@ -4,6 +4,9 @@
 (1.2.0, lines 982-1255; unchanged in substance through 1.4.0, which adds a
 bounded LENGTH end to anthropic_stop) with the
 tool-policy and thinking-codec objects replaced by plain fields of FakeJob.
+Splash 1.6.0 moved these builders into one module per API
+(splash/server/dialects/), with the Messages and /v1/systemone error dialects,
+which are copied here from dialects/anthropic.py and dialects/scoring.py.
 Keep these in step with the engine."""
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ import json
 import time
 from dataclasses import dataclass, field
 
+from .errors import ContextLengthError, ErrorDialect, RequestValidationError
 from .metrics import metrics_dict, timings_dict, usage_dict
 
 
@@ -380,3 +384,48 @@ def anthropic_response(model, job, blocks, result, tool_calls, thinking_signatur
         "usage": anthropic_usage(result.prompt_tokens, result.completion_tokens, result.cache, job.reasoning_tokens),
         "timings": timings_dict(result),
     }
+
+
+class AnthropicErrors(ErrorDialect):
+    # The type of an error of each status Anthropic's API names one for; any
+    # other is an api_error from 500, else an invalid_request_error.
+    TYPES = {  # noqa: RUF012
+        401: "authentication_error",
+        403: "permission_error",
+        404: "not_found_error",
+        408: "timeout_error",
+        413: "request_too_large",
+        429: "rate_limit_error",
+        503: "overloaded_error",
+        504: "timeout_error",
+    }
+
+    def payload(self, error):
+        message = error.message
+        if isinstance(error, ContextLengthError):
+            message = (
+                f"prompt is too long: {error.input_tokens} tokens > {error.maximum_input_tokens} maximum input tokens"
+            )
+            if error.image_tokens_only:
+                message += " (image tokens alone; text not yet counted)"
+        error_type = self.TYPES.get(
+            error.status,
+            "api_error" if error.status >= 500 else "invalid_request_error",
+        )
+        return {"type": "error", "error": {"type": error_type, "message": message}}
+
+
+class SystemOneErrors(ErrorDialect):
+    """/v1/systemone answers as the FastAPI service it stands in for:
+    invalid fields with 422 and what is wrong with each, an overload with
+    TypeSafe's 529, and other errors as OpenAI's APIs do."""
+
+    def answer(self, error):
+        if isinstance(error, RequestValidationError):
+            return 422, "unprocessable_entity", {"detail": error.details}
+        status, code, payload = super().answer(error)
+        return 529 if status == 503 else status, code, payload
+
+
+ANTHROPIC_ERRORS = AnthropicErrors()
+SYSTEMONE_ERRORS = SystemOneErrors()

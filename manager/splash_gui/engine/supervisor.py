@@ -1185,7 +1185,11 @@ class Supervisor:
                 f"Splash status schema {self.schema_version} not recognized — some panels "
                 "may be empty",
             )
-        context = st.integer(data, "maximum_context_tokens")
+        # The context the server serves now (`capabilities`, Splash 1.6.0): an engine
+        # Splash restarted may serve another than the first one's plan allowed.
+        context = st.integer(data, "capabilities.max_context_tokens") or st.integer(
+            data, "maximum_context_tokens"
+        )
         if context:
             self.max_context = context
         vision = st.boolean(data, "vision")

@@ -33,6 +33,7 @@ import {
   claudeEnv,
   diskEnabled,
   diskWrites,
+  isRecord,
   kvModeOf,
   launchCommand,
   promptProgress,
@@ -203,6 +204,25 @@ export function ReleaseMemoryButton({ raw }: { raw: unknown }) {
   );
 }
 
+/** Requests waiting for memory on Splash's ledger (`memory_governor.claims`, Splash 1.6.0):
+ * a request that must wait no longer holds up the ones behind it. No row before 1.6.0. */
+export function claimsItem(raw: unknown): KeyValueItem[] {
+  if (!isRecord(rawGet(raw, 'memory_governor.claims'))) return [];
+  const waiting = rawNum(raw, 'memory_governor.claims.waiting') ?? 0;
+  const oldest = rawNum(raw, 'memory_governor.claims.oldest_ms');
+  return [
+    {
+      key: 'claims',
+      label: t('bands.memory.claims'),
+      value:
+        waiting > 0
+          ? t('bands.memory.claims_v', { n: waiting, b: bytes(rawNum(raw, 'memory_governor.claims.bytes')) })
+          : t('bands.memory.claims_none'),
+      meta: waiting > 0 && oldest !== null ? t('bands.memory.claims_oldest', { d: formatMs(oldest) }) : undefined,
+    },
+  ];
+}
+
 export function MemoryBand({ raw, stopped }: BandsProps) {
   useEffect(() => {
     void loadSystem();
@@ -273,6 +293,7 @@ export function MemoryBand({ raw, stopped }: BandsProps) {
       value: typeof growth === 'boolean' ? t(growth ? 'bands.memory.growth.allowed' : 'bands.memory.growth.denied') : null,
       meta: rawNum(raw, 'memory_governor.denied_reservations') !== null ? t('bands.memory.denied', { n: rawNum(raw, 'memory_governor.denied_reservations') ?? 0 }) : undefined,
     },
+    ...claimsItem(raw),
     {
       key: 'metal',
       label: t('bands.memory.metal'),
@@ -314,6 +335,22 @@ export function MemoryBand({ raw, stopped }: BandsProps) {
 
 const rate = (v: number | null) => (v === null ? DASH : formatPercent(v));
 
+/** The expert store's size (Splash 1.6.0): under `--expert-memory auto` it grows in chunks
+ * from its floor to its cap as memory allows and gives chunks back while requests or other
+ * apps need the memory; a size fixes it (floor = cap). Null before 1.6.0. */
+export function expertStore(experts: unknown): string | null {
+  const cap = rawNum(experts, 'cap_bytes');
+  const floor = rawNum(experts, 'floor_bytes');
+  const chunks = rawNum(experts, 'chunks');
+  const capChunks = rawNum(experts, 'cap_chunks');
+  if (cap === null || floor === null) return null;
+  if (floor >= cap || chunks === null || !capChunks) return t('bands.stream.store_fixed', { m: bytes(cap) });
+  const store = t('bands.stream.store', { c: bytes((cap * chunks) / capChunks), m: bytes(cap), f: bytes(floor) });
+  const shrinks = rawNum(experts, 'shrinks') ?? 0;
+  const regrows = rawNum(experts, 'regrows') ?? 0;
+  return shrinks + regrows > 0 ? `${store} · ${t('bands.stream.store_moves', { s: count(shrinks), r: count(regrows) })}` : store;
+}
+
 /** What streams from the SSD: routed experts, Flash-Next's PLE table and long requests' KV.
  * Hidden unless something streams; the accent marks only a failure. */
 export function StreamingBand({ raw, stopped }: BandsProps) {
@@ -335,11 +372,16 @@ export function StreamingBand({ raw, stopped }: BandsProps) {
               e: count(rawNum(experts, 'experts')),
             }),
       accent: typeof failure === 'string' && failure !== '',
-      meta: t('bands.stream.experts_meta', {
-        h: rate(rawNum(experts, 'decode.hit_rate')),
-        b: bytes((rawNum(experts, 'prefill.read_bytes') ?? 0) + (rawNum(experts, 'decode.read_bytes') ?? 0)),
-        a: bytes(rawNum(experts, 'arena_bytes')),
-      }),
+      meta: [
+        t('bands.stream.experts_meta', {
+          h: rate(rawNum(experts, 'decode.hit_rate')),
+          b: bytes((rawNum(experts, 'prefill.read_bytes') ?? 0) + (rawNum(experts, 'decode.read_bytes') ?? 0)),
+          a: bytes(rawNum(experts, 'arena_bytes')),
+        }),
+        expertStore(experts),
+      ]
+        .filter(Boolean)
+        .join(' · '),
     });
   }
   if (table) {
@@ -724,6 +766,19 @@ interface StageRow {
   count: number;
 }
 
+const TTFT_PARTS = ['own_prefill', 'claim_wait', 'other_prefill', 'decode', 'rest'] as const;
+
+/** Where the engine's time to a first token goes (`metrics.ttft_parts_ms`, Splash 1.6.0): the
+ * request's own prefill, waiting for memory, other requests' prefill, decode and the rest, each
+ * at its median. Null before 1.6.0 and until a request has reached its first token. */
+export function ttftParts(raw: unknown): Record<(typeof TTFT_PARTS)[number], string> | null {
+  const parts = rawGet(raw, 'metrics.ttft_parts_ms');
+  if (!isRecord(parts) || !TTFT_PARTS.some((p) => (rawNum(parts, `${p}.samples`) ?? 0) > 0)) return null;
+  const out = {} as Record<(typeof TTFT_PARTS)[number], string>;
+  for (const part of TTFT_PARTS) out[part] = (rawNum(parts, `${part}.samples`) ?? 0) > 0 ? formatMs(rawNum(parts, `${part}.p50`)) : DASH;
+  return out;
+}
+
 export function LatencyBand({ raw, stopped }: BandsProps) {
   const [rawStage, setRawStage] = useState<Stage>('http_ttft');
   if (stopped) return <Stopped label={t('bands.latency.label')} />;
@@ -740,6 +795,7 @@ export function LatencyBand({ raw, stopped }: BandsProps) {
     return { stage, p50: stagePercentileMs(h, 0.5), p95: stagePercentileMs(h, 0.95), mean: stageMeanMs(h), count: c };
   });
   const approx = (v: number | null, c: number) => (c === 0 || v === null ? DASH : t('bands.latency.approx', { v: formatMs(v) }));
+  const ttft = ttftParts(raw);
   const buckets = stageBuckets(rawGet(raw, `latency.${rawStage}`));
   return (
     <Section label={t('bands.latency.label')} id="latency" meta={t('bands.latency.note')}>
@@ -760,6 +816,11 @@ export function LatencyBand({ raw, stopped }: BandsProps) {
             { key: 'count', label: t('bands.latency.count'), align: 'right', render: (r) => (r.count === 0 ? DASH : formatCount(r.count)) },
           ]}
         />
+        {ttft && (
+          <p class="meta" data-testid="ttft-parts">
+            {t('bands.latency.ttft_parts', { ...ttft })}
+          </p>
+        )}
         <Disclosure summary={t('bands.latency.raw')}>
           <div class="stack">
             <label class="cluster">

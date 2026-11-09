@@ -6,14 +6,13 @@ start failures that now end with the engine's reason."""
 from __future__ import annotations
 
 import json
-import re
 import sys
 from pathlib import Path
 
 import pytest
 from test_installer import install
 from test_status_1_4_0 import engine, job, run
-from test_status_contract import ENGINE, flatten
+from test_status_contract import ENGINE, flatten, native_status_paths
 
 from harness import PKG
 
@@ -85,11 +84,8 @@ def test_the_35b_and_122b_share_a_model_type_and_differ_by_size(tmp_path):
 
 
 def window_keys() -> set[str]:
-    """The keys Status.cpp appendKvWindow writes under kv.window."""
-    source = (ENGINE / "Status.cpp").read_text()
-    body = source[source.index("void appendKvWindow") :]
-    body = body[: body.index("\n}\n")]
-    return set(re.findall(r'\\"([a-z_]+)\\":', body)) - {"window"}
+    """The keys the engine writes under kv.window (its golden status documents)."""
+    return {p.removeprefix("kv.window.") for p in native_status_paths() if p.startswith("kv.window.")}
 
 
 def test_flint_reports_its_sliding_window_and_no_reasoning_switch():

@@ -1,4 +1,4 @@
-"""Tolerant readers for Splash's `/status` (schema 6).
+"""Tolerant readers for Splash's `/status` (schema 8, Splash 1.6.0).
 
 Splash requires readers to tolerate missing fields, so every getter
 returns None instead of raising.
@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 8
 LATENCY_STAGES = (
     "http_request",
     "upload",

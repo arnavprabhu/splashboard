@@ -155,9 +155,20 @@ def test_variant_pick_and_fit_rules() -> None:
     variants = cat.gguf_variants("unsloth/Qwen3.8-27B-GGUF", files)
     by = {v.name: v for v in variants}
     # Splash loads UD-Q8_K_XL's BF16 tensors, and a split GGUF from its variant's
-    # folder; a whole BF16 model stays refused, and so do split parts at the root.
+    # folder or, from 1.6.0, from the repository's root; a whole BF16 model stays
+    # refused.
     assert by["UD-Q8_K_XL"].size == 30 * GIB and not by["UD-Q8_K_XL"].unloadable
-    assert by["Q8_0"].size == 30 * GIB and by["Q8_0"].unloadable == cat.ROOT_SPLIT
+    assert by["Q8_0"].size == 30 * GIB and not by["Q8_0"].unloadable
+    assert len(by["Q8_0"].files) == 2
+    # An incomplete split at the root is listed with why; its merge beside the parts
+    # is the variant.
+    partial = dict(files)
+    del partial["Qwen3.8-27B-Q8_0-00002-of-00002.gguf"]
+    broken = {v.name: v for v in cat.gguf_variants("unsloth/Qwen3.8-27B-GGUF", partial)}
+    assert broken["Q8_0"].unloadable == "the split GGUF Qwen3.8-27B-Q8_0 is incomplete"
+    merged = {**files, "Qwen3.8-27B-Q8_0.gguf": 30 * GIB}
+    whole = {v.name: v for v in cat.gguf_variants("unsloth/Qwen3.8-27B-GGUF", merged)}
+    assert whole["Q8_0"].files == ["Qwen3.8-27B-Q8_0.gguf"] and whole["Q8_0"].size == 30 * GIB
     assert by["BF16"].unloadable == cat.WHOLE_UNQUANTIZED and not by["UD-Q4_K_M"].unloadable
     assert cat.projector(files) == "mmproj-BF16.gguf", "BF16 preferred, F16 refused"
     big = cat.pick_variant(variants, 64 * GIB, True)

@@ -1,10 +1,10 @@
 """Run under Splash's bundled Python, never imported by the manager.
 
-Reads loose GGUF headers and says which model family each is, using Splash's own
-reader and the engine's `model-check` (`install/gguf.py`, `upstream.check_model`),
-the same steps `upstream.gguf_target` takes, so a file is accepted here exactly when
-`splash serve` would accept it. A split GGUF is read as one model from all of its
-parts, in split order, as Splash merges them (`gguf.merged_split`). stdin:
+Reads loose GGUF headers and says which model family each is, with Splash's own
+steps for a GGUF target (`install/upstream.py` `gguf_target`): its reader, the
+quantization check and the engine's `model-check` on the headers, so a file is
+accepted here exactly when `splash serve` would accept it. A split GGUF is read as
+one model from all of its parts, in split order (`upstream.split_order`). stdin:
 {"paths": [PATH | [PART, ...], ...]}; stdout, by the path or the first part:
 {path: {"family", "draft_repo", "architecture", "name"} | {"error"}}.
 """
@@ -13,36 +13,27 @@ import json
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
-
-
-def family_of(metadata: Any) -> Any:
-    """The family the engine finds a GGUF to describe: the derived config and the
-    scalar metadata are written to files and handed to the engine's `model-check`,
-    as `upstream.gguf_target` does."""
-    from install import gguf, models, upstream  # type: ignore[import-not-found]
-
-    with tempfile.TemporaryDirectory(prefix="splash-gui-classify-") as scratch:
-        config = Path(scratch) / "config.json"
-        scalars = Path(scratch) / "gguf-metadata.json"
-        config.write_bytes(models.json_bytes(gguf.model_config(metadata)))
-        scalars.write_bytes(models.json_bytes(gguf.scalar_metadata(metadata)))
-        return upstream.check_model("gguf", "none", config, gguf_metadata=scalars)
 
 
 def classify(paths: list[str]) -> dict[str, object]:
-    from install import gguf, models  # type: ignore[import-not-found,unused-ignore]
+    from install import gguf, hub, models, upstream  # type: ignore[import-not-found]
 
+    files = {Path(path).name: Path(path) for path in paths}
+    names = list(files)
     try:
-        headers = [gguf.Metadata(path, tensors=True) for path in paths]
-        metadata = gguf.merged_split(headers) if len(headers) > 1 else headers[0]
-        family = family_of(metadata)
-        gguf.require_loadable(metadata)  # the same check `splash serve` makes (upstream.py)
+        if len(names) > 1:
+            names = upstream.split_order(names, f"the split GGUF {upstream.model_of(names[0])}")
+        repo = hub.Repository.local_files(str(Path(paths[0]).parent), files)
+        with tempfile.TemporaryDirectory(prefix="splash-gui-classify-") as scratch:
+            # No projector: the family is the text model's, whatever lies beside it.
+            target = upstream.gguf_target(repo, names, Path(scratch))
+        # The first part's metadata describes the model.
+        metadata = gguf.Metadata(files[names[0]])
     except models.ModelError as error:
         return {"error": str(error)}
     return {
-        "family": family.name,
-        "draft_repo": family.draft_repo,
+        "family": target.family.name,
+        "draft_repo": target.family.draft_repo,
         "architecture": metadata.values.get("general.architecture"),
         "name": metadata.values.get("general.name"),
     }

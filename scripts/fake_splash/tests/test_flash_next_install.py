@@ -59,21 +59,31 @@ def test_select_gguf_answers_with_a_list_and_falls_back_to_a_variant_folder():
     with pytest.raises(models.ModelError, match=r"the split GGUF in IQ2_XS/ is incomplete"):
         upstream.select_gguf(files, "IQ2_XS")
     with pytest.raises(
-        models.ModelError, match=r"select a GGUF with OWNER/REPO:VARIANT \(files in the repository root: none"
+        models.ModelError,
+        match=r"select a GGUF with OWNER/REPO:VARIANT \(GGUF targets: Q2_0 \(split, 2 parts\)\)",
     ):
         upstream.select_gguf(files, None)
-    # A root file answering :VARIANT comes before the folder, an MTP head too.
+    # 1.6.0: the folder named VARIANT comes before a root file whose name only ends
+    # in -VARIANT, an MTP head too; without :VARIANT the root's only name is taken.
     head = "mtp-Qwen3.8-Flash-Next-Q8_0.gguf"
     q8 = [f"Q8_0/Qwen3.8-Flash-Next-Q8_0-0000{k}-of-00002.gguf" for k in (1, 2)]
-    assert upstream.select_gguf([head, *q8], "Q8_0") == ([head], False)
+    assert upstream.select_gguf([head, *q8], "Q8_0") == (q8, False)
     assert upstream.select_gguf([head, *q8], None) == ([head], False)
+    # 1.6.0: a split GGUF's parts at a repository's root are one target, and a whole
+    # file of the same name comes first.
+    root = [f"M-Q4_K_M-0000{k}-of-00002.gguf" for k in (1, 2)]
+    assert upstream.select_gguf(root, None) == (root, False)
+    assert upstream.select_gguf([*root, "M-Q8_0.gguf"], "Q4_K_M") == (root, False)
+    assert upstream.select_gguf([*root, "M-Q4_K_M.gguf"], "Q4_K_M") == (["M-Q4_K_M.gguf"], False)
+    with pytest.raises(models.ModelError, match=r"the split GGUF M-Q4_K_M is incomplete"):
+        upstream.select_gguf(root[:1], None)
 
 
-def test_a_family_without_a_released_draft_needs_draft_model(monkeypatch):
-    family = families.ModelFamily("Qwen3.8-Flash-Next", None, families.QWEN)
-    selection = models.Selection.of(Path("/nowhere"), f"{FLASH}:Q2_0")
-    with pytest.raises(models.ModelError, match=r"^no DFlash2 draft is released for Qwen3\.8-Flash-Next; name one"):
-        models.draft_repo(selection, family)
+def test_a_named_draft_replaces_the_family_s():
+    # Every family has a released draft from 1.6.0 (families.py); --draft-model
+    # still names another.
+    family = families.named("Qwen3.8-Flash-Next")
+    assert family.draft_repo == "incoai/Qwen3.8-Flash-Next-DFlash2"
     named = models.Selection.of(Path("/nowhere"), f"{FLASH}:Q2_0", draft_model="me/Draft")
     assert models.draft_repo(named, family).name == "me/Draft"
 

@@ -406,9 +406,11 @@ def test_variant_labels_resolve_with_splash_s_own_selector(tmp_path):
         "import json, sys\n"
         f"sys.path.insert(0, {str(helper)!r})\n"
         "from install import upstream\n"
-        "from inspect_model import variant_label\n"
+        "from inspect_model import root_variants, variant_label\n"
         "names = json.loads(sys.argv[1])\n"
-        "print(json.dumps([variant_label(sys.argv[2], n, names, upstream) for n in names]))\n"
+        "targets = root_variants(names, upstream)\n"
+        "label = lambda t: variant_label(sys.argv[2], t, len(targets), upstream, names)\n"
+        "print(json.dumps([label(t) for t in targets]))\n"
     )
     names = [
         "Qwen3.8-27B-Q4_0.gguf",
@@ -426,6 +428,57 @@ def test_variant_labels_resolve_with_splash_s_own_selector(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == ["Q4_0", "UD-Q4_K_M", "UD-Q4_K_XL", "imatrix_unsloth"]
+
+
+def test_a_split_gguf_at_a_repository_s_root_is_one_variant():
+    """Splash 1.6.0 installs `MODEL-VARIANT-0000K-of-0000N.gguf` parts at a
+    repository's root as one target: the variant table lists them as one variant,
+    under the label `select_gguf` resolves to all of its parts, and a whole file of
+    the same name comes first."""
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    reference = Path(__file__).resolve().parents[2] / "splash"
+    if not (reference / "install" / "upstream.py").exists():
+        pytest.skip("no Splash reference clone to resolve against")
+    helper = Path(__file__).resolve().parents[1] / "splash_gui" / "helpers"
+    script = (
+        "import json, sys\n"
+        f"sys.path.insert(0, {str(helper)!r})\n"
+        "from install import upstream\n"
+        "from inspect_model import root_variants, variant_label\n"
+        "files = json.loads(sys.argv[1])\n"
+        "targets = root_variants(files, upstream)\n"
+        "label = lambda t: variant_label('o/M-GGUF', t, len(targets), upstream, files)\n"
+        "print(json.dumps([[label(t), list(t.files)] for t in targets]))\n"
+    )
+    parts = [f"M-Q8_0-0000{k}-of-00002.gguf" for k in (1, 2)]
+
+    def listed(files: list[str]) -> list[list[object]]:
+        result = subprocess.run(
+            [sys.executable, "-c", script, json.dumps(files)],
+            env={"PYTHONPATH": str(reference), "PATH": "/usr/bin:/bin"},
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)  # type: ignore[no-any-return]
+
+    assert listed([*parts, "M-Q4_K_M.gguf", "mmproj-BF16.gguf"]) == [
+        ["Q4_K_M", ["M-Q4_K_M.gguf"]],
+        ["Q8_0", parts],
+    ]
+    # Alone in the repository, the split GGUF is asked for by the bare ID.
+    assert listed(parts) == [["M-Q8_0", parts]]
+    # The merge beside its parts is the one Splash takes.
+    assert listed([*parts, "M-Q8_0.gguf", "M-Q4_K_M.gguf"]) == [
+        ["Q4_K_M", ["M-Q4_K_M.gguf"]],
+        ["Q8_0", ["M-Q8_0.gguf"]],
+    ]
 
 
 def test_a_lone_root_gguf_beside_split_folders_gets_a_variant_splash_resolves():
@@ -453,7 +506,9 @@ def test_a_lone_root_gguf_beside_split_folders_gets_a_variant_splash_resolves():
         "from install import upstream\n"
         "from inspect_model import variant_label\n"
         "files = json.loads(sys.argv[1])\n"
-        "label = variant_label('owner/Model-GGUF', files[0], [files[0]], upstream, files)\n"
+        "from inspect_model import root_variants\n"
+        "[target] = root_variants(files, upstream)\n"
+        "label = variant_label('owner/Model-GGUF', target, 1, upstream, files)\n"
         "print(json.dumps([label, upstream.select_gguf(files, label)[0]]))\n"
     )
     result = subprocess.run(
@@ -793,18 +848,15 @@ def test_a_split_repository_lists_each_variant_folder_with_its_parts(hub_harness
     ]
 
 
-def test_a_root_mtp_head_is_no_variant_and_shadows_its_folder(hub_harness):
-    """unsloth keeps `mtp-Qwen3.8-Flash-Next-Q8_0.gguf` at its root, which Splash's
-    selection takes for :Q8_0 before the Q8_0/ folder: the head is never listed,
-    and the folder is reported unloadable with the file Splash would take."""
+def test_a_root_mtp_head_is_no_variant_and_no_longer_hides_its_folder(hub_harness):
+    """unsloth keeps `mtp-Qwen3.8-Flash-Next-Q8_0.gguf` at its root. The head is never
+    listed, and from Splash 1.6.0 the Q8_0/ folder comes before a root file whose
+    name only ends in -Q8_0, so the folder installs (1.5.0 took the head for :Q8_0)."""
     result = inspect(hub_harness(), FLASH_NEXT_UNSLOTH)
     by = {v["name"]: v for v in result["variants"]}
     assert set(by) == {"UD-Q2_K_XL", "Q8_0"}
     assert by["UD-Q2_K_XL"]["loadable"] is True
-    assert by["Q8_0"]["loadable"] is False
-    assert by["Q8_0"]["reason"] == (
-        "Splash takes mtp-Qwen3.8-Flash-Next-Q8_0.gguf for :Q8_0, not the files in Q8_0/"
-    )
+    assert by["Q8_0"]["loadable"] is True and not by["Q8_0"].get("reason")
     assert result["recommended_variant"] == "UD-Q2_K_XL"
 
 
@@ -830,7 +882,8 @@ def test_the_catalog_lists_flash_next_as_gguf_only(hub_harness):
     assert {v["name"] for v in ista["variants"]} == {"Q2_0", "IQ2_XS"}
     assert ista["download_bytes"], "the draft's size is known, so the total is"
     unsloth = {v["name"]: v for v in rows[FLASH_NEXT_UNSLOTH]["variants"]}
-    assert unsloth["Q8_0"]["loadable"] is False and "mtp-" in unsloth["Q8_0"]["reason"]
+    # Splash 1.6.0 takes the Q8_0/ folder before the root MTP head.
+    assert unsloth["Q8_0"]["loadable"] is not False and not unsloth["Q8_0"].get("reason")
 
 
 def test_the_catalog_s_selection_rules_match_splash_s(tmp_path):

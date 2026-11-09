@@ -69,7 +69,8 @@ def test_engine_recovering(make_engine):
     fake = make_engine()
     fake.set_mode("engine_recovering")
     status, headers, body = fake.request("POST", "/v1/chat/completions", chat_body())
-    assert status == 503 and headers["Retry-After"] == "1"
+    # 1.6.0: the time the restart should take, not a fixed 1 s.
+    assert status == 503 and headers["Retry-After"] == "5"
     error = json.loads(body)["error"]
     assert error["code"] == "engine_recovering" and error["type"] == "server_error"
     assert error["message"].startswith("engine is recovering; retry shortly (last failure: ")
@@ -90,7 +91,7 @@ def test_engine_failed(make_engine):
     fake.set_mode("engine_failed")
     status, error = fake.json("POST", "/v1/chat/completions", chat_body())
     assert status == 500 and error["error"]["code"] == "engine_failed"
-    assert "Splash stopped restarting it" in error["error"]["message"]
+    assert "Splash stopped restarting the engine: it failed 6 times in a row" in error["error"]["message"]
     transport = fake.json("GET", "/status")[1]["transport"]
     assert transport["stopped"] is True and transport["recovering"] is False
     fake.wait_for_line("Engine stopped · ", stream="stderr")

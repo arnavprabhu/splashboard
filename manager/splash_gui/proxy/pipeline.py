@@ -102,6 +102,14 @@ ERROR_ALERTS = {
         "Engine stopped after repeated failures",
         "Restart the engine",
     ),
+    # Splash 1.6.0: a request that was running at two engine failures in a row is
+    # refused (400) until the engine's server restarts.
+    "request_quarantined": (
+        "request_quarantined",
+        "A request crashed the engine twice and is now refused",
+        "Splash refuses that request until the engine restarts. Change the request, or "
+        "restart the engine to try it again.",
+    ),
     # A long request's KV on the SSD cache (Qwen3.8-Flash-Next).
     "kv_disk_quota": (
         "kv_disk_quota",
@@ -956,7 +964,7 @@ class ProxyPipeline:
         if entry is not None:
             condition, title, message = entry
             actions = []
-            if condition == "engine_failed":
+            if condition in ("engine_failed", "request_quarantined"):
                 from ..events.alerts import RESTART_ACTION
 
                 actions = [RESTART_ACTION]

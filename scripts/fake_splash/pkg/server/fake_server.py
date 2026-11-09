@@ -37,10 +37,8 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import fake_text, json_codec, serve_options
 from .errors import (
-    ANTHROPIC_ERRORS,
     OPENAI_ERRORS,
     RETRY_STATUSES,
-    SYSTEMONE_ERRORS,
     APIError,
     ContextLengthError,
     ErrorDialect,
@@ -55,6 +53,8 @@ from .fake_engine import (
     write_stderr_line,
 )
 from .fake_shapes import (
+    ANTHROPIC_ERRORS,
+    SYSTEMONE_ERRORS,
     BlockSequencer,
     FakeJob,
     NativeResult,
@@ -77,6 +77,8 @@ from .origins import ANY_ORIGIN
 
 POST_ROUTES = (
     "/v1/chat/completions",
+    # server/server.py ROUTES (1.6.0): a Chat request's prompt tokens, no inference.
+    "/v1/chat/completions/count_tokens",
     "/v1/completions",
     "/v1/responses",
     "/v1/messages",
@@ -89,6 +91,8 @@ POST_ROUTES = (
 )
 # server/server.py POST_ROUTES (1.3.2): the routes that take no fields.
 FIELDLESS_ROUTES = ("/v1/memory/release",)
+# server/output.py MAX_STOP_CHARACTERS (1.6.0).
+MAX_STOP_CHARACTERS = 16 * 1024
 PUBLIC_GET = ("/", "/index.html", "/favicon.ico", "/health", "/ready")
 
 
@@ -662,7 +666,7 @@ class FakeHandler(BaseHTTPRequestHandler):
         if path not in POST_ROUTES:
             self._safe_error(APIError(404, "not found", "not_found"))
             return
-        count_tokens = path == "/v1/messages/count_tokens"
+        count_tokens = path in ("/v1/messages/count_tokens", "/v1/chat/completions/count_tokens")
         prompt_only = count_tokens or path in ("/tokenize", "/apply-template")
         systemone = path == "/v1/systemone"
         engine = self.engine
@@ -697,6 +701,7 @@ class FakeHandler(BaseHTTPRequestHandler):
                 "/v1/responses": self._responses,
                 "/v1/messages": self._messages,
                 "/v1/messages/count_tokens": self._count_tokens,
+                "/v1/chat/completions/count_tokens": self._chat_count_tokens,
                 "/tokenize": self._tokenize,
                 "/apply-template": self._apply_template,
                 "/v1/judgments": self._judgment,
@@ -767,7 +772,7 @@ class FakeHandler(BaseHTTPRequestHandler):
             raise APIError(400, "cache_salt must be a non-empty string")
         return salt
 
-    def _generation_options(self, body: dict) -> dict:
+    def _generation_options(self, body: dict, stop_field: str = "stop") -> dict:
         for name, (default, accepts, requirement) in SAMPLING_NUMBERS.items():
             value = body.get(name, default)
             if not is_finite_number(value) or not accepts(value):
@@ -776,14 +781,20 @@ class FakeHandler(BaseHTTPRequestHandler):
         if not isinstance(top_k, int) or isinstance(top_k, bool) or top_k < -1:
             raise APIError(400, "top_k must be 0 or -1 (disabled) or a positive integer")
         stop = body.get("stop")
-        if stop in (None, []):
+        if stop is None:
             stops: tuple[str, ...] = ()
         elif isinstance(stop, str) and stop:
             stops = (stop,)
-        elif isinstance(stop, list) and 1 <= len(stop) <= 4 and all(isinstance(s, str) and s for s in stop):
+        elif isinstance(stop, list) and all(isinstance(s, str) and s for s in stop):
             stops = tuple(stop)
         else:
             raise APIError(400, "stop must be a string or up to four strings")
+        # frontend.py (1.6.0): Splash's limits on stops, for every API; errors
+        # name the API's own field.
+        if len(stops) > 4:
+            raise APIError(400, f"{stop_field} must be up to four strings")
+        if any(len(value) > MAX_STOP_CHARACTERS for value in stops):
+            raise APIError(400, f"each of {stop_field} must be at most {MAX_STOP_CHARACTERS} characters")
         if body.get("logit_bias") not in (None, {}):
             raise APIError(400, "logit_bias is not supported")
         ignore_eos = body.get("ignore_eos", False)
@@ -878,9 +889,16 @@ class FakeHandler(BaseHTTPRequestHandler):
             "thinking": enable is not False and effort != "none",
         }
 
-    def _chat_job(self, body: dict, *, output_field: str | None, thinking_display: str = "summarized") -> FakeJob:
+    def _chat_job(
+        self,
+        body: dict,
+        *,
+        output_field: str | None,
+        thinking_display: str = "summarized",
+        stop_field: str = "stop",
+    ) -> FakeJob:
         """frontend.py Frontend._prepare for a Chat-shaped body."""
-        options = self._generation_options(body)
+        options = self._generation_options(body, stop_field)
         n, logprobs = body.get("n", 1), body.get("logprobs")
         if (
             not isinstance(n, int)
@@ -1508,6 +1526,14 @@ class FakeHandler(BaseHTTPRequestHandler):
         if body["messages"][-1].get("role") == "assistant":
             raise APIError(400, "a final assistant message (prefill) is not supported; end messages with a user turn")
         chat.update(max_completion_tokens=max_tokens)
+        # dialects/anthropic.py _stop_sequences (1.6.0): an array of strings that
+        # each hold a character other than whitespace; a single string gets 400.
+        stops = body.get("stop_sequences")
+        if stops is not None:
+            if not isinstance(stops, list) or not all(isinstance(stop, str) for stop in stops):
+                raise APIError(400, "stop_sequences must be an array of strings")
+            if not all(stop.strip() for stop in stops):
+                raise APIError(400, "each of stop_sequences must contain non-whitespace")
         for source, target in (
             ("stop_sequences", "stop"),
             ("temperature", "temperature"),
@@ -1520,7 +1546,7 @@ class FakeHandler(BaseHTTPRequestHandler):
         ):
             if body.get(source) is not None:
                 chat[target] = body[source]
-        job = self._chat_job(chat, output_field="max_tokens", thinking_display=display)
+        job = self._chat_job(chat, output_field="max_tokens", thinking_display=display, stop_field="stop_sequences")
         job.return_progress = progress
         if stream:
             self._anthropic_stream(job, deadline)
@@ -1653,6 +1679,17 @@ class FakeHandler(BaseHTTPRequestHandler):
         thinking = self._thinking(chat)
         messages = self._normalize_messages(chat["messages"])
         rendered = fake_text.render_chat(messages, tools=chat.get("tools"), thinking=thinking)
+        self._json(200, {"input_tokens": len(rendered.tokens)})
+
+    def _chat_count_tokens(self, body: dict, deadline: float) -> None:
+        """dialects/openai.py post_chat_count_tokens (1.6.0)."""
+        self._check_model(body)
+        thinking = self._reasoning(body).pop("thinking")
+        messages = self._normalize_messages(body.get("messages"))
+        tools = body.get("tools")
+        if tools is not None and not isinstance(tools, list):
+            raise APIError(400, "tools must be an array")
+        rendered = fake_text.render_chat(messages, tools=tools, thinking=thinking)
         self._json(200, {"input_tokens": len(rendered.tokens)})
 
     def _tokenize(self, body: dict, deadline: float) -> None:

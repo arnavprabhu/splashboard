@@ -16,7 +16,7 @@ Environment knobs (all optional):
   FAKE_SPLASH_DL_DRAFT_BYTES   draft weights size (default 1M)
   FAKE_SPLASH_DL_VISION_BYTES  GGUF mmproj size (default 512K)
   FAKE_SPLASH_DL_COMMIT_SALT   changes every resolved commit (simulates updates)
-  FAKE_SPLASH_DL_FAIL          gated | network | network_mid | disk_full | incompatible
+  FAKE_SPLASH_DL_FAIL          gated | network | network_mid | disk_full | no_room | incompatible
   FAKE_SPLASH_DL_FAIL_AFTER    bytes written before network_mid/disk_full fail
   FAKE_SPLASH_VERIFY_FAIL      set: `verify` refuses the assembly (a changed source,
                                as after a bad download), so a job's auto-verify fails
@@ -73,7 +73,13 @@ ENTRY_STAGING = ".loading-"
 
 
 class ModelError(RuntimeError):
-    pass
+    """A refusal or failure the installers report without a traceback; `kind`
+    classes a Hub or network failure for the app (splash/install/hub.py
+    failure_kind, 1.6.0: "auth", "not_found" or "offline"), None for any other."""
+
+    def __init__(self, message: str, kind: str | None = None):
+        super().__init__(message)
+        self.kind = kind
 
 
 class VisionError(ModelError):
@@ -544,9 +550,6 @@ def draft_repo(selection: Selection, family) -> RemoteRepo:
     from . import signatures
 
     name = selection.draft_model or family.draft_repo
-    if name is None:
-        # upstream.py `_resolve_draft` for a family no draft is released for.
-        raise ModelError(f"no DFlash2 draft is released for {family.name}; name one with --draft-model")
     repo = RemoteRepo(name, _commit(name, None))
     repo.files += [
         _json_file("config.json", signatures.draft_config(family)),
@@ -778,10 +781,11 @@ def verify_assembly(link: Path, *, full: bool = False) -> dict:
     return record
 
 
-def _hub_failure(selection: Selection, why: str) -> ModelError:
+def _hub_failure(selection: Selection, why: str, kind: str | None = None) -> ModelError:
     return ModelError(
         f"cannot resolve {selection.repo_id}: {why}; neither this installation nor the "
-        f"Hub cache records a commit for {selection.revision or 'the default branch'}"
+        f"Hub cache records a commit for {selection.revision or 'the default branch'}",
+        kind,
     )
 
 
@@ -811,17 +815,19 @@ def prepare(selection: Selection) -> None:
             print(f"Reinstalling {selection.model}: {error}", flush=True)
     installed_commit: str = installed["sources"]["target"]["revision"] if installed else ""
 
-    unreachable = None
+    # hub.py failure_kind (1.6.0): how the app words the failure. The offline
+    # setting is no network failure, so it has no kind.
+    unreachable = failure_kind = None
     if offline:
         unreachable = "HF_HUB_OFFLINE is set"
     elif mode == "network":
-        unreachable = "[Errno 8] nodename nor servname provided, or not known"
+        unreachable, failure_kind = "[Errno 8] nodename nor servname provided, or not known", "offline"
     elif mode == "gated" and not os.environ.get("HF_TOKEN"):
-        unreachable = _gated_reason(selection.repo_id)
+        unreachable, failure_kind = _gated_reason(selection.repo_id), "auth"
 
     if unreachable is not None:
         if installed is None:
-            raise _hub_failure(selection, unreachable)
+            raise _hub_failure(selection, unreachable, failure_kind)
         if not offline:
             print(
                 f"Could not reach the Hub ({unreachable}); using the installed "
@@ -889,6 +895,14 @@ def _install(selection: Selection, family: Any, mode: str, context: str) -> None
     )
     throttle = Throttle(parse_size(os.environ.get("FAKE_SPLASH_DL_BPS"), 64 << 20))
     weights = [item for item in target.files if item.lfs]
+    if mode == "no_room":
+        # hub.py _require_room (1.6.0): a download its volume has no room for is
+        # refused before it starts.
+        needed = sum(item.size for item in weights)
+        raise ModelError(
+            f"{context}: not enough disk space for {target.name}: the download needs "
+            f"{needed / 1e9:.2f} GB and 0.00 GB is available in {target.folder}"
+        )
     default_after = (weights[0].size // 2) if weights else 1
     failure = Failure(mode, parse_size(os.environ.get("FAKE_SPLASH_DL_FAIL_AFTER"), default_after))
     target_paths = download(target, selection.revision, throttle, failure, context)
@@ -944,6 +958,11 @@ def main(argv: list[str] | None = None) -> int:
             verify_assembly(selection.link, full=args.full)
             print(f"Splash model {args.model} preflight passed ({'full' if args.full else 'quick'}).")
     except (ModelError, OSError) as error:
+        if args.command == "prepare":
+            # 1.6.0: the app and the launcher word the failure by this event,
+            # beside any progress and messages.
+            kind = error.kind if isinstance(error, ModelError) else None
+            print(json.dumps({"event": "error", "kind": kind, "message": str(error)}), flush=True)
         print(f"error: {error}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:

@@ -32,8 +32,7 @@ def splash(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_release_is_1_5_0_and_clients_py_is_verbatim():
-    assert json.loads((PKG / "release.json").read_text())["version"] == "1.5.0"
+def test_clients_py_is_verbatim():
     upstream = PKG.parents[2] / "splash" / "install" / "clients.py"
     if upstream.is_file():
         assert (PKG / "install" / "clients.py").read_bytes() == upstream.read_bytes()

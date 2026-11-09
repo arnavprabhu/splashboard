@@ -364,6 +364,7 @@ AlertCondition = Literal[
     "disk_write_budget",
     "kv_disk_quota",
     "expert_streaming_failed",
+    "request_quarantined",
     "queue_full",
     "mask_timeout",
     "download_failed",
@@ -1207,6 +1208,8 @@ class DownloadError(ApiModel):
         "verify_failed",
         "installer_failed",
         "cancelled",
+        # Hugging Face has no such repository (Splash 1.6.0 says so itself).
+        "not_found",
     ]
     message: str
     action: Literal["add_hf_token", "free_space", "retry", "go_offline"] | None = None

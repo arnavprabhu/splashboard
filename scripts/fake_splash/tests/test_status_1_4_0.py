@@ -57,7 +57,9 @@ def test_an_in_memory_target_streams_nothing():
     assert status["streamed_table"] is None and status["streamed_experts"] is None
     assert "kv_spill" not in status
     budget = status["memory_plan"]["budget"]
-    assert budget["kv_spill"] is None and budget["resident_kv_bytes"] == 0
+    assert budget["kv_spill"] is None
+    # 1.6.0 (schema 8) no longer reports the KV a request keeps resident beside a spill.
+    assert "resident_kv_bytes" not in budget
     assert budget["context_bounds"] == {
         "window": 262144,
         "resident": budget["context_bounds"]["resident"],

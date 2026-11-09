@@ -313,7 +313,7 @@ def test_ud_q8_k_xl_loads_and_only_a_whole_bf16_model_is_refused(monkeypatch, tm
     names = ["Qwen3.8-27B-UD-Q8_K_XL.gguf", "Qwen3.8-27B-BF16.gguf", "Qwen3.8-27B-Q4_0.gguf"]
     target = upstream._gguf_target(_GgufRepo(names), "UD-Q8_K_XL", True, tmp_path)
     assert target.format == "gguf" and "target/Qwen3.8-27B-UD-Q8_K_XL.gguf" in target.files
-    with pytest.raises(models.ModelError, match=r"stores every projection and expert unquantized \(BF16, F16"):
+    with pytest.raises(models.ModelError, match=r"stores its weights unquantized \(BF16, F16"):
         upstream._gguf_target(_GgufRepo(names), "BF16", True, tmp_path)
 
 

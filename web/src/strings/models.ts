@@ -99,12 +99,13 @@ export const modelsStrings = {
   "models.dl.error.disk_full_plain": "Not enough disk space.",
   "models.dl.error.failed": "Download failed: {message}",
   "models.dl.error.gated":
-    "This repository is gated or private. Add a Hugging Face token.",
+    "This repository is gated or private. Add a Hugging Face token for an account that can read it, or accept the model’s terms on its Hugging Face page.",
   "models.dl.error.hub_unreachable":
     "Hugging Face is unreachable. Check the connection and retry.",
   "models.dl.error.incompatible": "Splash’s installer rejected this model: {message}",
   "models.dl.error.interrupted":
     "The download was interrupted. Resume to continue.",
+  "models.dl.error.not_found": "Hugging Face has no repository with this ID. Check the model ID and download it again.",
   "models.dl.error.verify_failed": "Verification failed: {message}",
   "models.dl.eta": "{time} remaining",
   "models.dl.file_done": "Done",

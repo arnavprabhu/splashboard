@@ -3,8 +3,9 @@
 stdin: {"repo", "sha", "files": {name: size}, "variant", "first"?, "only"?}.
 stdout, one JSON object per line as soon as it is known:
   {"variants": [{name, files, size_bytes}], "first": NAME|null}   the table, at once;
-                                                                   a root GGUF, or a split
-                                                                   GGUF's parts in a folder
+                                                                   a root GGUF, a split
+                                                                   GGUF's parts at the root,
+                                                                   or its parts in a folder
                                                                    named after its variant;
   {"result": {name, compatible, ...}}                              one per variant checked.
 `first` (the variant the manager expects to recommend) is checked alone before the
@@ -33,33 +34,37 @@ def is_projector(name: str) -> bool:
 MTP = re.compile(r"(?:^|[-_.])mtp(?:[-_.]|$)", re.IGNORECASE)
 
 
-def variant_label(
-    repo_id: str, name: str, names: list[str], upstream: Any, files: Any = None
-) -> str:
-    """The shortest :VARIANT that Splash's own `select_gguf` resolves to `name`.
+def variant_label(repo_id: str, target: Any, listed: int, upstream: Any, files: Any) -> str:
+    """The shortest :VARIANT that Splash's own `select_gguf` resolves to `target`, a
+    root GGUF target (`upstream.root_targets`: one file, or a split GGUF's parts).
 
-    Splash strips the model name all root GGUFs share (`X-Q4_K_M` → `Q4_K_M`),
+    Splash strips the model name all root targets share (`X-Q4_K_M` → `Q4_K_M`),
     but one odd file (an `imatrix_*.gguf`) leaves nothing shared, so the label
-    is also tried without the repository's model name and as the full stem; the
-    first that Splash resolves to this file alone is the ID's VARIANT. `files`
-    is the whole repository as Splash lists it (`names` when not given): every
-    root GGUF counts in Splash's shared name, an MTP head too."""
-    files = names if files is None else files
-    roots = sorted(n for n in files if "/" not in n and n.endswith(".gguf") and not is_projector(n))
-    stem = Path(name).stem
+    is also tried without the repository's model name and as the full name; the
+    first that Splash resolves to this target alone is the ID's VARIANT. `files`
+    is the whole repository as Splash lists it: every root target counts in
+    Splash's shared name, an MTP head too. `listed` is how many root targets the
+    variant table shows."""
+    names = sorted({t.name for t in upstream.root_targets(files)})
+    stem = str(target.name)
+    try:
+        wanted = list(upstream.target_files(target))
+    except Exception:
+        # An incomplete split GGUF: no label selects it, and its check says why.
+        return stem
     model = re.sub(r"-gguf$", "", repo_id.split("/", 1)[-1], flags=re.IGNORECASE)
     labels = []
-    if len(names) == 1 and len(roots) <= 1:
-        # A lone root GGUF is asked for by its bare ID, unless variant folders sit
+    if listed == 1 and len(names) <= 1:
+        # A lone root target is asked for by its bare ID, unless variant folders sit
         # beside it: then it needs a :VARIANT, an ending Splash matches to it.
-        if not folder_variants(files):
+        if not folder_variants(files, upstream):
             return stem
         if stem.lower().startswith(model.lower() + "-"):
             labels.append(stem[len(model) + 1 :])
         words = stem.split("-")
         labels += ["-".join(words[i:]) for i in range(1, len(words))]
     else:
-        parts = [Path(n).stem.split("-") for n in roots or names]
+        parts = [n.split("-") for n in names]
         shared = len(os.path.commonprefix(parts))
         if shared:
             labels.append("-".join(stem.split("-")[shared:]))
@@ -67,32 +72,42 @@ def variant_label(
             labels.append(stem[len(model) + 1 :])
     labels.append(stem)
     for label in labels:
+        if not label:
+            continue
         try:
             chosen, _ = upstream.select_gguf(files, label)
         except Exception:  # noqa: S112 - not unique or not found: try the next label
             continue
-        if list(chosen) == [name]:
+        if list(chosen) == wanted:
             return label
     return stem
 
 
-def folder_variants(files: Any) -> dict[str, list[str]]:
+def root_variants(files: Any, upstream: Any) -> list[Any]:
+    """The root GGUF targets the variant table lists (`upstream.root_targets`): one
+    per name, the name's whole file before the split GGUF of that name, which
+    Splash takes first (`named_target`). An MTP head is never a variant, though
+    Splash's selection counts it."""
+    listed: dict[str, Any] = {}
+    for target in upstream.root_targets(files):
+        if MTP.search(target.name):
+            continue
+        if target.name not in listed or not target.split:
+            listed[target.name] = target
+    return list(listed.values())
+
+
+def folder_variants(files: Any, upstream: Any) -> dict[str, list[str]]:
     """Each split GGUF a repository keeps in a folder named after its variant
     (`Q2_0/MODEL-Q2_0-00001-of-00002.gguf` ...), which Splash installs as
-    :VARIANT (`upstream.split_gguf`): folder -> its GGUFs in split order."""
-    found: dict[str, list[str]] = {}
-    for name in files:
-        if name.count("/") != 1 or not name.endswith(".gguf"):
-            continue
-        if is_projector(name):
-            continue
-        found.setdefault(name.split("/", 1)[0], []).append(name)
+    :VARIANT (`upstream.folder_targets`, `split_gguf`): folder -> its GGUFs in
+    name order."""
     # An MTP head in a variant's folder is one of its files to Splash, which then
     # refuses the folder; a folder of MTP heads only is no variant.
     return {
-        folder: sorted(parts)
-        for folder, parts in sorted(found.items())
-        if not all(MTP.search(Path(part).stem) for part in parts)
+        target.name: list(target.files)
+        for target in upstream.folder_targets(files)
+        if not all(MTP.search(Path(part).stem) for part in target.files)
     }
 
 
@@ -183,28 +198,20 @@ def main() -> None:
             return io.BufferedReader(shared[name].reader(), BUFFER)
 
     repo = Repository(spec["repo"], spec["sha"], set(spec["files"]))
-    # An MTP head is never a variant, though Splash's selection counts it.
-    names = [
-        n
-        for n in spec["files"]
-        if "/" not in n
-        and n.endswith(".gguf")
-        and not is_projector(n)
-        and not MTP.search(Path(n).stem)
-    ]
-    variants = [
+    roots = root_variants(spec["files"], upstream)
+    variants: list[dict[str, Any]] = [
         {
-            "name": variant_label(spec["repo"], name, names, upstream, spec["files"]),
-            "files": [name],
-            "size_bytes": spec["files"][name],
+            "name": variant_label(spec["repo"], target, len(roots), upstream, spec["files"]),
+            "files": list(target.files),
+            "size_bytes": sum(spec["files"].get(part) or 0 for part in target.files),
         }
-        for name in names
+        for target in roots
     ]
     # A root variant of the same name is what Splash takes for it; the folder is not.
     taken = {v["name"].lower() for v in variants}
     folders = {
         folder: parts
-        for folder, parts in folder_variants(spec["files"]).items()
+        for folder, parts in folder_variants(spec["files"], upstream).items()
         if folder.lower() not in taken
     }
     variants += [
@@ -267,10 +274,11 @@ def main() -> None:
             # tool's manifest.json passes.
             models.refuse_package(spec["repo"], models.read_json(repo.file("manifest.json")))
         if choice in folders:
-            # Splash looks in VARIANT/ only when no root GGUF answers :VARIANT, and
-            # a root file such as an MTP head `mtp-MODEL-Q8_0.gguf` answers :Q8_0.
+            # Splash looks in VARIANT/ only when no root target is named for
+            # :VARIANT (`select_gguf`; from 1.6.0 the folder comes before a root
+            # file whose name only ends in -VARIANT, such as an MTP head).
             chosen, _ = upstream.select_gguf(repo.files, choice)
-            if list(chosen) != folders[choice]:
+            if sorted(chosen) != sorted(folders[choice]):
                 raise models.ModelError(
                     f"Splash takes {chosen[0]} for :{choice}, not the files in {choice}/"
                 )

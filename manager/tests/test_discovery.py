@@ -24,7 +24,7 @@ from splash_gui.engine.serve_options import (
 from .conftest import HAVE_SPLASH, LOOPBACK_CLIENT, SPLASH_PKG, write_script
 
 
-def fake_pkg(root: Path, version: str = "1.5.0", *, release: bool = True) -> Path:
+def fake_pkg(root: Path, version: str = "1.6.0", *, release: bool = True) -> Path:
     """A Homebrew-shaped keg: <root>/bin/splash wrapper + <root>/libexec package."""
     pkg = root / "libexec"
     (pkg / "server").mkdir(parents=True)
@@ -69,13 +69,14 @@ def test_parse_version(text: str, expected: tuple[int, int, int] | None) -> None
 @pytest.mark.parametrize(
     ("version", "support"),
     [
-        ((1, 5, 0), "supported"),
-        ((1, 5, 9), "supported"),
+        ((1, 5, 0), "too_old"),
+        ((1, 6, 0), "supported"),
+        ((1, 6, 9), "supported"),
         ((1, 4, 1), "too_old"),
         ((1, 4, 0), "too_old"),
         ((1, 3, 2), "too_old"),
         ((1, 3, 0), "too_old"),
-        ((1, 6, 0), "untested"),
+        ((1, 7, 0), "untested"),
         ((2, 0, 0), "untested"),
         ((1, 2, 1), "too_old"),
         ((1, 2, 0), "too_old"),
@@ -93,10 +94,10 @@ def test_too_old_banner_and_doctor_name_the_supported_range() -> None:
     old = d.EngineInfo(
         found=True, cli=Path("/opt/splash/bin/splash"), version="1.3.2", support="too_old"
     )
-    assert old.banner == "Splash 1.3.2 is older than 1.5.0; upgrade the engine"
-    assert d.SUPPORTED_RANGE == ">=1.5.0 <1.6.0"
+    assert old.banner == "Splash 1.3.2 is older than 1.6.0; upgrade the engine"
+    assert d.SUPPORTED_RANGE == ">=1.6.0 <1.7.0"
     check = engine_check(old)
-    assert check.status == "fail" and check.title.endswith("(Splashboard supports >=1.5.0 <1.6.0)")
+    assert check.status == "fail" and check.title.endswith("(Splashboard supports >=1.6.0 <1.7.0)")
 
 
 def test_brew_location_is_preferred(tmp_path: Path) -> None:
@@ -107,11 +108,11 @@ def test_brew_location_is_preferred(tmp_path: Path) -> None:
     cli = keg / "bin" / "splash"
     info = d.discover(
         env={"PATH": str(other.parent / "bin")},
-        runner=runner_for({str(cli): "Splash 1.5.0"}),
+        runner=runner_for({str(cli): "Splash 1.6.0"}),
         prefix=prefix,
     )
     assert info.found and info.source == "brew" and info.cli == cli
-    assert info.version == "1.5.0" and info.support == "supported" and info.banner is None
+    assert info.version == "1.6.0" and info.support == "supported" and info.banner is None
     assert info.pkg == pkg.resolve() or info.pkg == pkg
     assert info.python == info.pkg / "python" / "bin" / "python3"
     assert info.install_dir is not None and info.server_dir is not None
@@ -119,16 +120,16 @@ def test_brew_location_is_preferred(tmp_path: Path) -> None:
 
 
 def test_setting_overrides_everything(tmp_path: Path) -> None:
-    custom = fake_pkg(tmp_path / "custom", "1.6.1")
+    custom = fake_pkg(tmp_path / "custom", "1.7.1")
     cli = custom.parent / "bin" / "splash"
     info = d.discover(
         str(cli),
         env={"PATH": ""},
-        runner=runner_for({str(cli): "Splash 1.6.1"}),
+        runner=runner_for({str(cli): "Splash 1.7.1"}),
         prefix=tmp_path / "nothing",
     )
     assert info.source == "setting" and info.support == "untested"
-    assert info.banner == "GUI untested with Splash 1.6"
+    assert info.banner == "GUI untested with Splash 1.7"
 
 
 def test_env_override(tmp_path: Path) -> None:
@@ -136,7 +137,7 @@ def test_env_override(tmp_path: Path) -> None:
     cli = custom.parent / "bin" / "splash"
     info = d.discover(
         env={"PATH": "", d.REAL_SPLASH_ENV: str(cli)},
-        runner=runner_for({str(cli): "Splash 1.5.0"}),
+        runner=runner_for({str(cli): "Splash 1.6.0"}),
         prefix=None,
     )
     assert info.source == "env"
@@ -152,7 +153,7 @@ def test_path_lookup_skips_our_shim(tmp_path: Path) -> None:
     info = d.discover(
         env={"PATH": f"{shim_dir}:{marked_dir}:{real_cli.parent}"},
         shim_paths=(shim,),
-        runner=runner_for({str(real_cli): "Splash 1.5.0"}),
+        runner=runner_for({str(real_cli): "Splash 1.6.0"}),
         prefix=None,
     )
     assert info.found and info.source == "path" and info.cli == real_cli
@@ -170,7 +171,7 @@ def test_path_lookup_skips_the_installed_cli_entry_point(tmp_path: Path) -> None
     real_cli = real.parent / "bin" / "splash"
     info = d.discover(
         env={"PATH": f"{venv_bin}:{real_cli.parent}"},
-        runner=runner_for({str(real_cli): "Splash 1.5.0"}),
+        runner=runner_for({str(real_cli): "Splash 1.6.0"}),
         prefix=None,
     )
     assert info.found and info.cli == real_cli
@@ -200,7 +201,7 @@ def test_bad_setting_is_reported_and_skipped(tmp_path: Path) -> None:
     info = d.discover(
         str(tmp_path / "missing"),
         env={"PATH": str(cli.parent)},
-        runner=runner_for({str(cli): "Splash 1.5.0"}),
+        runner=runner_for({str(cli): "Splash 1.6.0"}),
         prefix=None,
     )
     assert info.source == "path"
@@ -208,10 +209,10 @@ def test_bad_setting_is_reported_and_skipped(tmp_path: Path) -> None:
 
 
 def test_version_falls_back_to_release_json(tmp_path: Path) -> None:
-    real = fake_pkg(tmp_path / "real", "1.5.0")
+    real = fake_pkg(tmp_path / "real", "1.6.0")
     cli = real.parent / "bin" / "splash"
     info = d.discover(env={"PATH": str(cli.parent)}, runner=runner_for({}), prefix=None)
-    assert info.version == "1.5.0"
+    assert info.version == "1.6.0"
 
 
 def test_source_checkout(tmp_path: Path) -> None:
@@ -243,7 +244,7 @@ def test_brew_prefix_runner_failure() -> None:
 def test_real_homebrew_engine() -> None:
     info = d.discover(env={"PATH": "/usr/bin:/bin"})
     assert info.found and info.source == "brew"
-    assert info.version is not None and info.version.startswith("1.5.")
+    assert info.version is not None and info.version.startswith("1.6.")
     assert info.pkg is not None and info.pkg.resolve() == SPLASH_PKG.resolve()
     assert info.python is not None and info.python.exists()
 
@@ -253,13 +254,13 @@ def test_real_homebrew_engine() -> None:
 
 def test_parse_helper_output_marks_unknown() -> None:
     options = parse_helper_output(
-        '{"version": "1.5.0", "errors": [], "options": ['
+        '{"version": "1.6.0", "errors": [], "options": ['
         '{"flag": "--max-context", "dest": "max_context", "default": null, "help": "ctx",'
         ' "action": "store", "source": "shared"},'
         '{"flag": "--shiny-new", "dest": "shiny_new", "default": false, "help": "new!",'
         ' "action": "store_true", "source": "shared"}]}'
     )
-    assert options.available and options.version == "1.5.0"
+    assert options.available and options.version == "1.6.0"
     assert [o.flag for o in options.unknown()] == ["--shiny-new"]
     assert options.by_flag()["--shiny-new"].takes_value is False
 
@@ -302,7 +303,7 @@ def test_helper_against_real_splash() -> None:
     assert flags["--kv-format"].choices == ["int8", "bf16"]
     assert flags["--queue-size"].default == 32
     assert flags["--api-key"].secret and flags["--api-key"].environment == "SPLASH_API_KEY"
-    # Splash 1.5.0 has no option the settings don't map; --model-dir and --mmproj are
+    # Splash 1.6.0 has no option the settings don't map (it adds none); --model-dir and --mmproj are
     # known (the GUI serves installed models only).
     for flag in ("--model-dir", "--mmproj"):
         assert flags[flag].known and flags[flag].source == "launcher", flag
@@ -321,11 +322,11 @@ def test_concurrent_reads_run_the_helper_once(monkeypatch: pytest.MonkeyPatch) -
         calls.append(engine)
         started.set()
         release.wait(5)
-        return EngineOptions(available=True, version="1.5.0")
+        return EngineOptions(available=True, version="1.6.0")
 
     monkeypatch.setattr(serve_options, "run_helper", slow_helper)
     cache = EngineOptionsCache()
-    info = d.EngineInfo(found=True, cli=Path("/opt/splash/bin/splash"), version="1.5.0")
+    info = d.EngineInfo(found=True, cli=Path("/opt/splash/bin/splash"), version="1.6.0")
     results: list[EngineOptions] = []
     readers = [threading.Thread(target=lambda: results.append(cache.get(info))) for _ in range(3)]
     readers[0].start()

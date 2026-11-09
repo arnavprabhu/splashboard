@@ -341,12 +341,12 @@ def test_doctor_names_the_splash_app_and_a_release_mismatch(
 ) -> None:
     harness = harness_factory(installed=())
     assert doctor_check(harness) is None, "no app, no line"
-    monkeypatch.setattr(desktop_app, "CANDIDATES", (make_app(tmp_path / "same", "1.5.0"),))
+    monkeypatch.setattr(desktop_app, "CANDIDATES", (make_app(tmp_path / "same", "1.6.0"),))
     same = doctor_check(harness)
     assert same is not None and same["status"] == "ok"
     assert "the same release as the engine" in same["message"]
     monkeypatch.setattr(desktop_app, "CANDIDATES", (make_app(tmp_path / "old", "1.4.1"),))
     old = doctor_check(harness)
     assert old is not None and old["status"] == "warn"
-    assert "Splash app 1.4.1 and the Splash 1.5.0 engine" in old["message"]
+    assert "Splash app 1.4.1 and the Splash 1.6.0 engine" in old["message"]
     assert "brew upgrade --cask incoai/tap/splash-app" in old["fix"]

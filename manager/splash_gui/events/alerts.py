@@ -53,6 +53,9 @@ SEVERITY: dict[str, Severity] = {
     # A routed expert could not be read from the SSD: every later request fails
     # until the engine restarts.
     "expert_streaming_failed": "critical",
+    # Splash refuses a request that was running at two engine failures in a row,
+    # until the engine's server restarts (Splash 1.6.0).
+    "request_quarantined": "warn",
     "queue_full": "warn",
     "mask_timeout": "info",
     "download_failed": "warn",
@@ -77,7 +80,14 @@ NOTIFICATION_SETTING: dict[str, str] = {
 # Conditions that are banner-only. A spent write budget is routine (it refills
 # through the day), so it never notifies.
 BANNER_ONLY = frozenset(
-    {"memory_warning", "schema_unrecognized", "mask_timeout", "disk_write_budget"}
+    {
+        "memory_warning",
+        "schema_unrecognized",
+        "mask_timeout",
+        "disk_write_budget",
+        # The client that sent the request has the refusal itself.
+        "request_quarantined",
+    }
 )
 _RANK = {"critical": 0, "warn": 1, "info": 2}
 

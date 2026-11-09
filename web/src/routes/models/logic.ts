@@ -222,6 +222,8 @@ export function downloadErrorView(item: Pick<DownloadItem, 'error'>, installed: 
       return { text: t('models.dl.error.verify_failed', { message }), actions: ['full_verify', 'redownload', 'remove'] };
     case 'cancelled':
       return { text: t('models.dl.error.interrupted'), actions: ['resume', 'remove'] };
+    case 'not_found':
+      return { text: t('models.dl.error.not_found'), actions: ['details', 'remove'] };
     case 'installer_failed':
     default: {
       const actions: DownloadAction[] = ['retry', 'details', 'remove'];

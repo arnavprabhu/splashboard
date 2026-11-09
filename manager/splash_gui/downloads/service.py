@@ -11,7 +11,6 @@ import contextlib
 import json
 import logging
 import os
-import shutil
 import signal
 import time
 import uuid
@@ -39,6 +38,7 @@ from ..models.service import valid_id
 from ..paths import splash_models_dir, write_atomic
 from ..schemas import DownloadError, DownloadFile, DownloadItem, DownloadRequest, ModelsChangedEvent
 from ..settings.parsers import split_model_id
+from ..system import diskspace
 from ..units import format_bytes
 from ..usage.db import iso
 from .ranged import Fallback, RangeDownloader, Remote, is_candidate, partial_progress
@@ -113,6 +113,38 @@ def installer_progress(line: str) -> tuple[str, int, int] | None:
         return None
     assert isinstance(done, int) and isinstance(total, int)
     return repo, min(done, total), total
+
+
+def installer_failure(line: str) -> tuple[str | None, str] | None:
+    """The installer's own account of why `prepare` failed (Splash 1.6.0,
+    install/models.py `main`): `{"event": "error", "kind": K, "message": M}` →
+    (K, M), K one of "auth", "not_found", "offline" or None (install/hub.py
+    `failure_kind`); None for any other line."""
+    if not line.startswith("{"):
+        return None
+    try:
+        event = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(event, dict) or event.get("event") != "error":
+        return None
+    kind, message = event.get("kind"), event.get("message")
+    if not isinstance(message, str):
+        return None
+    return (kind if isinstance(kind, str) else None), message
+
+
+# How Splash classes a Hub or network failure → the download's error code.
+FAILURE_KINDS = {"auth": "gated", "offline": "hub_unreachable", "not_found": "not_found"}
+
+
+class InstallerFailed(RuntimeError):
+    """The installer exited with an error: its last lines, and how Splash classed
+    the failure when it said."""
+
+    def __init__(self, message: str, kind: str | None = None) -> None:
+        super().__init__(message)
+        self.kind = kind
 
 
 class Downloads:
@@ -271,7 +303,7 @@ class Downloads:
         self.progress(item)
         directory = self.state.settings.models_dir()
         directory.mkdir(parents=True, exist_ok=True)
-        free = shutil.disk_usage(directory).free
+        free = diskspace.free_bytes(directory)
         required = (item.bytes_total or 0) - item.bytes_done + 2 * 1024**3
         if free < required:
             # Not queued: forget its blob map too, or every later cancel would look up
@@ -579,14 +611,21 @@ class Downloads:
         self.processes[item.id] = proc
 
         self.reported.pop(item.id, None)
+        failure: tuple[str | None, str] | None = None
 
         async def read() -> None:
+            nonlocal failure
             assert proc.stdout
             async for line in proc.stdout:
                 text = line.decode(errors="replace").rstrip()
                 if (reported := installer_progress(text)) is not None:
                     repo, done, total = reported
                     self.reported.setdefault(item.id, {})[repo] = (done, total)
+                    continue
+                if (failed := installer_failure(text)) is not None:
+                    # The installer prints the same message as "error: …" too,
+                    # which the log keeps; the event says how to class it.
+                    failure = failed
                     continue
                 token = self.state.models.hf.token()
                 if token:
@@ -600,8 +639,10 @@ class Downloads:
             if proc.returncode or any(
                 "Warning: keeping the installed" in line for line in item.log_tail
             ):
-                raise RuntimeError(
-                    "\n".join(item.log_tail[-8:]) or f"Installer exited {proc.returncode}"
+                raise InstallerFailed(
+                    "\n".join(item.log_tail[-8:])
+                    or (failure[1] if failure else f"Installer exited {proc.returncode}"),
+                    failure[0] if failure else None,
                 )
         finally:
             if proc.returncode is None:
@@ -657,7 +698,7 @@ class Downloads:
             raise
         except Exception as error:
             message = str(error)
-            item.error = self.classify(item, message)
+            item.error = self.classify(item, message, getattr(error, "kind", None))
             item.state = "failed"
             self.state.alerts.raise_alert(
                 "download_failed",
@@ -681,6 +722,7 @@ class Downloads:
         "installer_failed": "retry",
         "verify_failed": "retry",
         "incompatible": None,
+        "not_found": None,
     }
     _UNREACHABLE = (
         "connection",
@@ -691,9 +733,13 @@ class Downloads:
         "offline",
     )
 
-    def classify(self, item: DownloadItem, message: str) -> DownloadError:
+    def classify(self, item: DownloadItem, message: str, kind: str | None = None) -> DownloadError:
+        """`kind` is Splash's own class of a Hub failure (1.6.0), which decides
+        before the message's words do."""
         lower = message.lower()
-        if any(x in message for x in ("401", "403")) or "gated" in lower:
+        if kind in FAILURE_KINDS:
+            code = FAILURE_KINDS[kind]
+        elif any(x in message for x in ("401", "403")) or "gated" in lower:
             code = "gated"
         elif "space" in lower or "errno 28" in lower:
             code = "disk_full"
@@ -707,7 +753,7 @@ class Downloads:
         if code == "disk_full":
             needed = max(0, (item.bytes_total or 0) - item.bytes_done) + 2 * 1024**3
             with contextlib.suppress(OSError):
-                free = shutil.disk_usage(self.state.settings.models_dir()).free
+                free = diskspace.free_bytes(self.state.settings.models_dir())
         return DownloadError.model_validate(
             {
                 "code": code,

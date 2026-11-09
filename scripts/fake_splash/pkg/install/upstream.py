@@ -1,11 +1,13 @@
 # Derived from Splash (github.com/incoai/splash, Apache-2.0), modified by the Splashboard authors.
 # See LICENSE.splash and NOTICE in scripts/fake_splash.
-"""Small compatibility stand-in for splash/install/upstream.py (1.4.1).
+"""Small compatibility stand-in for splash/install/upstream.py (1.6.0).
 
 Mirrors its `Target`, `check_model` and the screening order of
-`inspect_target(repo, variant, language_only, scratch)`: a GGUF's variant must be
-selected (one root file, or a split GGUF's parts in a folder named after the
-variant) and loadable, a safetensors checkpoint must be quantized in a format the
+`inspect_target(repo, variant, language_only, scratch)`; the GGUF target selection
+(`root_ggufs` to `split_order`) is copied from it, with type annotations added: a
+GGUF's variant must be selected (one root file, a split GGUF's parts at the root,
+or a split GGUF's parts in a folder named after the variant) and loadable, a
+safetensors checkpoint must be quantized in a format the
 kernels hold (MLX's, or NVFP4 or FP8 from Model Optimizer or compressed-tensors) and
 be of a family that loads one, and vision needs a usable projector. The real
 `check_model` runs the engine's `model-check`; the fake has no engine, so
@@ -32,12 +34,13 @@ class Target:
     format: str
     vision_format: str
     config: Path
-    gguf_metadata: Path | None
+    # The directory of a GGUF's headers (1.6.0; its scalar metadata as a file before).
+    gguf_headers: Path | None
     family: families.ModelFamily
     files: dict[str, str]
 
 
-def check_model(target_format, vision_format, config, *, gguf_metadata=None, draft=None):
+def check_model(target_format, vision_format, config, *, gguf_headers=None, draft=None):
     """The family the "engine" finds config (a path) to describe. A family that
     loads from a GGUF only refuses any other target with the engine's words
     (ModelDescriptor.mm describeSourceModel)."""
@@ -84,74 +87,190 @@ def select_vision(repo):
 
 
 def root_ggufs(files):
-    """The GGUF files at a repository's root; a subfolder's count only as a split
-    GGUF's parts in its VARIANT/ folder (split_gguf)."""
+    """The GGUF files at a repository's root, named *.gguf as the native
+    loader finds a target. Files in a subfolder count only as the parts of a
+    split GGUF in its VARIANT/ folder (split_gguf); others (MTP heads) never
+    do."""
     return sorted(n for n in files if "/" not in n and n.endswith(".gguf"))
 
 
 def projector_named(name):
+    """Whether a root GGUF is named as a vision projector: mmproj-*.gguf, or
+    MODEL-mmproj-*.gguf as Prism ML names theirs."""
     return "mmproj" in Path(name).stem.lower()
-
-
-def select_gguf(files, variant):
-    """The target GGUF among a repository's root files, as the list of its files
-    (one, or a split GGUF's parts, split_gguf), and whether it was taken by its
-    -VARIANT ending from several (mirrors splash/install/upstream.py select_gguf).
-
-    :VARIANT names the file whose name is the model name all of them share, then
-    -VARIANT; failing that, the only file whose name ends in -VARIANT; failing that,
-    the split GGUF in a VARIANT/ folder. Without :VARIANT, the only target GGUF.
-    """
-    candidates = [n for n in root_ggufs(files) if not projector_named(n)]
-    if variant is None:
-        if len(candidates) == 1:
-            return [candidates[0]], False
-        choice = "select a GGUF with OWNER/REPO:VARIANT"
-    else:
-        parts = [Path(name).stem.split("-") for name in candidates]
-        shared = len(os.path.commonprefix(parts))
-        exact = [
-            name
-            for name, words in zip(candidates, parts, strict=True)
-            if "-".join(words[shared:]).lower() == variant.lower()
-        ]
-        if len(exact) == 1:
-            return [exact[0]], False
-        ending = [n for n in candidates if Path(n).stem.lower().endswith("-" + variant.lower())]
-        if len(ending) == 1:
-            return [ending[0]], len(candidates) > 1
-        choice = "no single GGUF matches :" + variant
-        if split := split_gguf(files, variant):
-            return split, False
-    listed = ", ".join(candidates) or "none"
-    raise models.ModelError(f"{choice} (files in the repository root: {listed})")
 
 
 SPLIT_NAME = re.compile(r"-(\d{5})-of-(\d{5})\.gguf$")
 
 
-def split_gguf(files, variant):
-    """The parts of the split GGUF a repository keeps in a folder named after its
-    variant, in split order; None when there is no such folder."""
-    prefix = variant.lower() + "/"
-    names = [
-        n
-        for n in files
-        if n.lower().startswith(prefix) and n.count("/") == 1 and n.endswith(".gguf") and not projector_named(n)
-    ]
-    if not names:
+def model_of(name):
+    """The model a GGUF file holds, by which :VARIANT names a target: its
+    name without .gguf and, for a split GGUF's part, without
+    -0000K-of-0000N."""
+    match = SPLIT_NAME.search(name)
+    return name[: match.start()] if match else name.removesuffix(".gguf")
+
+
+def target_of(name):
+    """The target a GGUF file is one of, by which a repository root's files
+    group into targets, remote and local alike: its model (model_of), and
+    whether it is a split GGUF's part. A whole file is a target of its own,
+    apart from any split parts of its model, such as the file they merge
+    into."""
+    return model_of(name), SPLIT_NAME.search(name) is not None
+
+
+@dataclass(frozen=True)
+class GgufTarget:
+    """A GGUF target among a repository's files, which :VARIANT selects by
+    its name: one file or a split GGUF's parts at the root (root_targets), or
+    a split GGUF's parts in a folder of its own (folder_targets)."""
+
+    # Its model's name (model_of) at the root; its folder's name in a folder.
+    name: str
+    # Whether its files are a split GGUF's parts: a root target's named
+    # NAME-0000K-of-0000N (target_of), and a folder's always, as a folder
+    # holds a split GGUF's parts by convention.
+    split: bool
+    # Its files, in name order, which is a whole split GGUF's split order.
+    files: tuple[str, ...]
+
+    def __str__(self):
+        """How a list of targets names it: X, or X (split, N parts)."""
+        if not self.split:
+            return self.name
+        count = len(self.files)
+        return f"{self.name} (split, {count} part{'' if count == 1 else 's'})"
+
+
+def root_targets(files):
+    """The GGUF targets at a repository's root (target_of), in name order, a
+    whole file before the split GGUF of its name. Vision projectors are never
+    targets."""
+    targets: dict[tuple[str, bool], list[str]] = {}
+    for name in root_ggufs(files):
+        if not projector_named(name):
+            targets.setdefault(target_of(name), []).append(name)
+    return [GgufTarget(model, split, tuple(names)) for (model, split), names in sorted(targets.items())]
+
+
+def folder_targets(files):
+    """The split GGUFs a repository keeps in folders named after their
+    variants, as repositories publish the files too large for one
+    (VARIANT/MODEL-VARIANT-00001-of-0000N.gguf ...): each folder's GGUF files
+    but vision projectors, in name order. :VARIANT names a folder whatever
+    its case, so folders whose names differ in case alone are one target,
+    named as the first is."""
+    targets: dict[str, tuple[str, list[str]]] = {}
+    for name in sorted(files):
+        folder, _, file = name.partition("/")
+        if file and "/" not in file and file.endswith(".gguf") and not projector_named(file):
+            targets.setdefault(folder.lower(), (folder, []))[1].append(name)
+    return [GgufTarget(folder, True, tuple(names)) for folder, names in sorted(targets.values())]
+
+
+def target_files(target):
+    """The files of a root target (root_targets) as the native loader reads
+    them: its one file, or its split GGUF's parts, all present, in split
+    order."""
+    if not target.split:
+        return list(target.files)
+    return split_order(target.files, f"the split GGUF {target.name}")
+
+
+def select_gguf(files, variant):
+    """The target GGUF among a repository's targets, as the list of its files
+    in split order (target_files; split_gguf), and whether it was taken by
+    its -VARIANT ending from several targets, which the caller reports.
+    :VARIANT names, in this order: the root target (root_targets) whose name
+    is the model name all of them share, then -VARIANT (X-Q4_K_M for Q4_K_M,
+    not X-UD-Q4_K_M); the folder named VARIANT (split_gguf); the only root
+    target whose name ends in -VARIANT. A repository of one root name and no
+    folder names no variant apart from its model, so its one match needs no
+    report. Without :VARIANT, the root targets' only name. A name selects
+    its target by named_target. Anything else is an error listing every
+    target :VARIANT can select, root targets then folders."""
+    targets = root_targets(files)
+    names = sorted({target.name for target in targets})
+    if variant is None:
+        if target := named_target(targets, names):
+            return target_files(target), False
+        choice = "select a GGUF with OWNER/REPO:VARIANT"
+    else:
+        words = [name.split("-") for name in names]
+        shared = len(os.path.commonprefix(words))
+        exact = [
+            name for name, own in zip(names, words, strict=True) if "-".join(own[shared:]).lower() == variant.lower()
+        ]
+        if target := named_target(targets, exact):
+            return target_files(target), False
+        if split := split_gguf(files, variant):
+            return split, False
+        suffix = "-" + variant.lower()
+        ending = [name for name in names if name.lower().endswith(suffix)]
+        if target := named_target(targets, ending):
+            several = len(names) + len(selectable_folders(files)) > 1
+            return target_files(target), several
+        choice = "no single GGUF matches :" + variant
+    listed = ", ".join(map(str, targets + selectable_folders(files))) or "none"
+    raise models.ModelError(f"{choice} (GGUF targets: {listed})")
+
+
+def named_target(targets, names):
+    """The root target (root_targets) that names, distinct names of root
+    targets, select when they are one name: the name's whole file before the
+    split GGUF of that name, as both hold one model, a merge and its parts;
+    None for no name or several. :VARIANT selects by the names it matches,
+    and a repository or a local directory without one by all of its root
+    targets' names."""
+    if len(names) != 1:
         return None
-    return split_order(names, f"the split GGUF in {variant}/")
+    [name] = names
+    return min((t for t in targets if t.name == name), key=lambda t: t.split)
+
+
+def selectable_folders(files):
+    """The folder targets (folder_targets) :VARIANT selects (split_gguf):
+    those whose files are one whole split GGUF, not an incomplete one, nor a
+    folder of other GGUF files such as an MTP head."""
+    selectable = []
+    for target in folder_targets(files):
+        try:
+            split_gguf(files, target.name)
+        except models.ModelError:
+            continue
+        selectable.append(target)
+    return selectable
+
+
+def split_gguf(files, variant):
+    """The parts of the split GGUF a repository keeps in the folder :VARIANT
+    names (folder_targets), in split order; None when there is no such
+    folder. Every part from 1 to N must be present."""
+    for target in folder_targets(files):
+        if target.name.lower() == variant.lower():
+            return split_order(target.files, f"the split GGUF in {variant}/")
+    return None
 
 
 def split_order(names, split):
-    """names, the files of one split GGUF, in split order: each named
-    NAME-0000K-of-0000N.gguf, and every part from 1 to N present once."""
-    parts: dict[int, tuple[int, str]] = {}
-    for name in names:
-        match = SPLIT_NAME.search(name)
+    """names, the files of one split GGUF, in split order: the parts of one
+    name, each NAME-0000K-of-0000N.gguf, every part from 1 to N present once.
+    The engine holds a target's files to the same rule (findTargetGgufs).
+    split names the split GGUF in a refusal."""
+    matches = {name: SPLIT_NAME.search(name) for name in names}
+    for name, match in matches.items():
         if not match:
-            raise models.ModelError(f"{name} is not one part of a split GGUF (NAME-0000K-of-0000N.gguf)")
+            raise models.ModelError(f"{name} is not one part of {split} (NAME-0000K-of-0000N.gguf)")
+    if len(own := {model_of(Path(name).name) for name in names}) > 1:
+        raise models.ModelError(
+            f"{split} mixes the parts of several split GGUFs "
+            f"({', '.join(sorted(own))}); a split GGUF is the parts of one name, "
+            "NAME-0000K-of-0000N.gguf"
+        )
+    parts: dict[int, tuple[int, str]] = {}
+    for name, match in matches.items():
+        assert match is not None
         number = int(match.group(1))
         if number in parts:
             raise models.ModelError(f"{parts[number][1]} and {name} are both part {number} of {split}")
@@ -170,6 +289,8 @@ def _gguf_target(repo, variant, language_only, scratch):
             f"No GGUF is named for :{variant} alone; using {name}, the only one whose name ends in -{variant}.",
             flush=True,
         )
+    # The real one prints "Selected NAME from REPO." here; the fake installer does
+    # (install/models.py target_repo).
     return gguf_target(repo, names, scratch, language_only=language_only)
 
 
@@ -177,24 +298,27 @@ def gguf_target(repo, names, scratch, *, language_only=False):
     """The GGUF target whose files in repo are names, one or a split GGUF's parts
     in split order, which side by side in target/ the native loader finds."""
     # The fake's GGUFs carry no real header: the repository's config.json stands
-    # in for the config upstream.py derives from it (gguf.model_config).
-    config, metadata = scratch / "config.json", scratch / "gguf-metadata.json"
+    # in for the config upstream.py derives from it (gguf.model_config), and an
+    # empty file for each part's header in scratch's target/ (1.6.0).
+    config, target = scratch / "config.json", scratch / "target"
     config.write_bytes(models.json_bytes(repo.json("config.json")))
-    metadata.write_bytes(models.json_bytes({"unsigned": {}, "float": {}, "string": {}}))
+    target.mkdir(exist_ok=True)
+    for part in names:
+        (target / Path(part).name).write_bytes(b"")
     time.sleep(_inspect_seconds(names[0]))
     stem = SPLIT_NAME.sub("", names[0]).removesuffix(".gguf")
     if Path(stem).name.lower().startswith("imatrix"):
         # An importance matrix has no model metadata (real Splash, install/gguf.py).
         raise models.ModelError("missing or invalid GGUF metadata: general.architecture")
-    family = check_model("gguf", "none", config, gguf_metadata=metadata)
-    # install/gguf.py require_loadable reads the tensor types; the fake's GGUFs have
-    # none, so the name stands in. Only a whole unquantized model is refused
-    # (UD-Q8_K_XL, with BF16 parts, loads).
+    # install/gguf.py require_quantized (1.6.0) weighs the tensors' values; the
+    # fake's GGUFs have none, so the name stands in. Only a whole unquantized model
+    # is refused (UD-Q8_K_XL, with BF16 parts, loads).
     if stem.upper().endswith(("-BF16", "-F16", "-F32")):
         raise models.ModelError(
-            "this GGUF stores every projection and expert unquantized (BF16, F16 or F32): Splash loads quantized "
+            "this GGUF stores its weights unquantized (BF16, F16 or F32): Splash loads quantized "
             "GGUFs, not whole-BF16 or F16 models; choose a quantized variant of the repository"
         )
+    family = check_model("gguf", "none", config, gguf_headers=target)
     files = {"target/" + Path(part).name: part for part in names}
     vision_format = "none"
     # A family without a vision tower (Flint) serves text only and reads no projector.
@@ -202,7 +326,7 @@ def gguf_target(repo, names, scratch, *, language_only=False):
         projector = select_vision(repo)
         files["vision/mmproj.gguf"] = projector
         vision_format = "gguf"
-    return Target("gguf", vision_format, config, metadata, family, files)
+    return Target("gguf", vision_format, config, target, family, files)
 
 
 def _inspect_seconds(name):

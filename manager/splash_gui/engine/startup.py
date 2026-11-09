@@ -60,6 +60,13 @@ _UNPREPARED = (
 # most 262144 tokens of context". Flint's full layers have no RoPE for YaRN to stretch.
 _SERVES_AT_MOST = re.compile(r"(\S+) serves at most (\d+) tokens of context")
 
+# server/backend.py thinking_end_tokens (1.6.0): "the thinking end 'TEXT' must end with
+# </think> and hold no other special token", "the thinking end 'TEXT' takes N tokens;
+# the most is 64".
+_THINKING_END = re.compile(
+    r"\bthe thinking end .+ (?:must end with |takes \d+ tokens; the most is )", re.DOTALL
+)
+
 Phase = Literal["installing", "loading", "warming"]
 TemplateMode = Literal["native", "patched", "unsupported"]
 NoticeKind = Literal[
@@ -287,6 +294,8 @@ def classify_error(text: str) -> EngineError | None:
         or "which splash no longer loads" in lowered
         or explain_refusal(text)[1] is not None
         or "stores every projection and expert unquantized" in lowered
+        # install/gguf.py require_quantized (1.6.0).
+        or "stores its weights unquantized" in lowered
         or "unsupported gguf" in lowered
         or "input rotation is not one splash runs" in lowered
         or "has no vision tower" in lowered
@@ -317,8 +326,13 @@ def classify_error(text: str) -> EngineError | None:
             suggestions=suggestions,
         )
     # server/backend.py thinking_end_tokens: the engine refuses the setting at startup.
-    if "--thinking-end-text must end with" in lowered or (
-        "--thinking-end-text takes" in lowered and "the most is" in lowered
+    # From 1.6.0 it names the text itself ("the thinking end '…' must end with
+    # </think> …", "… takes N tokens; the most is 64"), as it holds the chat
+    # template's own close to the same rule.
+    if (
+        "--thinking-end-text must end with" in lowered
+        or ("--thinking-end-text takes" in lowered and "the most is" in lowered)
+        or _THINKING_END.search(message) is not None
     ):
         return EngineError(
             kind="other",

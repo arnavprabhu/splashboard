@@ -591,6 +591,10 @@ export type ErrorKind =
   | 'kv_unreadable'
   | 'ssd_closed'
   | 'ssd_wait'
+  // Splash 1.6.0: a request that was running at two engine failures in a row is refused until
+  // the engine restarts; PDFs render in a sandbox that could not start.
+  | 'quarantined'
+  | 'document_unavailable'
   | 'generic';
 
 export interface ChatError {
@@ -627,6 +631,8 @@ export function classifyError(err: unknown, ctx: { model?: string | null; active
   if (code === 'model_switch_busy') return { ...common, kind: 'busy', title: t('chat.error.busy', { model: shortModel(ctx.active) || ctx.active || '—' }), body: t('chat.error.busy_body') };
   if (code === 'engine_recovering' || code === 'engine_unavailable') return { ...common, kind: 'recovering', title: t('chat.error.recovering'), body: t('chat.error.not_sent') };
   if (code === 'engine_failed') return { ...common, kind: 'failed', title: t('chat.error.failed'), body: null };
+  if (code === 'request_quarantined') return { ...common, kind: 'quarantined', title: t('chat.error.quarantined'), body: t('chat.error.quarantined_body') };
+  if (code === 'document_unavailable') return { ...common, kind: 'document_unavailable', title: t('chat.error.document_unavailable'), body: t('chat.error.document_unavailable_body') };
   if (code === 'kv_write_budget')
     return {
       ...common,

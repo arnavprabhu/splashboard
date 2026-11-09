@@ -162,7 +162,7 @@ def test_health_and_ready(engine):
 def test_status_has_every_appendix_b_field(engine):
     status, body = engine.json("GET", "/status")
     assert status == 200
-    assert body["schema_version"] == 6
+    assert body["schema_version"] == 8
     for key in ("ready", "maximum_context_tokens", "memory_pressure", "vision", "input_modalities"):
         assert key in body
     assert body["maximum_context_tokens"] == 262144

@@ -61,6 +61,11 @@ def isolated_home(
     if request.node.get_closest_marker("real") is None:
         monkeypatch.setenv("SPLASH_GUI_FAKE_CHIP", FAKE_CHIP)
         monkeypatch.setenv("SPLASH_GUI_FAKE_MEMORY", str(FAKE_MEMORY))
+        # Free space is what the test's own `shutil.disk_usage` says, never the
+        # purgeable space of the developer's disk.
+        from splash_gui.system import diskspace
+
+        monkeypatch.setattr(diskspace, "_important_usage_bytes", lambda _path: 0)
     # Programs are looked up on the test's own PATH and home only: never the developer's
     # login shell or Homebrew folder, where a real `claude` or `codex` may be installed.
     from splash_gui.system import userpath
@@ -165,7 +170,7 @@ def fake_engine() -> EngineInfo:
         found=True,
         cli=Path("/opt/homebrew/opt/splash/bin/splash"),
         source="brew",
-        version="1.5.0",
+        version="1.6.0",
         version_tuple=(1, 4, 1),
         support="supported",
         pkg=Path("/nonexistent/pkg"),

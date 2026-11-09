@@ -36,6 +36,8 @@ SHAPES: dict[str, Shape] = {
     "/v1/responses": "responses",
     "/v1/messages": "messages",
     "/v1/messages/count_tokens": "count_tokens",
+    # Splash 1.6.0: the same count for a Chat request, {"input_tokens": N}.
+    "/v1/chat/completions/count_tokens": "count_tokens",
 }
 
 _COMMON = ("temperature", "top_p", "top_k", "seed", "priority", "timeout")

@@ -37,7 +37,7 @@ from .protocol import MAX_THINKING_END_TOKENS
 from .serve_options import MAX_YARN_CONTEXT_TOKENS
 
 KIB, MIB, GIB = 1 << 10, 1 << 20, 1 << 30
-STATUS_SCHEMA_VERSION = 6  # runtime/engine/Protocol.hpp kStatusSchemaVersion
+STATUS_SCHEMA_VERSION = 8  # runtime/engine/Protocol.hpp kStatusSchemaVersion (1.6.0)
 HEAD_DIMENSION = 256
 KV_PAGE_TOKENS = 32  # runtime/metal/abi/ExecutionGeometry.h SPLASH_TARGET_KV_BLOCK_TOKENS
 PREFILL_TOKEN_BUDGET = 2048  # SPLASH_PREFILL_TOKEN_BUDGET
@@ -118,6 +118,9 @@ MODES = (
     "kv_disk_quota",
     "kv_unreadable",
     "bounded",
+    # 1.6.0: a request that was running at two engine failures in a row
+    # (server/supervision.py Quarantine).
+    "request_quarantined",
 )
 PRESSURES = ("normal", "warning", "critical")
 TEMPLATES = ("native", "patched", "unsupported")
@@ -221,6 +224,11 @@ class FakeConfig:
     kv_spill_tokens: int | None = None
     # Why a streamed expert load failed (Status.cpp streamed_experts.failure).
     expert_failure: str = ""
+    # 1.6.0: the elastic expert store gave chunks back to requests or other apps
+    # (streamed_experts.chunks below cap_chunks), and requests waiting for memory
+    # on the ledger (memory_governor.claims.waiting).
+    expert_store_shrunk: bool = False
+    memory_claims_waiting: int = 0
     # "" | budget | context | crash, or 1.4.0's configuration (a streamed
     # store's size refused before the weights load) and unprepared (the
     # server cannot hold the model's assembly).
@@ -268,6 +276,8 @@ class FakeConfig:
         config.crash_code = int(env.get("FAKE_SPLASH_CRASH_CODE", config.crash_code))
         config.listen_early = _env_bool("FAKE_SPLASH_LISTEN_EARLY", False)
         config.load_again = _env_bool("FAKE_SPLASH_LOAD_AGAIN", False)
+        config.expert_store_shrunk = _env_bool("FAKE_SPLASH_EXPERT_STORE_SHRUNK", False)
+        config.memory_claims_waiting = int(env.get("FAKE_SPLASH_MEMORY_CLAIMS", config.memory_claims_waiting))
         return config
 
     def update(self, values: dict) -> None:
@@ -624,9 +634,9 @@ class MemoryPlan:
         budget["streamed_table_bytes"] = self.table_bytes
         budget["kv_index_page_bytes"] = KV_INDEX_PAGE_BYTES if self.spills else 0
         budget["kv_spill"] = self.spill_plan() if self.spills else None
-        budget["resident_kv_bytes"] = (
-            max(0, b.dynamic_budget_bytes - b.lane_state_bytes - self.hot_bytes) if self.spills else 0
-        )
+        # 1.6.0 (schema 8) dropped resident_kv_bytes and added what the plan holds
+        # back for the host.
+        budget["host_held_back_bytes"] = 0
         budget["context_bounds"] = dict(self.context_bounds)
         if self.flint:
             # MemoryPlan.cpp toStatusJson (1.4.1): a windowed target's Slim page and
@@ -1383,9 +1393,11 @@ class FakeEngine:
                 self.engine_error = "native protocol reached EOF"
                 self.fatal_error = None
             elif mode == "engine_failed":
+                # server/backend.py _stop_message (1.6.0): the sixth short-lived
+                # failure in a row stops the relaunches (supervision.CRASH_LOOP_FAILURES).
                 self.engine_error = self.fatal_error = (
-                    "the inference engine failed 3 times in a row, each within 60 s of starting "
-                    "(native protocol reached EOF); Splash stopped restarting it. Set "
+                    "Splash stopped restarting the engine: it failed 6 times in a row, each "
+                    "within 60 s of starting (native protocol reached EOF). Set "
                     "SPLASH_CRASH_TRACE=1 to record a crash trace. Restart the Splash server "
                     "after fixing the cause."
                 )
@@ -1415,10 +1427,13 @@ class FakeEngine:
                 return APIError(500, self.fatal_error or "engine failed", "engine_failed")
             if self.mode == "engine_recovering" or not self.ready:
                 failure = self.engine_error
+                # 1.6.0: Retry-After is the time the restart should take (1 s before);
+                # the fake's second relaunch waits supervision.BACKOFF_BASE_SECONDS.
                 return APIError(
                     503,
                     "engine is recovering; retry shortly" + (f" (last failure: {failure})" if failure else ""),
                     "engine_recovering",
+                    5,
                 )
         return None
 
@@ -1673,6 +1688,14 @@ class FakeEngine:
             yield from self._acquire_lane(job)
             holding_lane = True
             yield from self._restore_weights()
+            if self.mode == "request_quarantined":
+                # server/backend.py (1.6.0): refused with 400 until the server restarts.
+                raise APIError(
+                    400,
+                    "this request was in flight at two engine failures in a row; Splash "
+                    "refuses it until the server restarts",
+                    "request_quarantined",
+                )
             if self.mode == "capacity_exhausted":
                 with self.lock:
                     self.c["capacity_failures"] += 1
@@ -2059,6 +2082,37 @@ class FakeEngine:
             "failure": "",
         }
 
+    def _memory_accounts(self, kv_bytes: int) -> list[dict]:
+        """Status.cpp memory_governor.accounts (1.6.0): the stores whose size follows
+        memory, the KV pool and, where experts stream under auto, their store."""
+        plan = self.plan
+        extent = plan.breakdown.kv_extent_bytes if plan else 0
+        accounts = [
+            {
+                "name": "kv",
+                "floor_bytes": extent,
+                "current_bytes": kv_bytes,
+                "cap_bytes": plan.breakdown.kv_capacity_bytes if plan else 0,
+                "unit_bytes": extent,
+                "grows": 0,
+                "shrinks": 0,
+            }
+        ]
+        experts = self._streamed_experts(self.c)
+        if experts is not None:
+            accounts.append(
+                {
+                    "name": "experts",
+                    "floor_bytes": experts["floor_bytes"],
+                    "current_bytes": experts["chunks"] * GIB,
+                    "cap_bytes": experts["cap_bytes"],
+                    "unit_bytes": GIB,
+                    "grows": experts["regrows"],
+                    "shrinks": experts["shrinks"],
+                }
+            )
+        return accounts
+
     def _streamed_experts(self, c: dict) -> dict | None:
         """Status.cpp appendStreamedExperts: about 43 experts routed a decode
         step, nine in ten of them resident."""
@@ -2089,7 +2143,22 @@ class FakeEngine:
                     "resume_ms": _latency(0.04, steps),
                 },
             }
+        # 1.6.0: under --expert-memory auto the store grows in chunks of about 1 GiB
+        # from its floor to its cap and gives chunks back while memory is short; a
+        # size fixes it (floor = cap).
+        chunk = GIB
+        cap_chunks = max(1, -(-plan.expert_bytes // chunk))
+        fixed = self.settings.expert_memory not in (None, "auto")
+        chunks = cap_chunks if fixed or not self.config.expert_store_shrunk else max(1, cap_chunks // 2)
+        if chunks < cap_chunks:
+            slots = slots * chunks // cap_chunks
         return {
+            "cap_bytes": plan.expert_bytes,
+            "floor_bytes": plan.expert_bytes if fixed else min(plan.expert_bytes, chunk),
+            "chunks": chunks,
+            "cap_chunks": cap_chunks,
+            "shrinks": 0 if fixed or not self.config.expert_store_shrunk else 1,
+            "regrows": 0,
             "arena_bytes": slots * expert,
             "staging_bytes": 43 * expert,
             "slots": slots,
@@ -2113,6 +2182,9 @@ class FakeEngine:
                 "converted": 0,
                 "bounded": c["bounded"],
                 "length_ends": c["bounded"],
+                # 1.6.0: requests whose KV moved to the SSD while they ran.
+                "converted_bounded": 0,
+                "converted_length_ends": 0,
                 "refused": {"quota": c["refused_quota"], "write_budget": c["refused_write_budget"], "closed": 0},
                 "waiting_quota": 0,
             },
@@ -2166,7 +2238,6 @@ class FakeEngine:
             # A prefill streams each layer's history from the SSD into staging.
             "history_stream": {
                 "commands": c["spill_requests"],
-                "contended_commands": 0,
                 "layers": c["spill_requests"] * 40,
                 "pages": spilled,
                 "bytes": spilled * 36 * KIB,
@@ -2174,7 +2245,6 @@ class FakeEngine:
                 "buffers": 2,
                 "read_ms": _latency(1.2, c["spill_requests"]),
                 "wait_ms": _latency(0.1, c["spill_requests"]),
-                "decode_gap_ms": _latency(0.0, 0),
             },
         }
 
@@ -2260,7 +2330,12 @@ class FakeEngine:
                 "draining": False,
                 "oldest_wait_ms": 0.0,
             },
-            "loop": {"max_tick_ms": round(1000.0 / max(1.0, cfg.tokens_per_second), 3)},
+            # 1.6.0: the loop's stall budget (runtime/Supervision.hpp) and its host time a tick.
+            "loop": {
+                "max_tick_ms": round(1000.0 / max(1.0, cfg.tokens_per_second), 3),
+                "stall_budget_ms": 30000,
+                "tick_host_ms": _latency(0.5, c["decode_batches"] + c["prefill_batches"]),
+            },
             "identity": {
                 "cache": {
                     "loaded_model_layout_sha256": hashlib.sha256(f"layout|{s.model}".encode()).hexdigest(),
@@ -2299,6 +2374,23 @@ class FakeEngine:
                 "host_spare_bytes": max(0, cfg.host_available - 2 * GIB),
                 "host_spare_reserve_bytes": 2 * GIB,
                 "host_headroom_bytes": max(0, cfg.host_available - 4 * GIB),
+                # 1.6.0: one ledger for every allocation. The accounts that grow and
+                # shrink with memory (the KV pool; a streamed expert store too), what
+                # is owed to waiting claims, and the claims waiting for memory.
+                "host_telemetry": {
+                    "phys_footprint_bytes": current,
+                    "compressed_bytes": 0,
+                    "file_backed_bytes": weights,
+                    "inactive_bytes": 0,
+                    "filecache_min_bytes": 0,
+                },
+                "accounts": self._memory_accounts(kv_bytes),
+                "owed": {"transfers": 0, "bytes": 0, "to_claims_bytes": 0, "oldest_ms": 0.0},
+                "claims": {
+                    "waiting": cfg.memory_claims_waiting,
+                    "bytes": cfg.memory_claims_waiting * 512 * MIB,
+                    "oldest_ms": 1250.0 if cfg.memory_claims_waiting else 0.0,
+                },
             },
             "memory_audit": {
                 "scope": "startup_warmup",
@@ -2336,6 +2428,9 @@ class FakeEngine:
                 "block_tokens": KV_PAGE_TOKENS,
                 "pages_allocated": pages_allocated,
                 "pages_active": pages_active,
+                # 1.6.0: only the KV a command reads is made resident for it.
+                "extents_active": -(-pages_active // extent_pages) if pages_active else 0,
+                "active_bytes": pages_active * page,
                 "pages_cache": pages_cache,
                 "pages_free": max(0, pages_allocated - pages_active - pages_cache),
                 "allocated_bytes": kv_bytes,
@@ -2487,12 +2582,38 @@ class FakeEngine:
                 "prefill_rows": c["prefill_rows"],
                 "decode_batches": c["decode_batches"],
                 "decode_batches_by_width": {k: c[k] for k in ("b1", "b2", "b3", "b4")},
+                # 1.6.0: how the scheduler shares commands between prefill and decode.
+                "decode_gap_target_ms": 500,
+                "contended_prefill_ms": _latency(260.0, 0),
+                "prefill_units": c["prefill_batches"],
+                "pass_commands": 0,
+                "abandoned_pass_commands": 0,
+                "bound_cuts": 0,
+                "index_page_conflicts": 0,
+                "replans": 0,
             },
             "active_requests": active_requests,
             "requests": {k: c[k] for k in ("submitted", "completed", "cancelled", "failed")},
             "metrics": {
                 "ttft_ms": {"p50": _percentile(ttft, 0.5), "p95": _percentile(ttft, 0.95), "samples": len(ttft)},
                 "itl_ms": {"p50": _percentile(itl, 0.5), "p95": _percentile(itl, 0.95), "samples": len(itl)},
+                # 1.6.0: a request's time to its first token by cause, and the gaps
+                # between a stream's tokens by cause.
+                "ttft_parts_ms": {
+                    "own_prefill": _latency(round(_percentile(ttft, 0.5) * 0.9, 3), len(ttft)),
+                    "claim_wait": _latency(0.0, 0),
+                    "decode": _latency(round(_percentile(ttft, 0.5) * 0.05, 3), len(ttft)),
+                    "other_prefill": _latency(0.0, 0),
+                    "rest": _latency(round(_percentile(ttft, 0.5) * 0.05, 3), len(ttft)),
+                },
+                "decode_gap_ms": _latency(_percentile(itl, 0.5), len(itl)),
+                "decode_gap_causes": {
+                    **{
+                        cause: {"gaps": 0, "ms": 0.0}
+                        for cause in ("prefill_unit", "claim_wait", "ssd_read", "pool_release", "replan", "other")
+                    },
+                    "prefill_ms": prefill_ms,
+                },
                 "prefill_input_tokens": c["prefill_input_tokens"],
                 "prefill_wall_ms": prefill_ms,
                 "prefill_tokens_per_second": c["prefill_input_tokens"] * 1000.0 / prefill_ms if prefill_ms else 0.0,
@@ -2541,6 +2662,9 @@ class FakeEngine:
             status["transport"]["error"] = self.engine_error or "native process is not ready"
             status["ready"] = False
         # server/frontend.py Frontend.status
+        # frontend.py Frontend.status (1.6.0): the context the server serves now,
+        # which a relaunched engine's memory plan may have changed.
+        status["capabilities"] = {"max_context_tokens": self.max_context}
         status["vision"] = self.vision
         status["input_modalities"] = self.input_modalities
         # frontend.py Frontend.status (1.4.1): whether a request's reasoning effort or

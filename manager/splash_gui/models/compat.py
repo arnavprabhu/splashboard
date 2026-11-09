@@ -12,7 +12,7 @@ unquantized; Splash loads quantized projections". A checkpoint without any of
 them (BF16 weights) gets "this model requires an MLX checkpoint (...), an NVFP4 or
 FP8 checkpoint of Model Optimizer or compressed-tensors, or a supported GGUF". A
 GGUF whose projections and experts are all BF16, F16 or F32 is refused by the
-installer (`install/gguf.py` `require_loadable`). Qwen3.8-Flash-Next and Flint load
+installer (`install/gguf.py` `require_quantized`). Qwen3.8-Flash-Next and Flint load
 from a GGUF only: any safetensors checkpoint of either gets "<family> loads from a
 GGUF only" (`ModelDescriptor.mm` `describeSourceModel`).
 Every place that shows a verdict (the `/inspect` reason, a refused download, a
@@ -67,7 +67,10 @@ _CHECKPOINT_QUANTIZATION = re.compile(
 )
 _GGUF_ONLY = re.compile(r"(?:^|[\s:])(\S+) loads from a gguf only\b", re.IGNORECASE)
 _GGUF_UNQUANTIZED = re.compile(
-    r"stores every projection and expert unquantized \(bf16, f16 or f32\)", re.IGNORECASE
+    # "stores its weights unquantized" from Splash 1.6.0 (install/gguf.py
+    # `require_quantized`); "every projection and expert" before.
+    r"stores (?:every projection and expert|its weights) unquantized \(bf16, f16 or f32\)",
+    re.IGNORECASE,
 )
 
 

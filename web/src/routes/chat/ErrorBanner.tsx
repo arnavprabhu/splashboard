@@ -54,7 +54,7 @@ export function ErrorBanner({ error, onRetry, onSwitchWhenIdle, onOpenTab, onTur
               {t('chat.action.switch_idle')}
             </Button>
           )}
-          {(error.kind === 'failed' || error.kind === 'ssd_closed') && (
+          {(error.kind === 'failed' || error.kind === 'ssd_closed' || error.kind === 'quarantined') && (
             <Button
               size="s"
               variant="solid"

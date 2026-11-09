@@ -31,10 +31,14 @@ ENTRY_POINT_MARKER = "from splash_gui.cli import"
 # fixes image requests that could crash an engine streaming its experts from the SSD,
 # reports timings from Responses and Messages and reasoning efforts in /v1/models, and
 # cleans up partial downloads in a way the manager's resumable partials must avoid.
-SUPPORTED_MIN = (1, 5, 0)
-SUPPORTED_BELOW = (1, 6, 0)
-SUPPORTED_RANGE = ">=1.5.0 <1.6.0"
-# The lowest supported version as people read it, "1.5.0".
+# 1.6.0 reports /status schema 8, installs a split GGUF's parts from a repository's
+# root and picks a :VARIANT folder before a root file that only ends in the variant,
+# which the variant table follows, and its installer's helpers, which the model
+# checks call, changed their interface.
+SUPPORTED_MIN = (1, 6, 0)
+SUPPORTED_BELOW = (1, 7, 0)
+SUPPORTED_RANGE = ">=1.6.0 <1.7.0"
+# The lowest supported version as people read it, "1.6.0".
 SUPPORTED_MIN_TEXT = ".".join(map(str, SUPPORTED_MIN))
 BREW_TIMEOUT_S = 10
 VERSION_TIMEOUT_S = 15

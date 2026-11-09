@@ -1102,45 +1102,52 @@ async def test_a_family_without_a_released_draft_alerts(rig: Rig) -> None:
 
 
 def test_the_classifier_reads_a_split_gguf_s_parts_as_one(tmp_path: Path) -> None:
-    """classify_gguf.py merges a split GGUF's headers in split order (Splash's
-    `gguf.merged_split`) and answers under the first part; stubbed Splash modules."""
+    """classify_gguf.py hands a split GGUF's parts, in split order, to Splash's own
+    `upstream.gguf_target` (Splash 1.6.0) and answers under the first part given;
+    stubbed Splash modules."""
     pkg = tmp_path / "pkg" / "install"
     pkg.mkdir(parents=True)
     (pkg / "__init__.py").write_text("")
-    (pkg / "models.py").write_text(
-        "import json\n"
-        "class ModelError(RuntimeError):\n    pass\n"
-        "def json_bytes(value):\n    return json.dumps(value).encode()\n"
-    )
+    (pkg / "models.py").write_text("class ModelError(RuntimeError):\n    pass\n")
     (pkg / "gguf.py").write_text(
         "class Metadata:\n"
         "    def __init__(self, path, tensors=False):\n"
-        "        self.values = {'general.architecture': 'qwen4exp', 'path': path}\n"
-        "def merged_split(headers):\n"
-        "    first = headers[0]\n"
-        "    first.values['general.name'] = '+'.join(h.values['path'] for h in headers)\n"
-        "    return first\n"
-        "def model_config(metadata):\n    return {}\n"
-        "def scalar_metadata(metadata):\n    return {}\n"
-        "def require_loadable(metadata):\n    pass\n"
+        "        self.values = {'general.architecture': 'qwen4exp', 'general.name': str(path)}\n"
+    )
+    (pkg / "hub.py").write_text(
+        "class Repository:\n"
+        "    def __init__(self, name, paths):\n        self.name, self.paths = name, paths\n"
+        "    @classmethod\n"
+        "    def local_files(cls, name, paths):\n        return cls(name, paths)\n"
     )
     (pkg / "upstream.py").write_text(
+        "from . import models\n"
         "class Family:\n    name = 'Qwen3.8-Flash-Next'\n    draft_repo = 'd/D'\n"
-        "def check_model(*args, **kwargs):\n    return Family()\n"
+        "class Target:\n    family = Family()\n"
+        "def model_of(name):\n    return name.split('-0000')[0]\n"
+        "def split_order(names, split):\n    return sorted(names)\n"
+        "def gguf_target(repo, names, scratch, *, projector=None):\n"
+        "    assert scratch.is_dir() and projector is None\n"
+        "    if 'bad.gguf' in names:\n        raise models.ModelError('unsupported GGUF')\n"
+        "    assert [repo.paths[n].name for n in names] == names\n"
+        "    return Target()\n"
     )
+    parts = ["/m/M-Q2_0-00002-of-00002.gguf", "/m/M-Q2_0-00001-of-00002.gguf"]
     done = subprocess.run(
         [sys.executable, str(HELPER)],
-        input=json.dumps({"paths": [["p1", "p2"], "one"]}),
+        input=json.dumps({"paths": [parts, "/m/one.gguf", "/m/bad.gguf"]}),
         capture_output=True,
         text=True,
         env={"PYTHONPATH": str(tmp_path / "pkg"), "PATH": "/usr/bin:/bin"},
         check=True,
     )
     out = json.loads(done.stdout)
-    assert out["p1"] == {
+    # Keyed by the first part given; the metadata read is the first part in split order.
+    assert out[parts[0]] == {
         "family": "Qwen3.8-Flash-Next",
         "draft_repo": "d/D",
         "architecture": "qwen4exp",
-        "name": "p1+p2",
+        "name": parts[1],
     }
-    assert out["one"]["name"] is None, "one file is read alone"
+    assert out["/m/one.gguf"]["name"] == "/m/one.gguf", "one file is read alone"
+    assert out["/m/bad.gguf"] == {"error": "unsupported GGUF"}

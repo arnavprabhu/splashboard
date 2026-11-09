@@ -6,7 +6,7 @@
 import type { ActiveRequest, EngineError, EngineNotice, EngineSuggestion, EngineView, InstalledModel } from '../../api/models';
 import type { EngineState, SettingsDoc } from '../../api/types';
 
-const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+export const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** The full EngineView behind the store's summary (fields may be missing on older managers). */
 export function viewOf(view: Record<string, unknown> | null | undefined): Partial<EngineView> {

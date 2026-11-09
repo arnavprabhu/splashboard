@@ -45,7 +45,12 @@ DESCRIPTION = "Serve in the foreground, or connect an installed agent to the loc
 
 
 class LauncherError(RuntimeError):
-    pass
+    """A refusal of the launcher's. said: whether the program that failed printed
+    it already (launcher.py, 1.6.0), so the launcher does not print it again."""
+
+    def __init__(self, message: str, *, said: bool = False):
+        super().__init__(message)
+        self.said = said
 
 
 class StopSignal(KeyboardInterrupt):
@@ -58,13 +63,18 @@ def _interrupt(number: int, _frame: object) -> None:
     raise StopSignal(number)
 
 
-def _run_held(command: list[str], **options: Any) -> int:
-    """launcher.py _run_held: spawn with the stop signals blocked."""
+def _run_held(command: list[str], *, relay: Any = None, **options: Any) -> int:
+    """launcher.py _run_held: spawn with the stop signals blocked. With `relay`,
+    each line of its output goes there as it comes (1.6.0)."""
     signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
+    if relay is not None:
+        options |= {"stdout": subprocess.PIPE, "text": True, "errors": "replace"}
     try:
         with subprocess.Popen(command, **options) as program:
             try:
                 signal.pthread_sigmask(signal.SIG_UNBLOCK, STOP_SIGNALS)
+                for line in program.stdout if relay is not None and program.stdout else ():
+                    relay(line)
                 return program.wait()
             except BaseException:
                 program.kill()
@@ -82,7 +92,8 @@ def _request_json(path: str, timeout: float = 2, *, port: int = PORT) -> Any:
     if key := os.environ.get("SPLASH_API_KEY"):
         request.add_header("Authorization", f"Bearer {key}")
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        # 1.6.0: the server is on loopback, so no proxy receives its key.
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=timeout) as response:
             return json.loads(response.read())
     except urllib.error.HTTPError as error:
         if error.code == 401:
@@ -317,8 +328,27 @@ def _ensure_installed(selection: model_artifacts.Selection) -> None:
             command[-1:-1] = [flag, value]
     if selection.language_only:
         command.insert(-1, "--language-only")
-    if _run_held(command, cwd=paths.ROOT):
-        raise LauncherError("model download or verification failed")
+    # launcher.py _ensure_installed (1.6.0): the installer's messages go on to the
+    # terminal; its failure, an error event, is the installer's own to print on
+    # stderr, so the launcher says nothing more.
+    failure = None
+
+    def relay(line: str) -> None:
+        nonlocal failure
+        try:
+            event = json.loads(line)
+        except ValueError:
+            event = None
+        if isinstance(event, dict) and event.get("event") == "error":
+            failure = event["message"]
+        else:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+
+    if _run_held(command, cwd=paths.ROOT, relay=relay):
+        if failure is None:
+            raise LauncherError("model download or verification failed")
+        raise LauncherError(failure, said=True)
 
 
 def serve(args: argparse.Namespace, argv: list[str]) -> int:
@@ -357,7 +387,8 @@ def serve(args: argparse.Namespace, argv: list[str]) -> int:
             _device_check()
             for path in (args.model_dir, args.mmproj):
                 if path is not None and not Path(path).exists():
-                    raise LauncherError("local model preparation failed; see the output above")
+                    # launcher.py _prepare_local_model (1.6.0) words the refusal itself.
+                    raise LauncherError(f"cannot prepare {args.model_dir}: {path} is not a file")
         else:
             selection = model_artifacts.Selection.of(
                 paths.MODELS,
@@ -426,7 +457,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(raw)
     try:
         return serve(args, raw) if args.command == "serve" else coding_client(args)
-    except (LauncherError, OSError) as error:
+    except LauncherError as error:
+        if not error.said:
+            print(f"error: {error}", file=sys.stderr)
+        return 1
+    except OSError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     except StopSignal as stop:

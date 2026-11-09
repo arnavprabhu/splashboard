@@ -1,10 +1,11 @@
 """/status contract against ./splash: every key path the native engine writes
-(runtime/engine/Status.cpp with MemoryPlan.cpp and MemoryAudit.cpp), and the
+(runtime/engine/Status.cpp, as its golden status documents hold them), and the
 server-side groups (server/server.py, backend.py, frontend.py), must appear in
 the fake's /status at the same nesting."""
 
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
@@ -13,7 +14,7 @@ from conftest import REAL_SPLASH
 from harness import FakeSplash
 
 ENGINE = REAL_SPLASH / "runtime" / "engine"
-LITERAL = re.compile(r'"((?:[^"\\]|\\.)*)"|\'(\\.|[^\'\\])\'')
+GOLDEN = REAL_SPLASH / "dev" / "tests" / "engine"
 # Status.cpp writes the warmup step names through json::quote(name).
 WARMUP_STEPS = ("prefill_2048", "decode_b1", "decode_b2", "decode_b3", "decode_b4", "composite_state_restore")
 # Server-side groups, with the fields their source writes.
@@ -43,88 +44,29 @@ SERVER_GROUPS = {
 }
 
 
-def _body(source: str, signature: str) -> str:
-    start = source.index(signature)
-    brace = source.index("{", source.index(")", start))
-    depth = 0
-    for index in range(brace, len(source)):
-        if source[index] == "{":
-            depth += 1
-        elif source[index] == "}":
-            depth -= 1
-            if depth == 0:
-                return source[brace + 1 : index]
-    raise ValueError(signature)
-
-
-def _literals(body: str, substitutions: dict[str, str] | None = None) -> str:
-    """The text of a C++ stream's string and char literals, in order, with
-    calls that write nested JSON replaced by that JSON's literal text."""
-    for call, text in (substitutions or {}).items():
-        body = body.replace(call, '"' + text.replace('"', '\\"') + '"')
-    parts = []
-    for match in LITERAL.finditer(body):
-        parts.append(match.group(1).replace('\\"', '"') if match.group(1) is not None else match.group(2))
-    return "".join(parts)
-
-
-def _paths(stream: str) -> set[str]:
-    paths: set[str] = set()
-    stack: list[str] = []
-    pending: str | None = None
-    for match in re.finditer(r'"([a-z0-9_]+)":|\{|\}', stream):
-        token = match.group(0)
-        if token == "{":
-            stack.append(pending or "")
-            pending = None
-        elif token == "}":
-            if stack:
-                stack.pop()
-            pending = None
-        else:
-            pending = match.group(1)
-            paths.add(".".join([*stack[1:], pending]))
+def native_status_paths() -> set[str]:
+    """Every key path of the engine's own status documents: the golden one its
+    status test compares (runtime_status_test.cpp), and that test's variants, which
+    hold the groups the golden one leaves null."""
+    paths = flatten(json.loads((GOLDEN / "status_golden.json").read_text()))
+    for line in (GOLDEN / "status_variants_golden.jsonl").read_text().splitlines():
+        if line.strip():
+            paths |= flatten(json.loads(line)["status"])
     return paths
 
 
-def native_status_paths() -> set[str]:
-    status = (ENGINE / "Status.cpp").read_text()
-    plan = (ENGINE / "MemoryPlan.cpp").read_text()
-    audit = (ENGINE / "MemoryAudit.cpp").read_text()
-    spill = _literals(_body(plan, "std::string spillStatusJson("))
-    breakdown = _literals(
-        _body(plan, "std::string EngineMemoryBreakdown::toStatusJson() const"), {"spillStatusJson(kvSpill)": spill}
-    )
-    device = _literals(_body(plan, "std::string deviceStatusJson("))
-    model = _literals(_body(plan, "std::string modelStatusJson("))
-    plan_json = _literals(
-        _body(plan, "std::string EngineMemoryPlan::toStatusJson() const"),
-        {"deviceStatusJson(device_)": device, "modelStatusJson(model_)": model, "breakdown_.toStatusJson()": breakdown},
-    )
-    audit_json = _literals(_body(audit, "std::string MemoryAuditResult::toStatusJson() const"))
-    calls = {
-        name: _literals(_body(status, f"void {name}("))
-        for name in ("appendBatch", "appendLatency", "appendKvReads", "appendRopeScaling")
-    }
-
-    def inline(body: str) -> str:
-        """`body` with each call that writes nested JSON written as its text."""
-        for name, text in calls.items():
-            written = 'out << "' + text.replace('"', '\\"') + '";'
-            body = re.sub(rf"{name}\(out, [^;]*\);", lambda _, w=written: w, body)  # type: ignore[misc]
-        return body
-
-    # The streamed stores write one object per use, named from kStreamedUses;
-    # the prefill one stands for both.
-    for name in ("appendStreamedTable", "appendStreamedExperts", "appendKvSpill"):
-        body = inline(_body(status, f"void {name}(")).replace("kStreamedUses[use]", '"prefill"')
-        calls[name] = _literals(body)
-    body = inline(_body(status, "std::string runtimeStatusJson("))
-    paths = _paths(_literals(body, {"plan.toStatusJson()": plan_json, "memoryAudit.toStatusJson()": audit_json}))
-    for path in list(paths):
-        if path.startswith(("streamed_table.prefill", "streamed_experts.prefill")):
-            paths.add(path.replace(".prefill", ".decode", 1))
-    return paths | {f"warmup.{step}" for step in WARMUP_STEPS}
+def flatten(value: object, prefix: tuple[str, ...] = ()) -> set[str]:
+    """Every key path of a document; a list's items share their list's path."""
+    paths: set[str] = set()
+    if isinstance(value, dict):
+        for key, child in value.items():
+            path = (*prefix, key)
+            paths.add(".".join(path))
+            paths |= flatten(child, path)
+    elif isinstance(value, list):
+        for item in value:
+            paths |= flatten(item, prefix)
+    return paths
 
 
 # Groups the engine writes only for some targets: null unless the store streams
@@ -145,20 +87,6 @@ CONDITIONAL = (
 )
 
 
-def flatten(value: object, prefix: tuple[str, ...] = ()) -> set[str]:
-    """Every key path of a document; a list's items share their list's path."""
-    paths: set[str] = set()
-    if isinstance(value, dict):
-        for key, child in value.items():
-            path = (*prefix, key)
-            paths.add(".".join(path))
-            paths |= flatten(child, path)
-    elif isinstance(value, list):
-        for item in value:
-            paths |= flatten(item, prefix)
-    return paths
-
-
 @pytest.fixture(scope="module")
 def status(tmp_path_factory) -> dict:
     with FakeSplash(tmp_path_factory.mktemp("contract"), args=("--no-webui", "--max-cache-disk", "1G")) as fake:
@@ -168,7 +96,7 @@ def status(tmp_path_factory) -> dict:
     return body
 
 
-@pytest.mark.skipif(not ENGINE.exists(), reason="no ./splash reference clone")
+@pytest.mark.skipif(not GOLDEN.exists(), reason="no ./splash reference clone")
 def test_extractor_reads_the_engine_source():
     paths = native_status_paths()
     # Sanity: the parser found the nesting, not just names.
@@ -191,7 +119,7 @@ def test_extractor_reads_the_engine_source():
     assert len(paths) > 250
 
 
-@pytest.mark.skipif(not ENGINE.exists(), reason="no ./splash reference clone")
+@pytest.mark.skipif(not GOLDEN.exists(), reason="no ./splash reference clone")
 def test_fake_status_has_every_native_key_path(status):
     # An idle engine has no active requests and an in-memory target streams
     # nothing; test_splash_1_3_2.py and test_status_1_4_0.py check those.
@@ -207,7 +135,7 @@ def test_fake_status_has_server_groups(status):
     for group, fields in SERVER_GROUPS.items():
         assert group in status, group
         assert fields <= set(status[group]), (group, fields - set(status[group]))
-    assert status["schema_version"] == 6
+    assert status["schema_version"] == 8
     assert status["vision"] is True and status["input_modalities"] == ["text", "image", "pdf"]
     # server/latency.py stages are histograms keyed by stage name.
     assert {"upload", "http_request", "http_ttft", "output_interval"} <= set(status["latency"])

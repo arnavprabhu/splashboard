@@ -2850,7 +2850,7 @@ export interface components {
              * Code
              * @enum {string}
              */
-            code: "gated" | "disk_full" | "hub_unreachable" | "incompatible" | "verify_failed" | "installer_failed" | "cancelled";
+            code: "gated" | "disk_full" | "hub_unreachable" | "incompatible" | "verify_failed" | "installer_failed" | "cancelled" | "not_found";
             /** Message */
             message: string;
             /** Action */
@@ -3089,7 +3089,7 @@ export interface components {
             support: "supported" | "untested" | "too_old" | "unknown";
             /**
              * Supported Range
-             * @default >=1.5.0 <1.6.0
+             * @default >=1.6.0 <1.7.0
              */
             supported_range: string;
             /** Banner */

@@ -351,9 +351,11 @@ FIELDS: tuple[FieldMeta, ...] = (
     _serve(
         "serve.expert_memory",
         "Expert memory",
-        "RAM for a MoE model's routed experts, such as 16G; the rest are read from the SSD "
-        "when a token routes them, which is slower. Auto loads them all where memory holds "
-        "them; off always loads every expert. Ignored by a dense model.",
+        "RAM for a MoE model's routed experts; the rest are read from the SSD when a token "
+        "routes them, which is slower. Auto loads them all where memory holds them, and "
+        "otherwise grows their store as memory allows and gives memory back while requests "
+        "or other apps need it. A size such as 16G fixes the store at that size; off always "
+        "loads every expert. Ignored by a dense model.",
         "memory_context",
         "size",
         "--expert-memory",
@@ -543,7 +545,8 @@ FIELDS: tuple[FieldMeta, ...] = (
         "Thinking end text",
         "What ends thinking where a budget runs out, such as a sentence that turns to the "
         "answer; it must end with </think>, and Splash refuses more than 64 tokens when "
-        "the model loads. Empty = </think> alone.",
+        "the model loads. Empty = the close the model's chat template writes after its "
+        "reasoning, so the next turn reuses more of the cache.",
         "reasoning_sampling",
         "text",
         "--thinking-end-text",

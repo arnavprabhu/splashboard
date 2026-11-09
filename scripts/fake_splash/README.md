@@ -1,11 +1,11 @@
 # Fake Splash engine
 
-A stdlib-only stand-in for Homebrew's `splash` 1.5.0 package. The
+A stdlib-only stand-in for Homebrew's `splash` 1.6.0 package. The
 manager, the web app's Playwright tests and local development use it in place
 of the real engine, so nothing needs a model, Metal or the network. It runs
 under any Python 3.12+, including Splash's bundled interpreter.
 
-Every engine fact it reproduces was checked against `./splash` at tag `1.5.0`.
+Every engine fact it reproduces was checked against `./splash` at tag `1.6.0`.
 Comments in `pkg/server/fake_engine.py` and `fake_server.py` give the source
 file and line for each output string.
 
@@ -17,12 +17,12 @@ pkg/                     laid out like $(brew --prefix)/opt/splash (bin/) and it
 ├── libexec -> .         so pkg/ also works as an opt/splash prefix
 ├── python/bin/python3   runs $FAKE_SPLASH_PYTHON, else the first Python ≥ 3.12 on PATH
 ├── engine/splash        answers `device-check` only (FAKE_SPLASH_DEVICE_CHECK=fail refuses the Mac)
-├── release.json         {"version": "1.5.0", ...}
+├── release.json         {"version": "1.6.0", ...}
 ├── install/
 │   ├── launcher.py      `splash --version | serve | claude|opencode|codex|hermes|pi [--port PORT] [-- ARGS]`
 │   ├── models.py        fake installer, same CLI as the real install/models.py
 │   ├── paths.py         DATA from SPLASH_GUI_FAKE_DATA (never ~/Library/Application Support/Splash)
-│   ├── families.py      verbatim copy (names, draft repos, chat formats and vision, 1.5.0)
+│   ├── families.py      verbatim copy (names, draft repos, chat formats, sampling and vision, 1.6.0)
 │   ├── clients.py       verbatim copy: the coding-client configurator `splash launch` uses (Hermes needs PyYAML in the interpreter to write its profile; `--print` does not)
 │   ├── signatures.py    each family's config fields; stands in for the engine's model-check
 │   └── upstream.py      inspect_target/check_model stand-in for the compatibility helper
@@ -43,7 +43,7 @@ tests/                   the fake's own tests
 
 ```sh
 export SPLASH_GUI_FAKE_DATA=/tmp/fake-splash HF_HUB_CACHE=/tmp/fake-splash/models
-scripts/fake_splash/pkg/bin/splash --version          # Splash 1.5.0
+scripts/fake_splash/pkg/bin/splash --version          # Splash 1.6.0
 scripts/fake_splash/pkg/bin/splash serve --model unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_M --port 8001 --no-webui
 curl -s localhost:8001/v1/chat/completions -H 'content-type: application/json' \
   -d '{"messages":[{"role":"user","content":"hi"}],"stream":true}'
@@ -61,7 +61,11 @@ own choice to reason, and start failures that end with the engine's reason; from
 1.5.0, full option names only, `--model-dir` and `--mmproj` checked as the launcher
 checks them, timings and thinking tokens in Responses and Messages, `reasoning` in
 /v1/models, the "text only" Ready line, `prepare --json-progress` and the removal
-of abandoned `<blob>.*.incomplete` partials before a download). It
+of abandoned `<blob>.*.incomplete` partials before a download; from 1.6.0,
+`/status` schema 8 with the memory ledger, the elastic expert store and the
+first-token breakdown, `/v1/chat/completions/count_tokens`, the limits on stop
+sequences, split GGUFs at a repository's root and the folder-first `:VARIANT`
+order, and the installer's error event, which the launcher relays once). It
 reads `SPLASH_API_KEY`, binds `--host`/`--port`, runs the fake installer for the
 selection (as the real launcher does), and then serves. Like the real server,
 it does not listen until Ready.
@@ -126,6 +130,7 @@ Modes:
 | `kv_write_budget` | 503 `kv_write_budget` with `Retry-After: 3600`: a long request's KV would go to the SSD cache, whose daily write budget is spent (Engine.cpp, 1.4.0). The server sends an error's own Retry-After, as server.py does |
 | `kv_disk_quota` | 400 `kv_disk_quota`: the SSD cache cannot hold the request's KV now |
 | `kv_unreadable` | 503 `kv_unreadable`: spilled KV could not be read back; a retry recomputes |
+| `request_quarantined` | 400 `request_quarantined`: the request was running at two engine failures in a row (supervision.py, 1.6.0) |
 | `bounded` | A reply ends at LENGTH short of `max_tokens`, at the engine's own bound; Messages reports `model_context_window_exceeded` |
 
 ## Environment variables
@@ -144,6 +149,8 @@ Engine (`serve`). Each `FakeConfig` field can also be changed live through `/_fa
 | `FAKE_SPLASH_MEMORY_PRESSURE` | normal | `normal`, `warning` or `critical` (critical makes `/ready` 503) |
 | `FAKE_SPLASH_THERMAL_STATE` | nominal | `/status.thermal_state`: `nominal`, `fair`, `serious` or `critical` (readiness ignores it, as since 1.3.1) |
 | `FAKE_SPLASH_FAIL_STARTUP` | — | `budget` (memory budget refusal with the breakdown), `context` (`--max-context` beyond the plan), `crash`, `configuration` (an `--expert-memory` below its smallest store, refused before the weights load, as `[resource_assembly/configuration]`) or `unprepared` (`Error · … names no model Splash prepared`, the server failing to hold the model's assembly). All exit 1 |
+| `FAKE_SPLASH_EXPERT_STORE_SHRUNK` | 0 | `1`: the elastic expert store gave chunks back (`streamed_experts.chunks` below `cap_chunks`, 1.6.0); also the `expert_store_shrunk` config field |
+| `FAKE_SPLASH_MEMORY_CLAIMS` | 0 | Requests waiting for memory on the ledger (`memory_governor.claims.waiting`, 1.6.0); also `memory_claims_waiting` |
 | `FAKE_SPLASH_LOAD_AGAIN` | 0 | `1` prints `Weights loaded again in N s.`, as a start whose streamed stores change after the first plan does |
 | `FAKE_SPLASH_KV_SPILL_TOKENS` | from the plan | A Qwen3.8-Flash-Next target's requests longer than this keep their KV on the SSD cache (`kv_spill`, `active_requests[].kv_mode`) |
 | `FAKE_SPLASH_PHYSICAL_MEMORY` | 64G | Drives the memory plan. `--max-memory 8G` produces a real budget refusal |
@@ -170,7 +177,7 @@ Installer (`install/models.py`, and the install step of `serve`):
 | `FAKE_SPLASH_DL_HUB` | — | Unset: huggingface_hub 1.28 partials, as Splash 1.2.0 to 1.5.0 bundle (`blobs/<hash>.<uuid8>.incomplete`, a new file per run, deleted on a handled error, never resumed; from 1.5.0 the next download from the repository removes it). `legacy`: older hubs (`blobs/<hash>.incomplete`, appended to by the next run) |
 | `FAKE_SPLASH_DL_SHARD_BYTES`, `_SHARDS`, `_DRAFT_BYTES`, `_VISION_BYTES` | 2M, 2, 1M, 512K | File sizes |
 | `FAKE_SPLASH_DL_COMMIT_SALT` | — | Changes every resolved commit, so `prepare` reports "moved from … to …" (simulates updates). The first weight file changes too, so an update fetches one file; if that fails, the old commit is kept with `Warning: keeping the installed …` and `prepare` still exits 0 (upstream.py `_keeping_installation`) |
-| `FAKE_SPLASH_DL_FAIL` | — | `gated` (401 unless `HF_TOKEN` is set), `network` (Hub unreachable), `network_mid`, `disk_full` (ENOSPC mid-download), `incompatible` |
+| `FAKE_SPLASH_DL_FAIL` | — | `gated` (401 unless `HF_TOKEN` is set), `network` (Hub unreachable), `network_mid`, `disk_full` (ENOSPC mid-download), `no_room` (refused before it starts for want of disk space, 1.6.0), `incompatible` |
 | `FAKE_SPLASH_DL_FAIL_AFTER` | half of the first weight file | Bytes written before `network_mid` or `disk_full` |
 | `FAKE_SPLASH_VERIFY_FAIL` | unset | Any value: `models.py verify` refuses the assembly (`source content hash mismatch`), so a download's auto-verify fails |
 | `FAKE_SPLASH_INSPECT_SECONDS` | 0 | Time the compatibility helper spends on one GGUF variant's header (`install/upstream.py` `_gguf_target`): `0.3`, or `0.3,UD-Q4_K_M=1` to slow one variant down |

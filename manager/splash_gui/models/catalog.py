@@ -193,15 +193,14 @@ SPLIT_NAME = re.compile(r"-(\d{5})-of-(\d{5})\.gguf$")
 # A multi-token-prediction head published beside the model
 # (`mtp-Qwen3.8-Flash-Next-Q8_0.gguf`), never a model of its own.
 _MTP = re.compile(r"(?:^|[-_.])mtp(?:[-_.]|$)", re.IGNORECASE)
-ROOT_SPLIT = "Splash installs a split GGUF only from a folder named after its variant"
 _BITS = re.compile(r"(?:I?Q|PQ)(\d)", re.I)
 # MXFP4 and NVFP4 (llama.cpp's MXFP4_MOE, NVFP4) are 4-bit formats.
 _FP4 = re.compile(r"(?:MX|NV)FP4", re.I)
 # Variants Splash cannot load, known from the name before `/inspect` reads headers.
 # Splash loads BF16 and F16 tensors inside a quantized GGUF (UD-Q8_K_XL's
-# among them) but refuses a whole unquantized model, one whose projections and
-# experts are all BF16, F16 or F32 (install/gguf.py `require_loadable`), which is
-# what a BF16, F16 or F32 variant is.
+# among them) but refuses a whole unquantized model, one that holds more of its
+# values in BF16, F16 or F32 tensors than in quantized ones (install/gguf.py
+# `require_quantized`), which is what a BF16, F16 or F32 variant is.
 WHOLE_UNQUANTIZED = (
     "Splash loads quantized GGUFs, not whole BF16, F16 or F32 models; choose a quantized variant"
 )
@@ -485,18 +484,23 @@ def split_complete(names: list[str]) -> bool:
 
 def root_choice(files: Iterable[str], variant: str) -> str | None:
     """The root GGUF Splash's `select_gguf` takes for :VARIANT before it looks in a
-    VARIANT/ folder: the file named the shared model name then -VARIANT, else the only
-    one ending in -VARIANT; None when no root file answers (install/upstream.py
-    `select_gguf`). Splash counts every root GGUF but its projectors, MTP heads too."""
+    VARIANT/ folder: the one named the model name all root GGUFs share, then -VARIANT;
+    None when no root name answers (install/upstream.py `select_gguf`). From Splash
+    1.6.0 the folder comes before a root file whose name only ends in -VARIANT, so an
+    MTP head `mtp-MODEL-Q8_0.gguf` no longer hides the folder `Q8_0/`. Splash counts
+    every root GGUF but its projectors, MTP heads too, and a split GGUF's root parts
+    as the one name they share (`model_of`)."""
     roots = sorted(n for n in files if "/" not in n and n.endswith(".gguf") and not is_projector(n))
-    words = [Path(n).stem.split("-") for n in roots]
+    names = sorted({SPLIT_NAME.sub("", n).removesuffix(".gguf") for n in roots})
+    words = [n.split("-") for n in names]
     shared = len(os.path.commonprefix(words))
     wanted = variant.lower()
-    exact = [n for n, w in zip(roots, words, strict=True) if "-".join(w[shared:]).lower() == wanted]
-    if len(exact) == 1:
-        return exact[0]
-    ending = [n for n in roots if Path(n).stem.lower().endswith("-" + variant.lower())]
-    return ending[0] if len(ending) == 1 else None
+    exact = [n for n, w in zip(names, words, strict=True) if "-".join(w[shared:]).lower() == wanted]
+    if len(exact) != 1:
+        return None
+    own = sorted(n for n in roots if SPLIT_NAME.sub("", n).removesuffix(".gguf") == exact[0])
+    # The name's whole file before its split parts.
+    return next((n for n in own if not SPLIT_NAME.search(n)), own[0])
 
 
 def bits(name: str) -> int | None:
@@ -545,10 +549,11 @@ class Variant:
 
 
 def gguf_variants(repo_id: str, files: dict[str, int | None]) -> list[Variant]:
-    """The repository's GGUF variants: its root files by name, and each split GGUF
-    kept in a folder named after its variant, which Splash installs as that
-    :VARIANT (install/upstream.py `split_gguf`). A root variant hides a folder of
-    the same name, which Splash never reaches."""
+    """The repository's GGUF variants: its root files by name, a split GGUF's parts at
+    the root as the one name they share (Splash 1.6.0; a whole file of that name comes
+    first), and each split GGUF kept in a folder named after its variant, which Splash
+    installs as that :VARIANT (install/upstream.py `root_targets`, `split_gguf`). A
+    root variant hides a folder of the same name, which Splash never reaches."""
     found: dict[str, Variant] = {}
     for filename, size in files.items():
         name = variant_name(repo_id, filename)
@@ -563,8 +568,14 @@ def gguf_variants(repo_id: str, files: dict[str, int | None]) -> list[Variant]:
         variant.files.sort()
         folder = [f for f in variant.files if "/" in f]
         if not folder:
-            if len(variant.files) > 1 or SPLIT_NAME.search(variant.files[0]):
-                variant.layout = ROOT_SPLIT
+            parts = [f for f in variant.files if SPLIT_NAME.search(f)]
+            if len(parts) < len(variant.files):
+                # A whole file beside the parts of its name, such as their merge, is
+                # the one Splash takes.
+                variant.files = [f for f in variant.files if f not in parts]
+                variant.size = sum(files.get(f) or 0 for f in variant.files)
+            elif not split_complete(parts):
+                variant.layout = f"the split GGUF {SPLIT_NAME.sub('', parts[0])} is incomplete"
         elif len(folder) < len(variant.files) or variant.name.lower() in roots:
             # The root file of the same name is the variant; the folder is not.
             variant.files = [f for f in variant.files if "/" not in f]

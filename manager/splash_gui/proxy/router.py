@@ -23,6 +23,8 @@ router = APIRouter(include_in_schema=False)
 
 GENERATION_ROUTES = (
     "/v1/chat/completions",
+    # Splash 1.6.0: a Chat request's prompt tokens, without running it.
+    "/v1/chat/completions/count_tokens",
     "/v1/completions",
     "/v1/responses",
     "/v1/messages",

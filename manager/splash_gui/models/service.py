@@ -44,6 +44,7 @@ from ..schemas import (
     VisionInfo,
 )
 from ..settings.parsers import PACKAGE_REPLACEMENTS, parse_model_id, split_model_id
+from ..system import diskspace
 from ..system.macos import CommandResult
 from ..usage.db import iso
 from . import catalog as cat
@@ -340,7 +341,7 @@ class Models:
                 cache_dir=str(self.state.settings.cache_dir()),
                 models_bytes=directory_size(models_dir),
                 cache_bytes=directory_size(self.state.settings.cache_dir()),
-                free_bytes=disk.free,
+                free_bytes=max(disk.free, diskspace.free_bytes(models_dir)),
                 total_bytes=disk.total,
             ),
         )
@@ -885,7 +886,7 @@ class Models:
         total = sum(f.bytes or 0 for f in files)
         remaining = sum(f.bytes or 0 for f in files if not f.present)
         models_dir.mkdir(parents=True, exist_ok=True)
-        free = shutil.disk_usage(models_dir).free
+        free = diskspace.free_bytes(models_dir)
         margin = 2 * 1024**3
         return DownloadPlan(
             variant=variant,

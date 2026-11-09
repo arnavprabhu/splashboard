@@ -776,7 +776,7 @@ def test_ready_status_and_metrics(harness_factory: H):
     h.load()
     assert h.client.get("/ready").status_code == 200
     status = h.client.get("/status")
-    assert status.status_code == 200 and status.json()["schema_version"] == 6
+    assert status.status_code == 200 and status.json()["schema_version"] == 8
     text = h.client.get("/metrics").text
     assert 'splash_gui_engine_state{state="ready"} 1' in text
     assert "splash_" in text.split("splash_gui_up")[0], "the engine's own metrics come first"

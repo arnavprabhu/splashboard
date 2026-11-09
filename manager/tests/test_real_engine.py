@@ -2,7 +2,7 @@
 
 These check the assumptions the rest of the suite takes on faith:
 
-  * the engine is 1.5.0 or a later 1.5.x, inside the supported range;
+  * the engine is 1.6.0 or a later 1.6.x, inside the supported range;
   * `install/serve_options.py` still matches the settings' option map, including that no
     option has appeared that we do not map;
   * `helpers/inspect_model.py` really runs under Splash's own bundled Python and
@@ -110,7 +110,7 @@ def test_the_installed_engine_is_in_the_supported_range() -> None:
 
     info = d.discover(env={"PATH": "/usr/bin:/bin"})
     assert info.found and info.source == "brew"
-    assert info.version is not None and info.version.startswith("1.5."), info.version
+    assert info.version is not None and info.version.startswith("1.6."), info.version
     assert info.support == "supported", info.version
     assert info.pkg is not None and info.pkg.resolve() == SPLASH_PKG.resolve()
     assert info.python is not None and info.python.exists()
