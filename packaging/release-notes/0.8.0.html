@@ -1,0 +1,17 @@
+<!--
+  Release notes for 0.8.0 (TEMPLATE.html says how these are used).
+-->
+<h2>Splashboard 0.8.0</h2>
+<p>Splashboard now requires Splash 1.6.0. Update the engine with <code>brew upgrade incoai/tap/splash</code>, or from Settings → About.</p>
+<ul>
+  <li>Model checks, the variant table and local GGUF files work with Splash 1.6.0, which changed how it reads and selects GGUF files.</li>
+  <li>A split GGUF whose parts sit at the top of a repository is now one variant you can download. A variant kept in its own folder is no longer hidden by a file beside it whose name only ends in the variant.</li>
+  <li>Status shows more of what Splash 1.6.0 does with memory: how large the store of streamed experts is and how often it gave memory back, how many requests are waiting for memory, and where the time to a first token went.</li>
+  <li>Downloads say more clearly why they failed: a gated repository, no connection, or a repository Hugging Face does not have. Free disk space is counted the way Finder counts it, so a download is no longer refused while macOS can still make room.</li>
+  <li>Chat explains two new refusals: a request Splash will not run again because it was running both times the engine just failed, and PDFs that cannot be read.</li>
+  <li><code>POST /v1/chat/completions/count_tokens</code> is available on Splashboard's port: it counts a Chat request's tokens without running it.</li>
+  <li>Splash 1.6.0 fixes long stalls when serving under a memory limit, restarts a failed engine more patiently, and renders PDFs in a sandbox.</li>
+  <li>The first start of each GGUF model after the engine upgrade takes a little longer while Splash rebuilds its metadata, and that model's persistent cache starts fresh once.</li>
+</ul>
+<p>Engine: <a href="https://github.com/incoai/splash">Splash</a> by inco.ai, 1.6.0 or newer (Homebrew <code>incoai/tap/splash</code>). Restart the server after upgrading Splash. Splashboard is not an inco.ai product.</p>
+<p>Splashboard is not notarized. On a first install, open it once from System Settings → Privacy &amp; Security → Open Anyway.</p>
